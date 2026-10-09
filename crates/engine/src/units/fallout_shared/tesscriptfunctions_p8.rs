@@ -3,8 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 40 queue entries of the range (`005db810` to
-//! `005dd7d0`) are translated. The next session continues at `005dd7f0`.
+//! Progress: the first 80 queue entries of the range (`005db810` to
+//! `005de840`) are translated. The next session continues at `005de900`.
 //!
 //! The command bodies follow the conventions of the main file: `cdecl`, the
 //! eight stack words as [`ScriptArgs`], `AL` as the result. Members of
@@ -186,11 +186,9 @@ const ARRAY_94_DESTRUCT: u32 = 0x005e_0340;
 /// `thiscall` destructor of the array at `+0xa4` (what [`fn_005dd7d0`]
 /// calls).
 const ARRAY_A4_DESTRUCT: u32 = 0x005e_03a0;
-/// Destructor wrapper of the array at `+0xb4` (`005dd7f0`, translated by the
-/// next session).
+/// Destructor wrapper of the array at `+0xb4` (`005dd7f0`, [`fn_005dd7f0`]).
 const ARRAY_B4_DESTRUCT_WRAPPER: u32 = 0x005d_d7f0;
-/// Destructor wrapper of the array at `+0xc4` (`005dd810`, translated by the
-/// next session).
+/// Destructor wrapper of the array at `+0xc4` (`005dd810`, [`fn_005dd810`]).
 const ARRAY_C4_DESTRUCT_WRAPPER: u32 = 0x005d_d810;
 /// Initialises an empty list head (`thiscall`, a two-word object).
 const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
@@ -321,6 +319,175 @@ const FORMAT_NAME_MORE: u32 = 0x0103_d0c0;
 const FORMAT_NAME_LAST: u32 = 0x0103_d0cc;
 /// `"expression"`
 const KEYWORD_EXPRESSION: u32 = 0x0103_d0d4;
+
+// ---- Callees, globals and strings of the second 40 functions -----------------
+
+/// Destructor of the array at `+0xb4` of the face generation data
+/// (`thiscall`; what [`fn_005dd7f0`] calls).
+const ARRAY_B4_DESTRUCT: u32 = 0x005e_0460;
+/// Destructor of the array at `+0xc4` of the face generation data
+/// (`thiscall`; what [`fn_005dd810`] calls).
+const ARRAY_C4_DESTRUCT: u32 = 0x005e_02e0;
+
+/// Pointer table of the expression names (read by [`fn_005dd830`]).
+const EXPRESSION_NAME_TABLE: u32 = 0x0119_b41c;
+/// Pointer table of the modifier names (read by [`fn_005dd840`]).
+const MODIFIER_NAME_TABLE: u32 = 0x0119_b458;
+/// Pointer table of the phoneme names (read by [`fn_005dd850`]).
+const PHONEME_NAME_TABLE: u32 = 0x0119_b4a0;
+/// The mode byte of the face generation commands (stored by
+/// [`fn_005dd860`]).
+const FACE_GEN_MODE_BYTE: u32 = 0x011d_59e0;
+
+/// Creates on first use and returns the object kept at `011f3634` (`cdecl`,
+/// no argument): the record of the known code strings. The commands push
+/// their text buffer before the call, but it belongs to the next call.
+const CODE_RECORDS: u32 = 0x00a2_5920;
+/// `thiscall` on the object of [`CODE_RECORDS`] (`text`): finds the bit
+/// number of the text among four known code strings and tests that bit in
+/// the record; `AL` is the result.
+const CODE_IS_REDEEMED: u32 = 0x00a2_6020;
+/// `thiscall` on the object of [`CODE_RECORDS`] (`text`): sets the text's bit
+/// in the record; `AL` is whether the text is one of the known strings.
+const CODE_SET_REDEEMED: u32 = 0x00a2_6090;
+/// `thiscall` on the object of [`CODE_RECORDS`] (`text`): clears the text's
+/// bit in the record.
+const CODE_CLEAR_REDEEMED: u32 = 0x00a2_6120;
+/// The byte at `this + 0x1b1` of an actor (`thiscall`), in
+/// `tesconditionfunctions.cpp`.
+const ACTOR_BYTE_1B1: u32 = 0x005a_5bb0;
+/// `ExtraDataList::SetWeaponModSlot` (Xbox PDB), `thiscall` (`mask`).
+const SET_WEAPON_MOD_SLOT: u32 = 0x0042_e380;
+/// `*this` (`thiscall`): reads the pointer a `NiPointer` holds.
+const READ_POINTER: u32 = 0x0055_9450;
+/// Virtual slot `0x148` of a process: its result points to a pointer that
+/// leads to the extra data list of the weapon.
+const VSLOT_PROCESS_148: u32 = 0x148;
+
+/// `thiscall` (`index`) on the first parsed object: for index 1 the `float`
+/// at `+0x44`, otherwise the one at `+0x48`, in `ST0`.
+const OBJECT_FLOAT_GETTER_006155C0: u32 = 0x0061_55c0;
+/// `thiscall` (`index`): the same selection with another getter (in `ST0`);
+/// it calls `00616a20` for index 1 and `00616a40` otherwise.
+const OBJECT_FLOAT_GETTER_00616A60: u32 = 0x0061_6a60;
+/// `thiscall` (`index`, 0 to 2): a signed byte in `AL`.
+const OBJECT_BYTE_GETTER_00616A90: u32 = 0x0061_6a90;
+/// `thiscall` (`index`, `value`), index 0 or 1.
+const OBJECT_SET_INT_00615C90: u32 = 0x0061_5c90;
+/// `thiscall` (`index`, `float`), index 0 or 1.
+const OBJECT_FLOAT_SETTER_00615730: u32 = 0x0061_5730;
+/// `thiscall` (`index`, `value`), index 0 or 1.
+const OBJECT_SET_INT_00615FA0: u32 = 0x0061_5fa0;
+/// `thiscall` (`index`, `float`), index 0 or 1.
+const OBJECT_FLOAT_SETTER_00615A00: u32 = 0x0061_5a00;
+/// `thiscall` (`index`, `float`), index 0 or 1: stores the `float` at `+0x44`
+/// (index 1) or `+0x48` and calls virtual slot `0x48` (`2`).
+const OBJECT_FLOAT_SETTER_00615580: u32 = 0x0061_5580;
+
+/// The object at `011e0e80`; the array embedded at its `+4` holds the
+/// references the loops of [`fn_005ddf90`] and [`fn_005de110`] visit.
+const REFERENCE_LIST_OWNER: u32 = 0x011e_0e80;
+/// `thiscall` (`index`) on the array: the element `index`.
+const LIST_GET: u32 = 0x0096_8670;
+/// `thiscall` (`0`) on the array: its element count, `*(this + 0x20)`.
+const LIST_COUNT: u32 = 0x005b_e5c0;
+/// `thiscall` on a reference: whether bit `0x200000` of `*(this + 8)` is set.
+const FLAG_200000: u32 = 0x0057_6d30;
+/// `*(this + 0xfc)` (`thiscall`).
+const FIELD_FC: u32 = 0x0087_4480;
+/// `TESObjectREFR::GetOwner` (Xbox PDB), `thiscall`.
+const GET_OWNER: u32 = 0x0056_7790;
+/// The base form of a reference (`thiscall`; calls `007af430`).
+const REFERENCE_BASE_FORM: u32 = 0x0041_81e0;
+/// `thiscall` (`mask`) on a base form: whether a bit of its flag word is
+/// set ([`fn_005de080`] asks for `0x400`).
+const FORM_FLAG_TEST: u32 = 0x004f_d420;
+/// Virtual slot `0x224` of a reference.
+const VSLOT_REFERENCE_224: u32 = 0x224;
+/// Virtual slot `0x1a4` of a reference (no argument): compared with the
+/// owner.
+const VSLOT_REFERENCE_1A4: u32 = 0x1a4;
+/// Virtual slot `0x318` of a reference (no argument).
+const VSLOT_REFERENCE_318: u32 = 0x318;
+/// Virtual slot `0x320` of a reference (`player, 1`).
+const VSLOT_REFERENCE_320: u32 = 0x320;
+/// The bit [`fn_005ddf90`] sets with [`fn_005de0a0`].
+const FLAG_SET_BY_LOOP: u32 = 0x0010_0000;
+/// The form flag [`fn_005ddf90`] tests with [`fn_005de080`].
+const FORM_FLAG_400: u32 = 0x400;
+
+/// A `u16` global stored by [`fn_005de240`].
+const COMMAND_VALUE_011AE75C: u32 = 0x011a_e75c;
+/// A `u16` global stored by [`fn_005de2c0`].
+const COMMAND_VALUE_011AFA9C: u32 = 0x011a_fa9c;
+/// `BSTaskThread::sPauseSleepValue` (named by the command's message), set
+/// by [`fn_005de410`].
+const TASK_THREAD_PAUSE_SLEEP: u32 = 0x011a_f708;
+/// `BSTaskThread::sUpdateSleepValue`, set by [`fn_005de490`].
+const TASK_THREAD_UPDATE_SLEEP: u32 = 0x011a_f710;
+/// The pointer whose object gets the byte at `+0x254` set by
+/// [`fn_005de380`].
+const OBJECT_POINTER_011D96C0: u32 = 0x011d_96c0;
+/// `PlayerCharacter` field at `+0x604`: the last exterior door activated.
+const PLAYER_LAST_EXT_DOOR: u32 = 0x604;
+/// `TESObjectREFR::GetWorldSpace` (Xbox PDB), `thiscall`.
+const GET_WORLD_SPACE: u32 = 0x0057_5d70;
+/// `Interface::SetRootMapSpace` (Xbox PDB), `cdecl` (`worldspace`).
+const SET_ROOT_MAP_SPACE: u32 = 0x0070_9d20;
+
+/// The pointer at `011dea10`: an object whose `+0x6c` is the head node of a
+/// list ([`script_is_image_space_active_function`]).
+const LIST_OWNER_011DEA10: u32 = 0x011d_ea10;
+/// `this + 0x6c` (`thiscall`): the head node of that list.
+const LIST_HEAD_AT_6C: u32 = 0x0043_b5d0;
+/// `NiPointer` copy constructor (`thiscall`, `source`): copies the pointer
+/// stored at `source` and takes a reference.
+const NI_POINTER_COPY_CONSTRUCT: u32 = 0x0055_9a40;
+/// `NiPointer` destructor (`thiscall`): releases the reference.
+const NI_POINTER_DESTRUCT: u32 = 0x0045_cec0;
+/// Virtual slot `0x94` of the object read from a list entry.
+const VSLOT_ENTRY_94: u32 = 0x94;
+/// `*(this + 0x1c)` (`thiscall`; the engine map names it
+/// `PathingLocation::GetWorldspace`).
+const FIELD_1C: u32 = 0x0044_1110;
+
+/// `thiscall` (`second parsed object`) on the first one, in [`fn_005de600`].
+const PAIR_ACTION_00590010: u32 = 0x0059_0010;
+/// `thiscall` on `container + 0x30` (`container, count, flags, item,
+/// extra`): the shared step of the two leveled-list commands.
+const ADD_ITEM_00487A00: u32 = 0x0048_7a00;
+/// `operator new` (`size`).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `ContainerItemExtra::ContainerItemExtra` (Xbox PDB), `thiscall`: returns
+/// `this`.
+const CONTAINER_ITEM_EXTRA_CONSTRUCT: u32 = 0x0040_e690;
+/// `thiscall` (`float`) on a `ContainerItemExtra`.
+const CONTAINER_ITEM_EXTRA_SET_FLOAT: u32 = 0x0040_eb90;
+/// The `float` 100.0 that is the default of the leveled-list percentage.
+const DEFAULT_PERCENT: u32 = 0x0101_6410;
+/// `thiscall` (`replacement`) on the water type to be remapped.
+const WATER_REMAP_00580680: u32 = 0x0058_0680;
+/// The form type of a water type.
+const FORM_TYPE_WATER: u32 = 0x4e;
+
+/// `"No"`
+const TEXT_NO: u32 = 0x0103_abc4;
+/// `"Yes"`
+const TEXT_YES: u32 = 0x0103_abc8;
+/// `"IsCodeRedeemed [%s] = %s"`
+const FORMAT_IS_CODE_REDEEMED: u32 = 0x0103_d0e0;
+/// `"BSTaskThread::sPauseSleepValue set to %d ms"`
+const MSG_PAUSE_SLEEP: u32 = 0x0103_d0fc;
+/// `"BSTaskThread::sUpdateSleepValue set to %d ms"`
+const MSG_UPDATE_SLEEP: u32 = 0x0103_d128;
+/// `"ImageSpace is not active"`
+const MSG_IMAGE_SPACE_NOT_ACTIVE: u32 = 0x0103_d158;
+/// `"ImageSpace is active "`
+const MSG_IMAGE_SPACE_ACTIVE: u32 = 0x0103_d174;
+/// `"Invalid water type for water to remap to."`
+const MSG_WATER_REMAP_TO_INVALID: u32 = 0x0103_d18c;
+/// `"Invalid water type for water to be remapped."`
+const MSG_WATER_TO_REMAP_INVALID: u32 = 0x0103_d1b8;
 
 // ---- Small helpers -------------------------------------------------------------
 
@@ -1184,6 +1351,620 @@ pub fn fn_005dd7d0(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_A4_DESTRUCT, &args![this]);
 }
 
+// Translated from 005dd7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor wrapper of the array at `+0xb4` of the face generation data:
+/// calls `005e0460`.
+pub fn fn_005dd7f0(e: &mut Engine, this: Ptr) {
+    e.call(ARRAY_B4_DESTRUCT, &args![this]);
+}
+
+// Translated from 005dd810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor wrapper of the array at `+0xc4` of the face generation data:
+/// calls `005e02e0`.
+pub fn fn_005dd810(e: &mut Engine, this: Ptr) {
+    e.call(ARRAY_C4_DESTRUCT, &args![this]);
+}
+
+// Translated from 005dd830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The text of expression number `index`: the pointer at that index of the
+/// table at `0119b41c` (no range check).
+pub fn fn_005dd830(e: &mut Engine, index: i32) -> u32 {
+    e.mem
+        .u32(EXPRESSION_NAME_TABLE.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 005dd840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The text of modifier number `index`: the pointer at that index of the
+/// table at `0119b458` (no range check).
+pub fn fn_005dd840(e: &mut Engine, index: i32) -> u32 {
+    e.mem
+        .u32(MODIFIER_NAME_TABLE.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 005dd850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The text of phoneme number `index`: the pointer at that index of the
+/// table at `0119b4a0` (no range check).
+pub fn fn_005dd850(e: &mut Engine, index: i32) -> u32 {
+    e.mem
+        .u32(PHONEME_NAME_TABLE.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 005dd860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte at `011d59e0`, the mode byte of the face generation
+/// commands.
+pub fn fn_005dd860(e: &mut Engine, value: u8) {
+    e.set_global(FACE_GEN_MODE_BYTE, value);
+}
+
+/// Parses the one string parameter (a 256-byte buffer) of the code
+/// commands. Returns the buffer when the parameters parsed; the caller frees
+/// it.
+fn parse_text(e: &mut Engine, a: ScriptArgs) -> Option<u32> {
+    let text = e.mem.alloc(0x100);
+    if parse(e, a, &[text]) {
+        Some(text)
+    } else {
+        e.mem.free(text);
+        None
+    }
+}
+
+// Translated from 005dd870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCodeRedeemedFunction` (Xbox PDB): parses a text and asks the
+/// code record whether it is redeemed. Prints `"IsCodeRedeemed [<text>] =
+/// Yes"` (or `No`), stores 1.0 or 0.0 as the result and returns the answer
+/// byte itself (0 when the parameters do not parse).
+pub fn script_is_code_redeemed_function(e: &mut Engine, a: ScriptArgs) -> u8 {
+    let Some(text) = parse_text(e, a) else {
+        return 0;
+    };
+    let records = e.call(CODE_RECORDS, &args![]).u32();
+    let redeemed = e.call(CODE_IS_REDEEMED, &args![records, text]).u8();
+    let answer = if redeemed != 0 { TEXT_YES } else { TEXT_NO };
+    let line = e.mem.alloc(200);
+    e.call(
+        SPRINTF_S,
+        &args![line, 200u32, FORMAT_IS_CODE_REDEEMED, text, answer],
+    );
+    e.call(CONSOLE_PRINT, &args![line]);
+    e.mem
+        .set_f64(a.result.addr(), if redeemed != 0 { 1.0 } else { 0.0 });
+    e.mem.free(line);
+    e.mem.free(text);
+    redeemed
+}
+
+// Translated from 005dd960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a text and sets its bit in the code record; the result is 1.0 when
+/// that call answered true, else 0.0, and the answer byte is returned (0 when
+/// the parameters do not parse).
+pub fn fn_005dd960(e: &mut Engine, a: ScriptArgs) -> u8 {
+    let Some(text) = parse_text(e, a) else {
+        return 0;
+    };
+    let records = e.call(CODE_RECORDS, &args![]).u32();
+    let known = e.call(CODE_SET_REDEEMED, &args![records, text]).u8();
+    e.mem
+        .set_f64(a.result.addr(), if known != 0 { 1.0 } else { 0.0 });
+    e.mem.free(text);
+    known
+}
+
+// Translated from 005dda00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a text and clears its bit in the code record. Succeeds when the
+/// parameters parsed.
+pub fn fn_005dda00(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some(text) = parse_text(e, a) else {
+        return false;
+    };
+    let records = e.call(CODE_RECORDS, &args![]).u32();
+    e.call(CODE_CLEAR_REDEEMED, &args![records, text]);
+    e.mem.free(text);
+    true
+}
+
+// Translated from 005dda70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses no value. When `thisObj` is an actor (virtual slot `0x100`) the
+/// result is the byte at `+0x1b1` of it, as a `double`. Succeeds when the
+/// parameters parsed.
+pub fn fn_005dda70(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !parse(e, a, &[]) {
+        return false;
+    }
+    if e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+        let byte = e.call(ACTOR_BYTE_1B1, &args![a.this_obj]).u8();
+        e.mem.set_f64(a.result.addr(), byte as f64);
+    }
+    true
+}
+
+// Translated from 005ddae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses two integers (the first is not used) and, when `thisObj` is an
+/// actor and the second, a slot number, is 1 to 3, sets bit `slot - 1` as the
+/// weapon mod slot of the extra data list that its process leads to
+/// (`ExtraDataList::SetWeaponModSlot`). Succeeds when the parameters parsed.
+pub fn fn_005ddae0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([_first, slot]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    let slot = slot as i32;
+    if e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() && slot > 0 && slot < 4 {
+        let process = e.call(GET_PROCESS, &args![a.this_obj]).u32();
+        let holder = e.vcall(process, VSLOT_PROCESS_148, &args![]).u32();
+        let pointer = e.call(READ_POINTER, &args![holder]).u32();
+        let item = e.call(LIST_ITEM_PTR, &args![pointer]).u32();
+        let extra_data_list = e.mem.u32(item);
+        let mask = 1u32 << ((slot as u32).wrapping_sub(1) & 0x1f);
+        e.call(SET_WEAPON_MOD_SLOT, &args![extra_data_list, mask]);
+    }
+    true
+}
+
+/// The commands of `fn_005ddbb0` and `fn_005ddc20`: parse an object and an
+/// index; an index of 0 or 1 gives `getter(object, index)` as a `double`
+/// result, anything else makes the command fail.
+fn get_float_by_index(e: &mut Engine, a: ScriptArgs, getter: u32) -> bool {
+    let Some([object, index]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    if !(0..=1).contains(&(index as i32)) {
+        return false;
+    }
+    let value = e.call(getter, &args![object, index]).f64();
+    e.mem.set_f64(a.result.addr(), value);
+    true
+}
+
+// Translated from 005ddbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object and an index (0 or 1) and stores
+/// `006155c0(object, index)` as the result.
+pub fn fn_005ddbb0(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_float_by_index(e, a, OBJECT_FLOAT_GETTER_006155C0)
+}
+
+// Translated from 005ddc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object and an index (0 or 1) and stores
+/// `00616a60(object, index)` as the result.
+pub fn fn_005ddc20(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_float_by_index(e, a, OBJECT_FLOAT_GETTER_00616A60)
+}
+
+// Translated from 005ddc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object and an index (0 to 2) and stores the signed byte
+/// `00616a90(object, index)` returns as the result. Fails for another index.
+pub fn fn_005ddc90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([object, index]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    if !(0..=2).contains(&(index as i32)) {
+        return false;
+    }
+    let value = e
+        .call(OBJECT_BYTE_GETTER_00616A90, &args![object, index & 0xff])
+        .u8() as i8;
+    e.mem.set_f64(a.result.addr(), value as f64);
+    true
+}
+
+/// The commands of `005ddd10` to `005ddf10`: parse an object, an index and a
+/// value word (an integer or the bits of a `float`); an index of 0 or 1 calls
+/// `setter(object, index, value)`, anything else makes the command fail.
+fn set_by_index(e: &mut Engine, a: ScriptArgs, setter: u32) -> bool {
+    let Some([object, index, value]) = parse_params(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    if !(0..=1).contains(&(index as i32)) {
+        return false;
+    }
+    e.call(setter, &args![object, index, value]);
+    true
+}
+
+// Translated from 005ddd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object, an index (0 or 1) and an integer and calls
+/// `00615c90(object, index, value)`.
+pub fn fn_005ddd10(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_by_index(e, a, OBJECT_SET_INT_00615C90)
+}
+
+// Translated from 005ddd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object, an index (0 or 1) and a `float` and calls
+/// `00615730(object, index, value)`.
+pub fn fn_005ddd90(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_by_index(e, a, OBJECT_FLOAT_SETTER_00615730)
+}
+
+// Translated from 005dde10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object, an index (0 or 1) and an integer and calls
+/// `00615fa0(object, index, value)`.
+pub fn fn_005dde10(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_by_index(e, a, OBJECT_SET_INT_00615FA0)
+}
+
+// Translated from 005dde90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object, an index (0 or 1) and a `float` and calls
+/// `00615a00(object, index, value)`.
+pub fn fn_005dde90(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_by_index(e, a, OBJECT_FLOAT_SETTER_00615A00)
+}
+
+// Translated from 005ddf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an object, an index (0 or 1) and a `float` and calls
+/// `00615580(object, index, value)`.
+pub fn fn_005ddf10(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_by_index(e, a, OBJECT_FLOAT_SETTER_00615580)
+}
+
+// Translated from 005ddf90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters. With a `thisObj`, visits the references of
+/// the array at `011e0e84` (from the index stored at the array's `+0x10`, up
+/// to its count): a reference is skipped when its flag word has bit
+/// `0x200000` set or virtual slot `0x224` is false, or when it is neither
+/// `thisObj`'s own `+0xfc` value nor owned by what `thisObj`'s virtual slot
+/// `0x1a4` returns. For the others whose base form passes the test of
+/// [`fn_005de080`], bit `0x100000` of the word at `+0xc8` is set
+/// ([`fn_005de0a0`]). Always succeeds. (A null element would crash the game
+/// at its virtual call, as here.)
+pub fn fn_005ddf90(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        return true;
+    }
+    let list = e.call(PLUS_4, &args![REFERENCE_LIST_OWNER]).u32();
+    let mut index = fn_005de0f0(e, Ptr::new(list), 0);
+    while index < e.call(LIST_COUNT, &args![list, 0u32]).u32() {
+        let reference = e.call(LIST_GET, &args![list, index]).u32();
+        visit_reference(e, a.this_obj.addr(), reference);
+        index = index.wrapping_add(1);
+    }
+    true
+}
+
+/// The body of the loop of [`fn_005ddf90`] for one reference.
+fn visit_reference(e: &mut Engine, this_obj: u32, reference: u32) {
+    if reference != 0 && e.call(FLAG_200000, &args![reference]).bool() {
+        return;
+    }
+    if !e.vcall(reference, VSLOT_REFERENCE_224, &args![]).bool() {
+        return;
+    }
+    if e.call(FIELD_FC, &args![reference]).u32() != this_obj {
+        let owner = e.call(GET_OWNER, &args![reference]).u32();
+        let wanted = e.vcall(this_obj, VSLOT_REFERENCE_1A4, &args![]).u32();
+        if owner != wanted {
+            return;
+        }
+    }
+    let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    if fn_005de080(e, Ptr::new(base_form)) {
+        fn_005de0a0(e, Ptr::new(reference), FLAG_SET_BY_LOOP, 1);
+    }
+}
+
+// Translated from 005de080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x400` of the flag word of the form is set (`004fd420`).
+pub fn fn_005de080(e: &mut Engine, this: Ptr) -> bool {
+    e.call(FORM_FLAG_TEST, &args![this, FORM_FLAG_400]).bool()
+}
+
+// Translated from 005de0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`set` not 0) or clears the bits of `mask` in the word at
+/// `this + 0xc8`.
+pub fn fn_005de0a0(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let flags = e.mem.u32(this.addr() + 0xc8);
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        flags & !mask
+    };
+    e.mem.set_u32(this.addr() + 0xc8, flags);
+}
+
+// Translated from 005de0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x10 + index * 4`.
+pub fn fn_005de0f0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    e.mem.u32(
+        this.addr()
+            .wrapping_add(0x10)
+            .wrapping_add(index.wrapping_mul(4)),
+    )
+}
+
+// Translated from 005de110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters: visits every reference of the array at
+/// `011e0e84` (from index 0 to its count); each non-null one whose virtual
+/// slot `0x224` and then slot `0x318` are true gets virtual slot `0x320`
+/// called with the player and 1. Always succeeds.
+pub fn fn_005de110(e: &mut Engine, _a: ScriptArgs) -> bool {
+    let mut index = 0u32;
+    loop {
+        let list = e.call(PLUS_4, &args![REFERENCE_LIST_OWNER]).u32();
+        if index >= e.call(LIST_COUNT, &args![list, 0u32]).u32() {
+            break;
+        }
+        let list = e.call(PLUS_4, &args![REFERENCE_LIST_OWNER]).u32();
+        let reference = e.call(LIST_GET, &args![list, index]).u32();
+        if reference != 0
+            && e.vcall(reference, VSLOT_REFERENCE_224, &args![]).bool()
+            && e.vcall(reference, VSLOT_REFERENCE_318, &args![]).bool()
+        {
+            let player = e.global::<u32>(PLAYER);
+            e.vcall(reference, VSLOT_REFERENCE_320, &args![player, 1u32]);
+        }
+        index = index.wrapping_add(1);
+    }
+    true
+}
+
+// Translated from 005de1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer; a value of 0 to 65535 is stored by [`fn_005de240`] and
+/// the command succeeds, any other value fails.
+pub fn fn_005de1d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    if !(0..=0xffff).contains(&(value as i32)) {
+        return false;
+    }
+    fn_005de240(e, value as u16);
+    true
+}
+
+// Translated from 005de240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the `u16` at `011ae75c`.
+pub fn fn_005de240(e: &mut Engine, value: u16) {
+    e.set_global(COMMAND_VALUE_011AE75C, value);
+}
+
+// Translated from 005de250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer; a value of 0 to 65535 is stored by [`fn_005de2c0`] and
+/// the command succeeds, any other value fails.
+pub fn fn_005de250(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    if !(0..=0xffff).contains(&(value as i32)) {
+        return false;
+    }
+    fn_005de2c0(e, value as u16);
+    true
+}
+
+// Translated from 005de2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the `u16` at `011afa9c`.
+pub fn fn_005de2c0(e: &mut Engine, value: u16) {
+    e.set_global(COMMAND_VALUE_011AFA9C, value);
+}
+
+// Translated from 005de2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetLastExtDoorActivated` (Xbox PDB): parses a reference and
+/// stores it at the player's `+0x604`. A non-null reference with a world
+/// space makes that world space the root map space. Succeeds when the
+/// parameter parsed.
+pub fn script_set_last_ext_door_activated(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([reference]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let player = e.global::<u32>(PLAYER);
+    e.mem.set_u32(player + PLAYER_LAST_EXT_DOOR, reference);
+    if reference != 0 && e.call(GET_WORLD_SPACE, &args![reference]).u32() != 0 {
+        let world_space = e.call(GET_WORLD_SPACE, &args![reference]).u32();
+        e.call(SET_ROOT_MAP_SPACE, &args![world_space]);
+    }
+    true
+}
+
+// Translated from 005de350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters: when the pointer at `011d96c0` is set, calls
+/// [`fn_005de380`] with it. Always succeeds.
+pub fn fn_005de350(e: &mut Engine, _a: ScriptArgs) -> bool {
+    let object = e.global::<u32>(OBJECT_POINTER_011D96C0);
+    if object != 0 {
+        fn_005de380(e, Ptr::new(object));
+    }
+    true
+}
+
+// Translated from 005de380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the pointer at `011d96c0` is set, sets the byte at `+0x254` of its
+/// object to 1 (the word the caller passes as `this` is not used).
+pub fn fn_005de380(e: &mut Engine, _unused_this: Ptr) {
+    let object = e.global::<u32>(OBJECT_POINTER_011D96C0);
+    if object != 0 {
+        e.mem.set_u8(object + 0x254, 1);
+    }
+}
+
+// Translated from 005de3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTaskThreadSleepFunction` (Xbox PDB): parses an integer, stores
+/// it with [`fn_005de410`] and prints `"BSTaskThread::sPauseSleepValue set to
+/// <value> ms"`. Succeeds when the parameter parsed.
+pub fn script_set_task_thread_sleep_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    fn_005de410(e, value);
+    e.call(CONSOLE_PRINT, &args![MSG_PAUSE_SLEEP, value]);
+    true
+}
+
+// Translated from 005de410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word at `011af708` (`BSTaskThread::sPauseSleepValue`).
+pub fn fn_005de410(e: &mut Engine, value: u32) {
+    e.set_global(TASK_THREAD_PAUSE_SLEEP, value);
+}
+
+// Translated from 005de420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTaskThreadUpdateSleepFunction` (Xbox PDB): parses an integer,
+/// stores it with [`fn_005de490`] and prints `"BSTaskThread::sUpdateSleepValue
+/// set to <value> ms"`. Succeeds when the parameter parsed.
+pub fn script_set_task_thread_update_sleep_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    fn_005de490(e, value);
+    e.call(CONSOLE_PRINT, &args![MSG_UPDATE_SLEEP, value]);
+    true
+}
+
+// Translated from 005de490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word at `011af710` (`BSTaskThread::sUpdateSleepValue`).
+pub fn fn_005de490(e: &mut Engine, value: u32) {
+    e.set_global(TASK_THREAD_UPDATE_SLEEP, value);
+}
+
+// Translated from 005de4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsImageSpaceActiveFunction` (Xbox PDB): sets the result to 0.0,
+/// parses an integer (and a `float` that is not used). Walks the list headed
+/// at `+0x6c` of the object that `011dea10` points to; for every entry it
+/// takes a counted copy of the pointer in it, and when that object's virtual
+/// slot `0x94` gives something whose `+0x1c` field equals the integer, the
+/// result becomes 1.0 and the walk ends. Prints `"ImageSpace is active "` or
+/// `"ImageSpace is not active"` (by the result). Succeeds when the parameters
+/// parsed. (The structured exception frame is not translated.)
+pub fn script_is_image_space_active_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let Some([wanted, _unused_float]) = parse_params(e, a, [0, 1.0f32.to_bits()]) else {
+        return false;
+    };
+    let owner = e.global::<u32>(LIST_OWNER_011DEA10);
+    let mut node = e.call(LIST_HEAD_AT_6C, &args![owner]).u32();
+    while node != 0 {
+        let item = e.call(LIST_ITEM_PTR, &args![node]).u32();
+        let found = e.with_stack(4, |e, copy| {
+            e.call(NI_POINTER_COPY_CONSTRUCT, &args![copy, item]);
+            let object = e.call(READ_POINTER, &args![copy]).u32();
+            let mut found = false;
+            if object != 0 {
+                let entry = e.vcall(object, VSLOT_ENTRY_94, &args![]).u32();
+                found = entry != 0 && e.call(FIELD_1C, &args![entry]).u32() == wanted;
+            }
+            if found {
+                e.mem.set_f64(a.result.addr(), 1.0);
+            } else {
+                node = e.call(LIST_NEXT, &args![node]).u32();
+            }
+            e.call(NI_POINTER_DESTRUCT, &args![copy]);
+            found
+        });
+        if found {
+            break;
+        }
+    }
+    let text = if e.mem.f64(a.result.addr()) == 0.0 {
+        MSG_IMAGE_SPACE_NOT_ACTIVE
+    } else {
+        MSG_IMAGE_SPACE_ACTIVE
+    };
+    e.call(CONSOLE_PRINT, &args![text]);
+    true
+}
+
+// Translated from 005de600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the result to 0.0 and parses two references; when both are given,
+/// calls `00590010` on the first with the second. Succeeds when the
+/// parameters parsed.
+pub fn fn_005de600(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let Some([first, second]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    if second != 0 && first != 0 {
+        e.call(PAIR_ACTION_00590010, &args![first, second]);
+    }
+    true
+}
+
+// Translated from 005de670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the result to 0.0 and parses a container, an item and a number; when
+/// the container and the item are given, calls `00487a00` on the container's
+/// `+0x30` with the number (low 16 bits), 1 and no extra data.
+/// Succeeds when the parameters parsed.
+pub fn fn_005de670(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let Some([container, item, number]) = parse_params(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    if container != 0 && item != 0 {
+        e.call(
+            ADD_ITEM_00487A00,
+            &args![
+                container + 0x30,
+                container,
+                number & 0xffff,
+                1u32,
+                item,
+                0u32
+            ],
+        );
+    }
+    true
+}
+
+// Translated from 005de700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::AddItemToLeveledListFunction` (Xbox PDB): sets the result to 0.0
+/// and parses a list, an item, two numbers and a percentage (default
+/// 100.0). When the list, the item and the second number are given, builds a
+/// `ContainerItemExtra` holding the percentage divided by 100 (rounded to
+/// `float`) and calls `00487a00` on the list's `+0x30` with the numbers
+/// (low 16 bits each). Succeeds when the parameters parsed. (The
+/// exception frame around the allocation is not translated.)
+pub fn script_add_item_to_leveled_list_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let percent = e.global::<u32>(DEFAULT_PERCENT);
+    let Some([list, item, first_number, second_number, percent]) =
+        parse_params(e, a, [0, 0, 0, 0, percent])
+    else {
+        return false;
+    };
+    if list != 0 && item != 0 && second_number != 0 {
+        let weight = (f32::from_bits(percent) as f64 / e.global::<f64>(HUNDRED)) as f32;
+        let memory = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+        let extra = if memory != 0 {
+            e.call(CONTAINER_ITEM_EXTRA_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.call(CONTAINER_ITEM_EXTRA_SET_FLOAT, &args![extra, weight]);
+        e.call(
+            ADD_ITEM_00487A00,
+            &args![
+                list + 0x30,
+                list,
+                first_number & 0xffff,
+                second_number & 0xffff,
+                item,
+                extra
+            ],
+        );
+    }
+    true
+}
+
+// Translated from 005de840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RemapWaterTypeFunction` (Xbox PDB): sets the result to 0.0 and
+/// parses the water type to be remapped and the one to remap to. A missing
+/// one, or one whose form type is not `0x4e`, is reported through the logging
+/// stub and dropped; when both remain, `00580680` is called on the first with
+/// the second. Succeeds when the parameters parsed.
+pub fn script_remap_water_type_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let Some([mut to_remap, mut remap_to]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    if to_remap == 0 || e.call(FORM_TYPE, &args![to_remap]).u32() != FORM_TYPE_WATER {
+        e.call(LOG_STUB, &args![MSG_WATER_TO_REMAP_INVALID]);
+        to_remap = 0;
+    }
+    if remap_to == 0 || e.call(FORM_TYPE, &args![remap_to]).u32() != FORM_TYPE_WATER {
+        e.call(LOG_STUB, &args![MSG_WATER_REMAP_TO_INVALID]);
+        remap_to = 0;
+    }
+    if to_remap != 0 && remap_to != 0 {
+        e.call(WATER_REMAP_00580680, &args![to_remap, remap_to]);
+    }
+    true
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1227,6 +2008,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005dd6f0, fn_005dd6f0(Ptr)),
         entry!(0x005dd7b0, fn_005dd7b0(Ptr)),
         entry!(0x005dd7d0, fn_005dd7d0(Ptr)),
+        entry!(0x005dd7f0, fn_005dd7f0(Ptr)),
+        entry!(0x005dd810, fn_005dd810(Ptr)),
+        entry!(0x005dd830, fn_005dd830(i32) -> u32),
+        entry!(0x005dd840, fn_005dd840(i32) -> u32),
+        entry!(0x005dd850, fn_005dd850(i32) -> u32),
+        entry!(0x005dd860, fn_005dd860(u8)),
+        entry!(0x005dd870, script_is_code_redeemed_function(ScriptArgs) -> u8),
+        entry!(0x005dd960, fn_005dd960(ScriptArgs) -> u8),
+        entry!(0x005dda00, fn_005dda00(ScriptArgs) -> bool),
+        entry!(0x005dda70, fn_005dda70(ScriptArgs) -> bool),
+        entry!(0x005ddae0, fn_005ddae0(ScriptArgs) -> bool),
+        entry!(0x005ddbb0, fn_005ddbb0(ScriptArgs) -> bool),
+        entry!(0x005ddc20, fn_005ddc20(ScriptArgs) -> bool),
+        entry!(0x005ddc90, fn_005ddc90(ScriptArgs) -> bool),
+        entry!(0x005ddd10, fn_005ddd10(ScriptArgs) -> bool),
+        entry!(0x005ddd90, fn_005ddd90(ScriptArgs) -> bool),
+        entry!(0x005dde10, fn_005dde10(ScriptArgs) -> bool),
+        entry!(0x005dde90, fn_005dde90(ScriptArgs) -> bool),
+        entry!(0x005ddf10, fn_005ddf10(ScriptArgs) -> bool),
+        entry!(0x005ddf90, fn_005ddf90(ScriptArgs) -> bool),
+        entry!(0x005de080, fn_005de080(Ptr) -> bool),
+        entry!(0x005de0a0, fn_005de0a0(Ptr, u32, u8)),
+        entry!(0x005de0f0, fn_005de0f0(Ptr, u32) -> u32),
+        entry!(0x005de110, fn_005de110(ScriptArgs) -> bool),
+        entry!(0x005de1d0, fn_005de1d0(ScriptArgs) -> bool),
+        entry!(0x005de240, fn_005de240(u16)),
+        entry!(0x005de250, fn_005de250(ScriptArgs) -> bool),
+        entry!(0x005de2c0, fn_005de2c0(u16)),
+        entry!(0x005de2d0, script_set_last_ext_door_activated(ScriptArgs) -> bool),
+        entry!(0x005de350, fn_005de350(ScriptArgs) -> bool),
+        entry!(0x005de380, fn_005de380(Ptr)),
+        entry!(0x005de3a0, script_set_task_thread_sleep_function(ScriptArgs) -> bool),
+        entry!(0x005de410, fn_005de410(u32)),
+        entry!(0x005de420, script_set_task_thread_update_sleep_function(ScriptArgs) -> bool),
+        entry!(0x005de490, fn_005de490(u32)),
+        entry!(0x005de4a0, script_is_image_space_active_function(ScriptArgs) -> bool),
+        entry!(0x005de600, fn_005de600(ScriptArgs) -> bool),
+        entry!(0x005de670, fn_005de670(ScriptArgs) -> bool),
+        entry!(0x005de700, script_add_item_to_leveled_list_function(ScriptArgs) -> bool),
+        entry!(0x005de840, script_remap_water_type_function(ScriptArgs) -> bool),
     ]
 }
 
@@ -1254,6 +2075,11 @@ mod tests {
             0x011b_0000,
             0x011d_5000,
             0x011d_e000,
+            0x0119_b000,
+            0x011a_e000,
+            0x011a_f000,
+            0x011d_9000,
+            0x0101_6000,
         ] {
             e.map(page, 0x1000);
         }
@@ -1264,6 +2090,7 @@ mod tests {
         e.set_global(DEGREES_TO_RADIANS, f64::from_bits(0x3f91_df46_a000_0000));
         e.set_global(EULER_NUMBER, 2.7182817f32);
         e.set_global(HUNDRED, 100.0f64);
+        e.set_global(DEFAULT_PERCENT, 100.0f32);
         for lane in 0..4 {
             e.set_global(VECTOR_ONES + 4 * lane, 1.0f32);
         }
@@ -2799,5 +3626,1012 @@ mod tests {
         e.call(0x005d_d7d0, &args![0x4000u32]);
         assert_eq!(calls(&e, ARRAY_94_DESTRUCT), vec![vec![0x3000]]);
         assert_eq!(calls(&e, ARRAY_A4_DESTRUCT), vec![vec![0x4000]]);
+    }
+
+    // ---- 005dd7f0 onwards ---------------------------------------------------
+
+    /// Registers a double that answers the same word for every call.
+    fn answer(e: &mut Engine, address: u32, value: u32) {
+        e.register_double(address, move |_, _| value.into_ret());
+    }
+
+    /// Registers a double that does nothing.
+    fn nothing(e: &mut Engine, address: u32) {
+        e.register_double(address, |_, _| Ret::default());
+    }
+
+    /// A reference-like object: zeroed, with the given vtable slots.
+    fn parsed_one(e: &mut Engine, this_obj: u32, value: u32) -> ScriptArgs {
+        let a = command(e, this_obj);
+        parse_gives(e, true, &[value]);
+        a
+    }
+
+    #[test]
+    fn fn_005dd7f0_calls_the_destructor_of_the_array_at_b4() {
+        let mut e = engine();
+        nothing(&mut e, ARRAY_B4_DESTRUCT);
+        start_log(&mut e);
+        e.call(0x005d_d7f0, &args![0x3000u32]);
+        assert_eq!(calls(&e, ARRAY_B4_DESTRUCT), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_005dd810_calls_the_destructor_of_the_array_at_c4() {
+        let mut e = engine();
+        nothing(&mut e, ARRAY_C4_DESTRUCT);
+        start_log(&mut e);
+        e.call(0x005d_d810, &args![0x4000u32]);
+        assert_eq!(calls(&e, ARRAY_C4_DESTRUCT), vec![vec![0x4000]]);
+    }
+
+    /// The name functions read the pointer at `table + 4 * index`.
+    fn check_name_function(address: u32, table: u32) {
+        let mut e = engine();
+        e.set_global(table, 0x0103_d000u32);
+        e.set_global(table + 12, 0xabcdu32);
+        assert_eq!(e.call(address, &args![0i32]).u32(), 0x0103_d000);
+        assert_eq!(e.call(address, &args![3i32]).u32(), 0xabcd);
+    }
+
+    #[test]
+    fn fn_005dd830_reads_the_expression_name_table() {
+        check_name_function(0x005d_d830, EXPRESSION_NAME_TABLE);
+    }
+
+    #[test]
+    fn fn_005dd840_reads_the_modifier_name_table() {
+        check_name_function(0x005d_d840, MODIFIER_NAME_TABLE);
+    }
+
+    #[test]
+    fn fn_005dd850_reads_the_phoneme_name_table() {
+        check_name_function(0x005d_d850, PHONEME_NAME_TABLE);
+    }
+
+    #[test]
+    fn fn_005dd860_stores_the_mode_byte() {
+        let mut e = engine();
+        e.call(0x005d_d860, &args![1u32]);
+        assert_eq!(e.global::<u8>(FACE_GEN_MODE_BYTE), 1);
+        e.call(0x005d_d860, &args![0u32]);
+        assert_eq!(e.global::<u8>(FACE_GEN_MODE_BYTE), 0);
+    }
+
+    /// Doubles of the code record: the record object is `0x5000`.
+    fn code_record_doubles(e: &mut Engine, method: u32, answer_byte: u32) {
+        answer(e, CODE_RECORDS, 0x5000);
+        answer(e, method, answer_byte);
+        nothing(e, SPRINTF_S);
+    }
+
+    #[test]
+    fn is_code_redeemed_prints_yes_and_stores_one() {
+        let mut e = engine();
+        let a = parsed_one(&mut e, 0, 0);
+        code_record_doubles(&mut e, CODE_IS_REDEEMED, 1);
+        start_log(&mut e);
+        assert_eq!(e.call(0x005d_d870, &args![a]).u8(), 1);
+        let parse_call = calls(&e, PARSE_PARAMETERS)[0].clone();
+        let text = parse_call[7];
+        assert_eq!(calls(&e, CODE_RECORDS), vec![Vec::<u32>::new()]);
+        assert_eq!(calls(&e, CODE_IS_REDEEMED), vec![vec![0x5000, text]]);
+        let sprintf = calls(&e, SPRINTF_S)[0].clone();
+        assert_eq!(sprintf[1..], [200, FORMAT_IS_CODE_REDEEMED, text, TEXT_YES]);
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![sprintf[0]]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 1.0);
+    }
+
+    #[test]
+    fn is_code_redeemed_prints_no_and_stores_zero() {
+        let mut e = engine();
+        let a = parsed_one(&mut e, 0, 0);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        code_record_doubles(&mut e, CODE_IS_REDEEMED, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x005d_d870, &args![a]).u8(), 0);
+        let sprintf = calls(&e, SPRINTF_S)[0].clone();
+        assert_eq!(sprintf[4], TEXT_NO);
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+    }
+
+    #[test]
+    fn is_code_redeemed_returns_the_answer_byte_itself() {
+        let mut e = engine();
+        let a = parsed_one(&mut e, 0, 0);
+        code_record_doubles(&mut e, CODE_IS_REDEEMED, 0x1_0002);
+        assert_eq!(e.call(0x005d_d870, &args![a]).u8(), 2);
+        assert_eq!(e.mem.f64(a.result.addr()), 1.0);
+    }
+
+    #[test]
+    fn is_code_redeemed_does_nothing_when_the_parameters_do_not_parse() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x005d_d870, &args![a]).u8(), 0);
+        assert_eq!(call_order(&e), vec![0x005d_d870, PARSE_PARAMETERS]);
+    }
+
+    #[test]
+    fn fn_005dd960_sets_the_code_and_stores_the_answer() {
+        let mut e = engine();
+        let a = parsed_one(&mut e, 0, 0);
+        code_record_doubles(&mut e, CODE_SET_REDEEMED, 1);
+        start_log(&mut e);
+        assert_eq!(e.call(0x005d_d960, &args![a]).u8(), 1);
+        let text = calls(&e, PARSE_PARAMETERS)[0][7];
+        assert_eq!(calls(&e, CODE_SET_REDEEMED), vec![vec![0x5000, text]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 1.0);
+        code_record_doubles(&mut e, CODE_SET_REDEEMED, 0);
+        assert_eq!(e.call(0x005d_d960, &args![a]).u8(), 0);
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x005d_d960, &args![a]).u8(), 0);
+        assert!(calls(&e, CODE_RECORDS).is_empty());
+    }
+
+    #[test]
+    fn fn_005dda00_clears_the_code() {
+        let mut e = engine();
+        let a = parsed_one(&mut e, 0, 0);
+        code_record_doubles(&mut e, CODE_CLEAR_REDEEMED, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_da00, &args![a]).bool());
+        let text = calls(&e, PARSE_PARAMETERS)[0][7];
+        assert_eq!(calls(&e, CODE_CLEAR_REDEEMED), vec![vec![0x5000, text]]);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_da00, &args![a]).bool());
+        assert!(calls(&e, CODE_RECORDS).is_empty());
+    }
+
+    #[test]
+    fn fn_005dda70_stores_the_actor_byte() {
+        let mut e = engine();
+        let this_obj = object_with(&mut e, &[(0x100, V_IS_ACTOR)]);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[]);
+        answer(&mut e, V_IS_ACTOR, 1);
+        answer(&mut e, ACTOR_BYTE_1B1, 0x1_07);
+        start_log(&mut e);
+        assert!(e.call(0x005d_da70, &args![a]).bool());
+        assert_eq!(calls(&e, PARSE_PARAMETERS)[0].len(), 7);
+        assert_eq!(calls(&e, ACTOR_BYTE_1B1), vec![vec![this_obj]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 7.0);
+    }
+
+    #[test]
+    fn fn_005dda70_leaves_the_result_for_a_non_actor_and_fails_without_parameters() {
+        let mut e = engine();
+        let this_obj = object_with(&mut e, &[(0x100, V_IS_ACTOR)]);
+        let a = command(&mut e, this_obj);
+        e.mem.set_f64(a.result.addr(), 3.0);
+        parse_gives(&mut e, true, &[]);
+        answer(&mut e, V_IS_ACTOR, 0);
+        nothing(&mut e, ACTOR_BYTE_1B1);
+        start_log(&mut e);
+        assert!(e.call(0x005d_da70, &args![a]).bool());
+        assert!(calls(&e, ACTOR_BYTE_1B1).is_empty());
+        assert_eq!(e.mem.f64(a.result.addr()), 3.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_da70, &args![a]).bool());
+        assert!(calls(&e, V_IS_ACTOR).is_empty());
+    }
+
+    /// The doubles of the weapon mod slot command; returns `(this_obj,
+    /// item)`: the extra data list sits at the first word of `item`.
+    fn weapon_mod_doubles(e: &mut Engine, actor: bool) -> u32 {
+        const V_PROCESS_148: u32 = 0x0900_0148;
+        let process = object_with(e, &[(0x148, V_PROCESS_148)]);
+        let this_obj = object_with(e, &[(0x100, V_IS_ACTOR)]);
+        let item = e.mem.alloc(8);
+        e.mem.set_u32(item, 0xe1e1);
+        answer(e, V_IS_ACTOR, actor as u32);
+        answer(e, GET_PROCESS, process);
+        answer(e, V_PROCESS_148, 0x5555);
+        answer(e, READ_POINTER, 0x6666);
+        answer(e, LIST_ITEM_PTR, item);
+        nothing(e, SET_WEAPON_MOD_SLOT);
+        this_obj
+    }
+
+    #[test]
+    fn fn_005ddae0_sets_the_weapon_mod_slot_bit() {
+        for (slot, mask) in [(1u32, 1u32), (2, 2), (3, 4)] {
+            let mut e = engine();
+            let this_obj = weapon_mod_doubles(&mut e, true);
+            let a = command(&mut e, this_obj);
+            parse_gives(&mut e, true, &[7, slot]);
+            start_log(&mut e);
+            assert!(e.call(0x005d_dae0, &args![a]).bool());
+            assert_eq!(calls(&e, GET_PROCESS), vec![vec![this_obj]]);
+            assert_eq!(calls(&e, READ_POINTER), vec![vec![0x5555]]);
+            assert_eq!(calls(&e, LIST_ITEM_PTR), vec![vec![0x6666]]);
+            assert_eq!(calls(&e, SET_WEAPON_MOD_SLOT), vec![vec![0xe1e1, mask]]);
+        }
+    }
+
+    #[test]
+    fn fn_005ddae0_ignores_other_slots_and_non_actors() {
+        for (actor, slot) in [(true, 0u32), (true, 4), (true, 0xffff_ffff), (false, 2)] {
+            let mut e = engine();
+            let this_obj = weapon_mod_doubles(&mut e, actor);
+            let a = command(&mut e, this_obj);
+            parse_gives(&mut e, true, &[7, slot]);
+            start_log(&mut e);
+            assert!(e.call(0x005d_dae0, &args![a]).bool());
+            assert!(calls(&e, SET_WEAPON_MOD_SLOT).is_empty());
+        }
+        let mut e = engine();
+        let this_obj = weapon_mod_doubles(&mut e, true);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_dae0, &args![a]).bool());
+        assert!(calls(&e, V_IS_ACTOR).is_empty());
+    }
+
+    /// The test of the getters by index (`005ddbb0`, `005ddc20`).
+    fn check_float_getter(address: u32, getter: u32) {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0x1234, 1]);
+        e.register_double(getter, |_, _| 2.5f64.into_ret());
+        start_log(&mut e);
+        assert!(e.call(address, &args![a]).bool());
+        assert_eq!(calls(&e, getter), vec![vec![0x1234, 1]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 2.5);
+        // Index 0 is allowed as well.
+        parse_gives(&mut e, true, &[0x1234, 0]);
+        e.mem.set_f64(a.result.addr(), 0.0);
+        assert!(e.call(address, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 2.5);
+        // Other indexes fail without calling the getter or touching the result.
+        for bad in [2u32, 0xffff_ffff] {
+            parse_gives(&mut e, true, &[0x1234, bad]);
+            e.mem.set_f64(a.result.addr(), 0.0);
+            start_log(&mut e);
+            assert!(!e.call(address, &args![a]).bool());
+            assert!(calls(&e, getter).is_empty());
+            assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        }
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(address, &args![a]).bool());
+    }
+
+    #[test]
+    fn fn_005ddbb0_stores_the_float_getter_result() {
+        check_float_getter(0x005d_dbb0, OBJECT_FLOAT_GETTER_006155C0);
+    }
+
+    #[test]
+    fn fn_005ddc20_stores_the_other_float_getter_result() {
+        check_float_getter(0x005d_dc20, OBJECT_FLOAT_GETTER_00616A60);
+    }
+
+    #[test]
+    fn fn_005ddc90_stores_the_signed_byte() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        e.register_double(OBJECT_BYTE_GETTER_00616A90, |_, _| 0x1_00fe_u32.into_ret());
+        for index in 0..=2u32 {
+            parse_gives(&mut e, true, &[0x1234, index]);
+            e.mem.set_f64(a.result.addr(), 0.0);
+            start_log(&mut e);
+            assert!(e.call(0x005d_dc90, &args![a]).bool());
+            assert_eq!(
+                calls(&e, OBJECT_BYTE_GETTER_00616A90),
+                vec![vec![0x1234, index]]
+            );
+            assert_eq!(e.mem.f64(a.result.addr()), -2.0);
+        }
+        e.register_double(OBJECT_BYTE_GETTER_00616A90, |_, _| 5u32.into_ret());
+        parse_gives(&mut e, true, &[0x1234, 1]);
+        assert!(e.call(0x005d_dc90, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 5.0);
+        for bad in [3u32, 0xffff_ffff] {
+            parse_gives(&mut e, true, &[0x1234, bad]);
+            start_log(&mut e);
+            assert!(!e.call(0x005d_dc90, &args![a]).bool());
+            assert!(calls(&e, OBJECT_BYTE_GETTER_00616A90).is_empty());
+        }
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_dc90, &args![a]).bool());
+    }
+
+    /// The test of the setters by index: `(object, index, value)` is passed
+    /// on for an index of 0 or 1.
+    fn check_setter(address: u32, setter: u32) {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        nothing(&mut e, setter);
+        for index in 0..=1u32 {
+            parse_gives(&mut e, true, &[0x1234, index, 0x4048_0000]);
+            start_log(&mut e);
+            assert!(e.call(address, &args![a]).bool());
+            assert_eq!(calls(&e, setter), vec![vec![0x1234, index, 0x4048_0000]]);
+        }
+        for bad in [2u32, 0xffff_ffff] {
+            parse_gives(&mut e, true, &[0x1234, bad, 5]);
+            start_log(&mut e);
+            assert!(!e.call(address, &args![a]).bool());
+            assert!(calls(&e, setter).is_empty());
+        }
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(address, &args![a]).bool());
+        assert!(calls(&e, setter).is_empty());
+    }
+
+    #[test]
+    fn fn_005ddd10_sets_an_integer_by_index() {
+        check_setter(0x005d_dd10, OBJECT_SET_INT_00615C90);
+    }
+
+    #[test]
+    fn fn_005ddd90_sets_a_float_by_index() {
+        check_setter(0x005d_dd90, OBJECT_FLOAT_SETTER_00615730);
+    }
+
+    #[test]
+    fn fn_005dde10_sets_an_integer_by_index() {
+        check_setter(0x005d_de10, OBJECT_SET_INT_00615FA0);
+    }
+
+    #[test]
+    fn fn_005dde90_sets_a_float_by_index() {
+        check_setter(0x005d_de90, OBJECT_FLOAT_SETTER_00615A00);
+    }
+
+    #[test]
+    fn fn_005ddf10_sets_a_float_by_index() {
+        check_setter(0x005d_df10, OBJECT_FLOAT_SETTER_00615580);
+    }
+
+    /// The array of references used by the two loops: the elements are
+    /// `refs`; the array object sits at `0x7000` with its first index (the
+    /// word at `+0x10`) `start`.
+    fn reference_list(e: &mut Engine, start: u32, refs: Vec<u32>) {
+        let list = e.mem.alloc(0x40);
+        e.mem.set_u32(list + 0x10, start);
+        let count = refs.len() as u32;
+        answer(e, PLUS_4, list);
+        answer(e, LIST_COUNT, count);
+        e.register_double(LIST_GET, move |_, a| refs[a[1] as usize].into_ret());
+    }
+
+    /// References for [`fn_005ddf90`]: the field at `+0x10` is the answer of
+    /// virtual slot `0x224`, the word at `+0x14` the `+0xfc` field, the word
+    /// at `+0x18` the owner, the word at `+8` the flags, the word at `+0x30`
+    /// the form flags of its own base form (the reference itself).
+    fn loop_doubles(e: &mut Engine) {
+        e.register_double(V_REFERENCE_224, |e, a| {
+            (e.mem.u32(a[0] + 0x10) != 0).into_ret()
+        });
+        e.register_double(FLAG_200000, |e, a| {
+            (e.mem.u32(a[0] + 8) & 0x20_0000 != 0).into_ret()
+        });
+        e.register_double(FIELD_FC, |e, a| e.mem.u32(a[0] + 0x14).into_ret());
+        e.register_double(GET_OWNER, |e, a| e.mem.u32(a[0] + 0x18).into_ret());
+        e.register_double(REFERENCE_BASE_FORM, |_, a| a[0].into_ret());
+        e.register_double(FORM_FLAG_TEST, |e, a| {
+            (e.mem.u32(a[0] + 0x30) & a[1] != 0).into_ret()
+        });
+        e.register_double(V_REFERENCE_1A4, |_, _| 0xaaaa_u32.into_ret());
+    }
+
+    const V_REFERENCE_224: u32 = 0x0900_0224;
+    const V_REFERENCE_1A4: u32 = 0x0900_01a4;
+    const V_REFERENCE_318: u32 = 0x0900_0318;
+    const V_REFERENCE_320: u32 = 0x0900_0320;
+
+    fn reference(e: &mut Engine) -> u32 {
+        object_with(
+            e,
+            &[
+                (0x224, V_REFERENCE_224),
+                (0x318, V_REFERENCE_318),
+                (0x320, V_REFERENCE_320),
+            ],
+        )
+    }
+
+    #[test]
+    fn fn_005ddf90_flags_the_matching_references() {
+        let mut e = engine();
+        let this_obj = object_with(&mut e, &[(0x1a4, V_REFERENCE_1A4)]);
+        let a = command(&mut e, this_obj);
+        loop_doubles(&mut e);
+        // Index 0 is before the start index and never visited.
+        let before = reference(&mut e);
+        let skipped_by_flag = reference(&mut e);
+        let skipped_by_virtual = reference(&mut e);
+        let own = reference(&mut e);
+        let owned = reference(&mut e);
+        let foreign = reference(&mut e);
+        let no_flag_on_form = reference(&mut e);
+        for r in [
+            before,
+            skipped_by_flag,
+            skipped_by_virtual,
+            own,
+            owned,
+            foreign,
+        ] {
+            e.mem.set_u32(r + 0x10, 1);
+            e.mem.set_u32(r + 0x30, 0x400);
+        }
+        e.mem.set_u32(no_flag_on_form + 0x10, 1);
+        e.mem.set_u32(no_flag_on_form + 0x14, this_obj);
+        e.mem.set_u32(skipped_by_flag + 8, 0x20_0000);
+        e.mem.set_u32(skipped_by_virtual + 0x10, 0);
+        e.mem.set_u32(own + 0x14, this_obj);
+        e.mem.set_u32(owned + 0x14, 0x1234);
+        e.mem.set_u32(owned + 0x18, 0xaaaa);
+        e.mem.set_u32(foreign + 0x14, 0x1234);
+        e.mem.set_u32(foreign + 0x18, 0xbbbb);
+        reference_list(
+            &mut e,
+            1,
+            vec![
+                before,
+                skipped_by_flag,
+                skipped_by_virtual,
+                own,
+                owned,
+                foreign,
+                no_flag_on_form,
+            ],
+        );
+        e.mem.set_u32(own + 0xc8, 0x8000_0001);
+        assert!(e.call(0x005d_df90, &args![a]).bool());
+        assert_eq!(e.mem.u32(before + 0xc8), 0);
+        assert_eq!(e.mem.u32(skipped_by_flag + 0xc8), 0);
+        assert_eq!(e.mem.u32(skipped_by_virtual + 0xc8), 0);
+        assert_eq!(e.mem.u32(own + 0xc8), 0x8010_0001);
+        assert_eq!(e.mem.u32(owned + 0xc8), 0x10_0000);
+        assert_eq!(e.mem.u32(foreign + 0xc8), 0);
+        assert_eq!(e.mem.u32(no_flag_on_form + 0xc8), 0);
+    }
+
+    #[test]
+    fn fn_005ddf90_without_this_obj_does_nothing() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_df90, &args![a]).bool());
+        assert_eq!(call_order(&e), vec![0x005d_df90]);
+    }
+
+    #[test]
+    fn fn_005de080_tests_form_flag_400() {
+        let mut e = engine();
+        answer(&mut e, FORM_FLAG_TEST, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e080, &args![0x1000u32]).bool());
+        assert_eq!(calls(&e, FORM_FLAG_TEST), vec![vec![0x1000, 0x400]]);
+        answer(&mut e, FORM_FLAG_TEST, 0);
+        assert!(!e.call(0x005d_e080, &args![0x1000u32]).bool());
+    }
+
+    #[test]
+    fn fn_005de0a0_sets_or_clears_flag_bits() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0xc8, 0x0000_00f0);
+        e.call(0x005d_e0a0, &args![this, 0x0f00_0000u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0xc8), 0x0f00_00f0);
+        e.call(0x005d_e0a0, &args![this, 0x0100_0010u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 0xc8), 0x0e00_00e0);
+        // Any non-zero byte sets.
+        e.call(0x005d_e0a0, &args![this, 1u32, 0x100u32]);
+        assert_eq!(e.mem.u32(this + 0xc8), 0x0e00_00e0);
+        e.call(0x005d_e0a0, &args![this, 1u32, 2u32]);
+        assert_eq!(e.mem.u32(this + 0xc8), 0x0e00_00e1);
+    }
+
+    #[test]
+    fn fn_005de0f0_reads_the_indexed_word() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this + 0x10, 11);
+        e.mem.set_u32(this + 0x18, 33);
+        assert_eq!(e.call(0x005d_e0f0, &args![this, 0u32]).u32(), 11);
+        assert_eq!(e.call(0x005d_e0f0, &args![this, 2u32]).u32(), 33);
+    }
+
+    #[test]
+    fn fn_005de110_calls_slot_320_on_the_matching_references() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        let both = reference(&mut e);
+        let only_first = reference(&mut e);
+        let neither = reference(&mut e);
+        e.register_double(V_REFERENCE_224, |e, a| {
+            (e.mem.u32(a[0] + 0x10) != 0).into_ret()
+        });
+        e.register_double(V_REFERENCE_318, |e, a| {
+            (e.mem.u32(a[0] + 0x14) != 0).into_ret()
+        });
+        nothing(&mut e, V_REFERENCE_320);
+        e.mem.set_u32(both + 0x10, 1);
+        e.mem.set_u32(both + 0x14, 1);
+        e.mem.set_u32(only_first + 0x10, 1);
+        e.mem.set_u32(neither + 0x14, 1);
+        // The start index of the array is not used by this command; null
+        // elements are skipped.
+        reference_list(&mut e, 3, vec![only_first, 0, both, neither]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e110, &args![a]).bool());
+        assert_eq!(
+            calls(&e, V_REFERENCE_320),
+            vec![vec![both, player, 1]],
+            "only the reference that passes both tests"
+        );
+        assert_eq!(calls(&e, V_REFERENCE_224).len(), 3);
+        assert_eq!(calls(&e, V_REFERENCE_318).len(), 2);
+    }
+
+    /// The test of the two commands that store a `u16` (value 0 to 65535).
+    fn check_u16_command(address: u32, global: u32) {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        for (value, stored) in [(0u32, 0u16), (0x1234, 0x1234), (0xffff, 0xffff)] {
+            e.set_global(global, 0x7777u16);
+            parse_gives(&mut e, true, &[value]);
+            assert!(e.call(address, &args![a]).bool());
+            assert_eq!(e.global::<u16>(global), stored);
+        }
+        for bad in [0x1_0000u32, 0xffff_ffff] {
+            e.set_global(global, 0x7777u16);
+            parse_gives(&mut e, true, &[bad]);
+            assert!(!e.call(address, &args![a]).bool());
+            assert_eq!(e.global::<u16>(global), 0x7777);
+        }
+        parse_gives(&mut e, false, &[5]);
+        assert!(!e.call(address, &args![a]).bool());
+        assert_eq!(e.global::<u16>(global), 0x7777);
+    }
+
+    #[test]
+    fn fn_005de1d0_stores_a_u16_through_the_setter() {
+        check_u16_command(0x005d_e1d0, COMMAND_VALUE_011AE75C);
+    }
+
+    #[test]
+    fn fn_005de240_stores_a_u16() {
+        let mut e = engine();
+        e.call(0x005d_e240, &args![0xbeefu32]);
+        assert_eq!(e.global::<u16>(COMMAND_VALUE_011AE75C), 0xbeef);
+        // Only the low 16 bits are stored.
+        e.call(0x005d_e240, &args![0x1_0001u32]);
+        assert_eq!(e.global::<u16>(COMMAND_VALUE_011AE75C), 1);
+    }
+
+    #[test]
+    fn fn_005de250_stores_a_u16_through_the_other_setter() {
+        check_u16_command(0x005d_e250, COMMAND_VALUE_011AFA9C);
+    }
+
+    #[test]
+    fn fn_005de2c0_stores_a_u16() {
+        let mut e = engine();
+        e.call(0x005d_e2c0, &args![0xbeefu32]);
+        assert_eq!(e.global::<u16>(COMMAND_VALUE_011AFA9C), 0xbeef);
+    }
+
+    #[test]
+    fn set_last_ext_door_activated_stores_the_reference_and_the_world_space() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0x4444]);
+        answer(&mut e, GET_WORLD_SPACE, 0x9999);
+        nothing(&mut e, SET_ROOT_MAP_SPACE);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e2d0, &args![a]).bool());
+        assert_eq!(e.mem.u32(player + PLAYER_LAST_EXT_DOOR), 0x4444);
+        assert_eq!(calls(&e, GET_WORLD_SPACE), vec![vec![0x4444], vec![0x4444]]);
+        assert_eq!(calls(&e, SET_ROOT_MAP_SPACE), vec![vec![0x9999]]);
+    }
+
+    #[test]
+    fn set_last_ext_door_activated_without_a_world_space_or_reference() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0x4444]);
+        answer(&mut e, GET_WORLD_SPACE, 0);
+        nothing(&mut e, SET_ROOT_MAP_SPACE);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e2d0, &args![a]).bool());
+        assert_eq!(e.mem.u32(player + PLAYER_LAST_EXT_DOOR), 0x4444);
+        assert!(calls(&e, SET_ROOT_MAP_SPACE).is_empty());
+        // A null reference is stored and nothing is asked.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e2d0, &args![a]).bool());
+        assert_eq!(e.mem.u32(player + PLAYER_LAST_EXT_DOOR), 0);
+        assert!(calls(&e, GET_WORLD_SPACE).is_empty());
+        // Parameters that do not parse leave the player alone.
+        e.mem.set_u32(player + PLAYER_LAST_EXT_DOOR, 0x55);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_e2d0, &args![a]).bool());
+        assert_eq!(e.mem.u32(player + PLAYER_LAST_EXT_DOOR), 0x55);
+    }
+
+    #[test]
+    fn fn_005de350_and_fn_005de380_set_the_flag_byte_of_the_object() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        let object = e.mem.alloc(0x300);
+        // Without the object nothing happens, but the command succeeds.
+        assert!(e.call(0x005d_e350, &args![a]).bool());
+        e.call(0x005d_e380, &args![0u32]);
+        e.set_global(OBJECT_POINTER_011D96C0, object);
+        assert!(e.call(0x005d_e350, &args![a]).bool());
+        assert_eq!(e.mem.u8(object + 0x254), 1);
+        e.mem.set_u8(object + 0x254, 0);
+        // The `this` word is not used by the function itself.
+        e.call(0x005d_e380, &args![0x1234u32]);
+        assert_eq!(e.mem.u8(object + 0x254), 1);
+    }
+
+    #[test]
+    fn set_task_thread_sleep_stores_and_prints() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[250]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e3a0, &args![a]).bool());
+        assert_eq!(e.global::<u32>(TASK_THREAD_PAUSE_SLEEP), 250);
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_PAUSE_SLEEP, 250]]);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_e3a0, &args![a]).bool());
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        assert_eq!(e.global::<u32>(TASK_THREAD_PAUSE_SLEEP), 250);
+    }
+
+    #[test]
+    fn fn_005de410_stores_the_pause_sleep_value() {
+        let mut e = engine();
+        e.call(0x005d_e410, &args![0xdead_beefu32]);
+        assert_eq!(e.global::<u32>(TASK_THREAD_PAUSE_SLEEP), 0xdead_beef);
+    }
+
+    #[test]
+    fn set_task_thread_update_sleep_stores_and_prints() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[30]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e420, &args![a]).bool());
+        assert_eq!(e.global::<u32>(TASK_THREAD_UPDATE_SLEEP), 30);
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_UPDATE_SLEEP, 30]]);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_e420, &args![a]).bool());
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn fn_005de490_stores_the_update_sleep_value() {
+        let mut e = engine();
+        e.call(0x005d_e490, &args![0x1234_5678u32]);
+        assert_eq!(e.global::<u32>(TASK_THREAD_UPDATE_SLEEP), 0x1234_5678);
+    }
+
+    const V_ENTRY_94: u32 = 0x0900_0094;
+
+    /// A list of `entries`: each node is `[item, next]`; an item points to a
+    /// holder of the object, an object has the world space of its entry in
+    /// the field at `+0x1c` of the thing its slot `0x94` returns. `None` is a
+    /// holder of a null object; `Some(None)` an object without entry.
+    fn image_space_list(e: &mut Engine, worlds: &[Option<Option<u32>>]) -> Vec<u32> {
+        let owner = e.mem.alloc(0x100);
+        e.set_global(LIST_OWNER_011DEA10, owner);
+        let mut nodes = vec![];
+        for world in worlds {
+            let node = e.mem.alloc(8);
+            let object = match world {
+                None => 0,
+                Some(world) => {
+                    let object = object_with(e, &[(0x94, V_ENTRY_94)]);
+                    if let Some(world) = world {
+                        let entry = e.mem.alloc(0x40);
+                        e.mem.set_u32(entry + 0x1c, *world);
+                        e.mem.set_u32(object + 0x10, entry);
+                    }
+                    object
+                }
+            };
+            e.mem.set_u32(node, object);
+            nodes.push(node);
+        }
+        for pair in nodes.windows(2) {
+            e.mem.set_u32(pair[0] + 4, pair[1]);
+        }
+        let head = nodes.first().copied().unwrap_or(0);
+        e.register_double(LIST_HEAD_AT_6C, move |_, _| head.into_ret());
+        e.register_double(LIST_ITEM_PTR, |_, a| a[0].into_ret());
+        e.register_double(LIST_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register_double(NI_POINTER_COPY_CONSTRUCT, |e, a| {
+            let source = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], source);
+            a[0].into_ret()
+        });
+        e.register_double(READ_POINTER, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register_double(V_ENTRY_94, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register_double(FIELD_1C, |e, a| e.mem.u32(a[0] + 0x1c).into_ret());
+        nothing(e, NI_POINTER_DESTRUCT);
+        nodes
+    }
+
+    #[test]
+    fn is_image_space_active_finds_the_world_space() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        image_space_list(&mut e, &[Some(Some(5)), Some(Some(9)), Some(Some(9))]);
+        parse_gives(&mut e, true, &[9]);
+        e.mem.set_f64(a.result.addr(), 4.0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e4a0, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 1.0);
+        // The walk ended at the second node.
+        assert_eq!(calls(&e, NI_POINTER_DESTRUCT).len(), 2);
+        assert_eq!(calls(&e, LIST_NEXT).len(), 1);
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_IMAGE_SPACE_ACTIVE]]);
+        // The two outputs: the world space (0) and a 1.0 float.
+        assert_eq!(calls(&e, PARSE_PARAMETERS)[0].len(), 9);
+    }
+
+    #[test]
+    fn is_image_space_active_reports_inactive_when_nothing_matches() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        image_space_list(&mut e, &[Some(Some(5)), None, Some(None), Some(Some(6))]);
+        parse_gives(&mut e, true, &[9]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e4a0, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        assert_eq!(calls(&e, NI_POINTER_DESTRUCT).len(), 4);
+        assert_eq!(calls(&e, NI_POINTER_COPY_CONSTRUCT).len(), 4);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_IMAGE_SPACE_NOT_ACTIVE]]
+        );
+    }
+
+    #[test]
+    fn is_image_space_active_with_an_empty_list_or_bad_parameters() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        image_space_list(&mut e, &[]);
+        parse_gives(&mut e, true, &[9]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e4a0, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_IMAGE_SPACE_NOT_ACTIVE]]
+        );
+        // The result is cleared before the parameters are parsed.
+        e.mem.set_f64(a.result.addr(), 4.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_e4a0, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn fn_005de600_calls_the_pair_action_when_both_are_given() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        nothing(&mut e, PAIR_ACTION_00590010);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, true, &[0x10, 0x20]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e600, &args![a]).bool());
+        assert_eq!(calls(&e, PAIR_ACTION_00590010), vec![vec![0x10, 0x20]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        for pair in [[0u32, 0x20], [0x10, 0]] {
+            parse_gives(&mut e, true, &pair);
+            start_log(&mut e);
+            assert!(e.call(0x005d_e600, &args![a]).bool());
+            assert!(calls(&e, PAIR_ACTION_00590010).is_empty());
+        }
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_e600, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+    }
+
+    #[test]
+    fn fn_005de670_adds_the_item_to_the_container() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        nothing(&mut e, ADD_ITEM_00487A00);
+        parse_gives(&mut e, true, &[0x1000, 0x20, 0x1_0005]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e670, &args![a]).bool());
+        assert_eq!(
+            calls(&e, ADD_ITEM_00487A00),
+            vec![vec![0x1030, 0x1000, 5, 1, 0x20, 0]]
+        );
+        for outs in [[0u32, 0x20, 1], [0x1000, 0, 1]] {
+            parse_gives(&mut e, true, &outs);
+            start_log(&mut e);
+            assert!(e.call(0x005d_e670, &args![a]).bool());
+            assert!(calls(&e, ADD_ITEM_00487A00).is_empty());
+        }
+        // A count of 0 is passed on.
+        parse_gives(&mut e, true, &[0x1000, 0x20, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e670, &args![a]).bool());
+        assert_eq!(calls(&e, ADD_ITEM_00487A00).len(), 1);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_e670, &args![a]).bool());
+    }
+
+    fn leveled_list_doubles(e: &mut Engine) {
+        answer(e, OPERATOR_NEW, 0x9000);
+        e.register_double(CONTAINER_ITEM_EXTRA_CONSTRUCT, |_, a| a[0].into_ret());
+        nothing(e, CONTAINER_ITEM_EXTRA_SET_FLOAT);
+        nothing(e, ADD_ITEM_00487A00);
+    }
+
+    #[test]
+    fn add_item_to_leveled_list_builds_the_extra_data_with_the_percentage() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        leveled_list_doubles(&mut e);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(
+            &mut e,
+            true,
+            &[0x1000, 0x20, 0x1_0003, 0x2_0004, 50.0f32.to_bits()],
+        );
+        start_log(&mut e);
+        assert!(e.call(0x005d_e700, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![12]]);
+        assert_eq!(
+            calls(&e, CONTAINER_ITEM_EXTRA_CONSTRUCT),
+            vec![vec![0x9000]]
+        );
+        assert_eq!(
+            calls(&e, CONTAINER_ITEM_EXTRA_SET_FLOAT),
+            vec![vec![0x9000, 0.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, ADD_ITEM_00487A00),
+            vec![vec![0x1030, 0x1000, 3, 4, 0x20, 0x9000]]
+        );
+        // The parsed outputs: four words and the percentage, 100.0 by default.
+        assert_eq!(calls(&e, PARSE_PARAMETERS)[0].len(), 12);
+    }
+
+    #[test]
+    fn add_item_to_leveled_list_defaults_to_one_hundred_percent() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        leveled_list_doubles(&mut e);
+        e.set_global(DEFAULT_PERCENT, 100.0f32);
+        parse_gives(&mut e, true, &[0x1000, 0x20, 1, 2]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e700, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONTAINER_ITEM_EXTRA_SET_FLOAT),
+            vec![vec![0x9000, 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn add_item_to_leveled_list_needs_the_list_item_and_second_number() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        leveled_list_doubles(&mut e);
+        for outs in [[0u32, 0x20, 1, 2], [0x1000, 0, 1, 2], [0x1000, 0x20, 1, 0]] {
+            parse_gives(&mut e, true, &outs);
+            start_log(&mut e);
+            assert!(e.call(0x005d_e700, &args![a]).bool());
+            assert!(calls(&e, OPERATOR_NEW).is_empty());
+            assert!(calls(&e, ADD_ITEM_00487A00).is_empty());
+        }
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_e700, &args![a]).bool());
+    }
+
+    #[test]
+    fn add_item_to_leveled_list_passes_a_null_extra_when_the_allocation_fails() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        leveled_list_doubles(&mut e);
+        answer(&mut e, OPERATOR_NEW, 0);
+        parse_gives(&mut e, true, &[0x1000, 0x20, 1, 2]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e700, &args![a]).bool());
+        assert!(calls(&e, CONTAINER_ITEM_EXTRA_CONSTRUCT).is_empty());
+        assert_eq!(
+            calls(&e, ADD_ITEM_00487A00),
+            vec![vec![0x1030, 0x1000, 1, 2, 0x20, 0]]
+        );
+    }
+
+    /// A form with the given type byte at `+4`.
+    fn form_of_type(e: &mut Engine, form_type: u8) -> u32 {
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, form_type);
+        form
+    }
+
+    fn water_doubles(e: &mut Engine) {
+        e.register_double(FORM_TYPE, |e, a| (e.mem.u8(a[0] + 4) as u32).into_ret());
+        nothing(e, LOG_STUB);
+        nothing(e, WATER_REMAP_00580680);
+    }
+
+    #[test]
+    fn remap_water_type_calls_the_remap_for_two_water_types() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        water_doubles(&mut e);
+        let from = form_of_type(&mut e, 0x4e);
+        let to = form_of_type(&mut e, 0x4e);
+        e.mem.set_f64(a.result.addr(), 3.0);
+        parse_gives(&mut e, true, &[from, to]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e840, &args![a]).bool());
+        assert_eq!(calls(&e, WATER_REMAP_00580680), vec![vec![from, to]]);
+        assert!(calls(&e, LOG_STUB).is_empty());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+    }
+
+    #[test]
+    fn remap_water_type_reports_each_invalid_type() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        water_doubles(&mut e);
+        let water = form_of_type(&mut e, 0x4e);
+        let other = form_of_type(&mut e, 0x10);
+        parse_gives(&mut e, true, &[other, water]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e840, &args![a]).bool());
+        assert_eq!(calls(&e, LOG_STUB), vec![vec![MSG_WATER_TO_REMAP_INVALID]]);
+        assert!(calls(&e, WATER_REMAP_00580680).is_empty());
+        parse_gives(&mut e, true, &[water, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e840, &args![a]).bool());
+        assert_eq!(calls(&e, LOG_STUB), vec![vec![MSG_WATER_REMAP_TO_INVALID]]);
+        assert!(calls(&e, WATER_REMAP_00580680).is_empty());
+        parse_gives(&mut e, true, &[0, other]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_e840, &args![a]).bool());
+        assert_eq!(
+            calls(&e, LOG_STUB),
+            vec![
+                vec![MSG_WATER_TO_REMAP_INVALID],
+                vec![MSG_WATER_REMAP_TO_INVALID]
+            ]
+        );
+    }
+
+    #[test]
+    fn remap_water_type_fails_when_the_parameters_do_not_parse() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        water_doubles(&mut e);
+        e.mem.set_f64(a.result.addr(), 3.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_e840, &args![a]).bool());
+        assert_eq!(e.mem.f64(a.result.addr()), 0.0);
+        assert!(calls(&e, LOG_STUB).is_empty());
     }
 }
