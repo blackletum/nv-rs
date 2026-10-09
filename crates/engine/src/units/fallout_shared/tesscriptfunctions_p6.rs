@@ -3,9 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 40 queue entries of the range (`005d21e0` to
-//! `005d4280`) are translated. The next session continues at `005d43c0`
-//! (the accessor that returns `this + 0x44`).
+//! Progress: the first 80 queue entries of the range (`005d21e0` to
+//! `005d5390`) are translated. The next session continues at `005d5420`.
 //!
 //! The bodies follow the conventions of the main file: `cdecl`, the eight
 //! stack words as [`ScriptArgs`], `AL` as the result. The members of the
@@ -142,12 +141,6 @@ const GET_DEFAULT_FORM: u32 = 0x0048_39c0;
 /// `thiscall` on an actor base data block (`flag mask`): whether any bit of
 /// the mask is set in the flags word `this + 4`.
 const FLAGS_TEST: u32 = 0x0046_1580;
-/// `fastcall` (`this`): `this + 0x44` (`005d43c0`, the next function of this
-/// part): the extra data list of a reference, the list at `quest + 0x44` of
-/// a quest.
-const EXTRA_DATA_LIST: u32 = 0x005d_43c0;
-/// `fastcall` (`this`): `this + 0x4c` (`005d43e0`): the list at `quest + 0x4c`.
-const QUEST_LIST_4C: u32 = 0x005d_43e0;
 /// `ExtraDataList` method (`004216b0`, `thiscall`, no arguments).
 const EXTRA_DATA_LIST_CLEAR: u32 = 0x0042_16b0;
 /// `ExtraDataList` method (`00421600`, `thiscall`, `flag`).
@@ -478,6 +471,167 @@ const MSG_ALL_QUESTS_ENABLED: u32 = 0x0103_c408;
 /// `"All Quest Stages Completed."`
 const MSG_ALL_STAGES_COMPLETED: u32 = 0x0103_c41c;
 
+// ---- The functions from `005d43c0` on: callees, globals and strings ---------
+
+/// `ProcessLists::FlushNonPersistentActors` (Xbox PDB), `thiscall` on
+/// [`PROCESS_LISTS`] (`RET 4`: the parsed value).
+const PROCESS_LISTS_FLUSH_NON_PERSISTENT_ACTORS: u32 = 0x0097_6030;
+/// `cdecl`, no arguments (`007043d0`): `AL`, whether the fog of war is on.
+const FOG_OF_WAR_IS_ENABLED: u32 = 0x0070_43d0;
+/// `cdecl` (`flag`; `00704420`): switches the fog of war.
+const FOG_OF_WAR_SET: u32 = 0x0070_4420;
+/// `cdecl` (`1`; `0079ffb0`), a function of the map menu unit
+/// (`mapmenu.cpp` in the engine map).
+const MAP_MENU_FUNCTION_0079FFB0: u32 = 0x0079_ffb0;
+/// `cdecl` (`float`; `004dc2d0`, `renderer.cpp` in the engine map): when the
+/// value is positive and differs from the float at `0118945c`, stores it
+/// there and in `011ad83c` and sets the byte `011c6fb8`.
+const RENDERER_SET_VALUE: u32 = 0x004d_c2d0;
+/// `ImageSpaceEffectHDR::ClearAdaptedLight` (Xbox PDB), `cdecl`, no arguments.
+const IMAGE_SPACE_HDR_CLEAR_ADAPTED_LIGHT: u32 = 0x00ba_d4a0;
+/// Method of the `actor.cpp` range (`008c0ec0`, `thiscall`, `RET 0xC`:
+/// `actor, form, -1`); its `this` is the parsed value.
+const ACTOR_UNIT_METHOD_008C0EC0: u32 = 0x008c_0ec0;
+/// `thiscall` on a form (`00401170`): the byte at `this + 4`, the form type.
+const FORM_TYPE_BYTE: u32 = 0x0040_1170;
+/// The form type byte `005d4cc0` looks for.
+const FORM_TYPE_CHECKED: u32 = 0x16;
+/// `thiscall` on a form of that type (`004ff0e0`, `bgstalkingactivator.cpp`
+/// in the engine map, `RET 4`: the parsed value).
+const FORM_TYPE_CHECKED_METHOD: u32 = 0x004f_f0e0;
+/// `thiscall` on a name component of a form (`this = form + 0x18` or
+/// `form + 0x48`; the engine map names it `MapMarkerData::GetLocationName`):
+/// the text of the name.
+const GET_NAME_TEXT: u32 = 0x0040_8da0;
+/// `Script::IsEssentialConditionFunction` (Xbox PDB), `cdecl` (`thisObj, 0, 0,
+/// result`).
+const IS_ESSENTIAL_CONDITION: u32 = 0x005a_3980;
+/// Condition function `005a39d0` (`IsActor`), same four words.
+const IS_ACTOR_CONDITION: u32 = 0x005a_39d0;
+/// Condition function `005a3a00` (`IsPlayerMovingIntoNewSpace`).
+const IS_PLAYER_MOVING_INTO_NEW_SPACE_CONDITION: u32 = 0x005a_3a00;
+/// Condition function `005a3a30` (`GetTimeDead`).
+const GET_TIME_DEAD_CONDITION: u32 = 0x005a_3a30;
+/// Condition function `005a3af0`.
+const CONDITION_005A3AF0: u32 = 0x005a_3af0;
+/// `Script::IsPlayerActionActiveConditionFunction` (Xbox PDB).
+const IS_PLAYER_ACTION_ACTIVE_CONDITION: u32 = 0x005a_3b20;
+/// Condition function `005a3b90`.
+const CONDITION_005A3B90: u32 = 0x005a_3b90;
+/// Condition function `005a3bf0`.
+const CONDITION_005A3BF0: u32 = 0x005a_3bf0;
+/// `Script::HasPerkConditionFunction` (Xbox PDB), `cdecl` (`thisObj, perk,
+/// rank, result`).
+const HAS_PERK_CONDITION: u32 = 0x005a_4630;
+/// Method of the `actor.cpp` range (`008b8e20`, `thiscall`, `RET 8`: the
+/// parsed value and the second parsed value).
+const ACTOR_UNIT_METHOD_008B8E20: u32 = 0x008b_8e20;
+/// `cdecl` (`reference`; `00704690`, `interface.cpp` in the engine map).
+const INTERFACE_FUNCTION_00704690: u32 = 0x0070_4690;
+/// `PlayerCharacter::AddNote` (Xbox PDB), `thiscall` on the player
+/// (`RET 8`: `note, echo flag`).
+const PLAYER_ADD_NOTE: u32 = 0x0096_6a70;
+/// `thiscall` on the player (`00966b80`, `RET 4`: `note`).
+const PLAYER_REMOVE_NOTE: u32 = 0x0096_6b80;
+/// `PlayerCharacter::RewardKarma` (Xbox PDB), `thiscall` on the player
+/// (`RET 4`: the amount).
+const PLAYER_REWARD_KARMA: u32 = 0x0094_fd30;
+/// `cdecl`, no arguments (`005ba8d0`): the debug text table, created on first
+/// use (the unit's main file translates it).
+const DEBUG_TEXT_TABLE_GETTER: u32 = 0x005b_a8d0;
+/// `thiscall` on the debug text table (`00802a00`, `RET 8`: `page name
+/// buffer, reference`): the PC build's body does nothing but return 0.
+const DEBUG_TEXT_TABLE_SEND_PAGE: u32 = 0x0080_2a00;
+/// `memset` (`cdecl`: `destination, value, size`).
+const MEMSET: u32 = 0x00ec_61c0;
+
+/// Pointer to the object whose field `+0x128` `005d45c0` clears and for
+/// which `005d45e0` calls [`MAP_MENU_FUNCTION_0079FFB0`] (null until
+/// created).
+const MAP_MENU: u32 = 0x011d_a368;
+/// Byte: set by `005d4580` while it runs.
+const MAP_MENU_BUSY_FLAG: u32 = 0x0120_04fc;
+/// `int`: the maximum anisotropy level `005d4660` sets.
+const MAX_ANISOTROPY: u32 = 0x011a_9608;
+/// Byte: `005d47c0` clears the adapted light when it is set.
+const HDR_ACTIVE_FLAG: u32 = 0x011f_941e;
+/// Bit mask of the shadow categories `005d4870` toggles (bit `n` for the
+/// category `n`).
+const SHADOW_CATEGORY_MASK: u32 = 0x011a_d82c;
+/// Byte: `005d49c0` stores whether its parsed value is non-zero.
+const SWITCH_FLAG_005D49C0: u32 = 0x0126_82f8;
+/// Byte: `005d4a30` stores its argument.
+const SAVED_FLAG_005D4A30: u32 = 0x011d_ea2a;
+
+/// Virtual slot `0x10` of a reference (`1`): the call `DeleteReference`
+/// makes on its reference.
+const REFR_DELETE_SLOT: u32 = 0x10;
+/// Virtual slot `0x144` of a reference (`float, 1`).
+const REFR_SLOT_144: u32 = 0x144;
+/// Virtual slot `0x4a0` of an actor (`perk, flag`): `AL`, the rank of the
+/// perk.
+const ACTOR_GET_PERK_RANK_SLOT: u32 = 0x4a0;
+/// Virtual slot `0x498` of an actor (`perk, rank, flag`): sets the rank of
+/// the perk.
+const ACTOR_SET_PERK_RANK_SLOT: u32 = 0x498;
+/// Virtual slot `0x49c` of an actor (`perk, flag`).
+const ACTOR_PERK_SLOT_49C: u32 = 0x49c;
+/// Virtual slot `0x488` of the player (`value`).
+const PLAYER_SLOT_488: u32 = 0x488;
+/// The event code `005d4b90` sends when the setting is above 1.
+const EVENT_CODE_116C: u32 = 0x116c;
+/// Offset of the byte `005d4ee0` returns (a perk's highest rank).
+const PERK_MAX_RANK_OFFSET: u32 = 0x3a;
+
+/// `"Deleted all non persistent actors in high process."`
+const MSG_FLUSHED_ACTORS: u32 = 0x0103_c438;
+/// `"No reference to flush"`
+const MSG_NO_REFERENCE_TO_FLUSH: u32 = 0x0103_c46c;
+/// `"Deleting reference %s"`
+const MSG_DELETING_REFERENCE: u32 = 0x0103_c484;
+/// `"Fog of war - %s."`
+const MSG_FOG_OF_WAR: u32 = 0x0103_c49c;
+/// `"ENABLED"`
+const TEXT_ENABLED: u32 = 0x0103_c4b0;
+/// `"DISABLED"`
+const TEXT_DISABLED: u32 = 0x0103_c4b8;
+/// `"Maxaniso set to %d"`
+const MSG_MAX_ANISO: u32 = 0x0103_c4c4;
+/// `"Shadows %s: %s"`
+const MSG_SHADOWS: u32 = 0x0103_c4d8;
+/// `"Shadow object type must be [0,6]"`
+const MSG_SHADOW_TYPE_RANGE: u32 = 0x0103_c518;
+/// The names of the shadow categories 0 to 6 (`"Undetermined"`,
+/// `"Architecture"`, `"Furniture"`, `"Actors"`, `"Items"`, `"Misc"`,
+/// `"Other"`).
+const SHADOW_CATEGORY_NAMES: [u32; 7] = [
+    0x0103_c508,
+    0x0103_c4f8,
+    0x0102_94a4,
+    0x0101_ec1c,
+    0x0102_95c4,
+    0x0103_c4f0,
+    0x0103_c4e8,
+];
+/// `"Off"`
+const TEXT_OFF: u32 = 0x0103_99b8;
+/// `"On"`
+const TEXT_ON: u32 = 0x0103_99bc;
+/// `"IsEssential >> %0.2f"`
+const MSG_IS_ESSENTIAL: u32 = 0x0103_c53c;
+/// `"IsActor >> %0.2f"`
+const MSG_IS_ACTOR: u32 = 0x0103_c554;
+/// `"Player is moving to new area >> %0.2f"`
+const MSG_PLAYER_MOVING_TO_NEW_AREA: u32 = 0x0103_c568;
+/// `"time dead >> %0.2f"`
+const MSG_TIME_DEAD: u32 = 0x0103_c590;
+/// `"Added Perk %s to %s with rank %i"`
+const MSG_ADDED_PERK: u32 = 0x0103_c5a4;
+/// `"You must supply a debug page name if debug text is not showing"`
+const MSG_DEBUG_PAGE_NAME_REQUIRED: u32 = 0x0103_c5c8;
+/// `"Removed Note %s from Player "`
+const MSG_REMOVED_NOTE: u32 = 0x0103_c608;
+
 /// Offsets in the water shader property (`NiAVObject::GetProperty(3)` of the
 /// water object), PC build. Each is described by what `ModifyWaterShader`
 /// does with it.
@@ -788,10 +942,10 @@ pub fn fn_005d26b0(e: &mut Engine, a: ScriptArgs) -> bool {
         // The actor base data inside the base form, `+0x30` on PC.
         let current = fn_005d2780(e, Ptr::new(base_form + 0x30)) as u32;
         if flag == current {
-            let list = e.call(EXTRA_DATA_LIST, &args![actor]).u32();
+            let list = fn_005d43c0(e, actor);
             e.call(EXTRA_DATA_LIST_CLEAR, &args![list]);
         } else {
-            let list = e.call(EXTRA_DATA_LIST, &args![actor]).u32();
+            let list = fn_005d43c0(e, actor);
             e.call(EXTRA_DATA_LIST_SET, &args![list, flag]);
         }
         e.vcall(actor, MARK_CHANGED_SLOT, &args![0x8000_0000u32]);
@@ -1364,9 +1518,9 @@ pub fn fn_005d3930(e: &mut Engine, a: ScriptArgs) -> bool {
 pub fn script_reset_3d_state_function(e: &mut Engine, a: ScriptArgs) -> bool {
     if !a.this_obj.is_null() {
         e.call(REFERENCE_UNLOAD_3D, &args![a.this_obj]);
-        let list = e.call(EXTRA_DATA_LIST, &args![a.this_obj]).u32();
+        let list = fn_005d43c0(e, a.this_obj.addr());
         e.call(EXTRA_DATA_LIST_REMOVE_SAVED_ANIMATION, &args![list]);
-        let list = e.call(EXTRA_DATA_LIST, &args![a.this_obj]).u32();
+        let list = fn_005d43c0(e, a.this_obj.addr());
         e.call(EXTRA_DATA_LIST_REMOVE_SAVED_HAVOK_DATA, &args![list]);
     }
     true
@@ -1659,7 +1813,7 @@ pub fn script_complete_all_quest_stages(e: &mut Engine, a: ScriptArgs) -> bool {
         }
         let slot = e.call(NODE_ITEM_ADDRESS, &args![quest_node]).u32();
         let quest = e.mem.u32(slot);
-        let mut stage_node = e.call(EXTRA_DATA_LIST, &args![quest]).u32();
+        let mut stage_node = fn_005d43c0(e, quest);
         while stage_node != 0 {
             if e.call(NODE_IS_EMPTY, &args![stage_node]).bool() {
                 break;
@@ -1669,7 +1823,7 @@ pub fn script_complete_all_quest_stages(e: &mut Engine, a: ScriptArgs) -> bool {
             e.call(QUEST_STAGE_SET_DONE, &args![stage, quest, 1u32]);
             stage_node = e.call(NODE_NEXT, &args![stage_node]).u32();
         }
-        let mut target_node = e.call(QUEST_LIST_4C, &args![quest]).u32();
+        let mut target_node = fn_005d43e0(e, quest);
         while target_node != 0 {
             if e.call(NODE_IS_EMPTY, &args![target_node]).bool() {
                 break;
@@ -1686,6 +1840,611 @@ pub fn script_complete_all_quest_stages(e: &mut Engine, a: ScriptArgs) -> bool {
     if echo_enabled(e) {
         let value = e.mem.f64(a.result.addr());
         console_print(e, &args![MSG_ALL_STAGES_COMPLETED, value]);
+    }
+    true
+}
+
+// ---- The functions from 005d43c0 on --------------------------------------------
+
+/// The commands that call a condition function with no argument, echo the
+/// result double with `format` when the TLS flag is set and always return
+/// true (unlike [`condition_with_echo`], which returns the condition
+/// function's `AL`).
+fn condition_echo_then_true(e: &mut Engine, a: ScriptArgs, function: u32, format: u32) -> bool {
+    condition_with_echo(e, a, function, format);
+    true
+}
+
+// Translated from 005d43c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fastcall` (`this`): `this + 0x44`. On a reference this is the address of
+/// its embedded extra data list; on a quest, the node of its first list (the
+/// stages).
+pub fn fn_005d43c0(_e: &mut Engine, this: u32) -> u32 {
+    this.wrapping_add(0x44)
+}
+
+// Translated from 005d43e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fastcall` (`this`): `this + 0x4c`. On a quest this is the node of its
+/// second list (the targets).
+pub fn fn_005d43e0(_e: &mut Engine, this: u32) -> u32 {
+    this.wrapping_add(0x4c)
+}
+
+// Translated from 005d4400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::FlushPersistantActors` (Xbox PDB): parses an integer and calls
+/// `ProcessLists::FlushNonPersistentActors` on the process lists with it;
+/// with the TLS echo flag set prints that all non persistent actors in the
+/// high process were deleted. Fails when the parameters do not parse.
+pub fn script_flush_persistant_actors(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([argument]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    e.call(
+        PROCESS_LISTS_FLUSH_NON_PERSISTENT_ACTORS,
+        &args![PROCESS_LISTS, argument],
+    );
+    if echo_enabled(e) {
+        console_print(e, &args![MSG_FLUSHED_ACTORS]);
+    }
+    true
+}
+
+// Translated from 005d4480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::DeleteReference` (Xbox PDB): with the TLS echo flag set prints
+/// "No reference to flush" or "Deleting reference <name>". With a `thisObj`
+/// calls its virtual slot `0x10` with 1 and returns false; without one
+/// returns true.
+pub fn script_delete_reference(e: &mut Engine, a: ScriptArgs) -> bool {
+    let reference = a.this_obj;
+    if echo_enabled(e) {
+        if reference.is_null() {
+            console_print(e, &args![MSG_NO_REFERENCE_TO_FLUSH]);
+        } else {
+            let name = e.call(GET_REFERENCE_NAME, &args![reference]).u32();
+            console_print(e, &args![MSG_DELETING_REFERENCE, name]);
+        }
+    }
+    if reference.is_null() {
+        return true;
+    }
+    e.vcall(reference.addr(), REFR_DELETE_SLOT, &args![1u32]);
+    false
+}
+
+// Translated from 005d4510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleFogOfWar` (Xbox PDB): reads whether the fog of war is on
+/// (`007043d0`) and sets the opposite (`00704420`); with the TLS echo flag
+/// set prints "Fog of war - ENABLED." or "DISABLED." according to a second
+/// read. Always succeeds.
+pub fn script_toggle_fog_of_war(e: &mut Engine, _args: ScriptArgs) -> bool {
+    let enabled = e.call(FOG_OF_WAR_IS_ENABLED, &args![]).bool();
+    e.call(FOG_OF_WAR_SET, &args![!enabled]);
+    if echo_enabled(e) {
+        let enabled = e.call(FOG_OF_WAR_IS_ENABLED, &args![]).bool();
+        let text = if enabled { TEXT_ENABLED } else { TEXT_DISABLED };
+        console_print(e, &args![MSG_FOG_OF_WAR, text]);
+    }
+    true
+}
+
+// Translated from 005d4580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters: sets the byte `012004fc`, calls
+/// [`fn_005d45c0`], calls [`fn_005d45e0`] 25 times, clears the byte and
+/// succeeds.
+pub fn fn_005d4580(e: &mut Engine, _args: ScriptArgs) -> bool {
+    e.mem.set_u8(MAP_MENU_BUSY_FLAG, 1);
+    fn_005d45c0(e);
+    for _ in 0..0x19 {
+        fn_005d45e0(e);
+    }
+    e.mem.set_u8(MAP_MENU_BUSY_FLAG, 0);
+    true
+}
+
+// Translated from 005d45c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the object at `011da368` exists, clears its word at `+0x128`.
+pub fn fn_005d45c0(e: &mut Engine) {
+    let object = e.global::<u32>(MAP_MENU);
+    if object != 0 {
+        e.mem.set_u32(object + 0x128, 0);
+    }
+}
+
+// Translated from 005d45e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the object at `011da368` exists, calls `0079ffb0(1)`.
+pub fn fn_005d45e0(e: &mut Engine) {
+    if e.global::<u32>(MAP_MENU) != 0 {
+        e.call(MAP_MENU_FUNCTION_0079FFB0, &args![1u32]);
+    }
+}
+
+// Translated from 005d4600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a `float` (default 0.0) and hands it to `004dc2d0`. Fails when the
+/// parameters do not parse.
+pub fn fn_005d4600(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    e.call(RENDERER_SET_VALUE, &args![value]);
+    true
+}
+
+// Translated from 005d4660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map names it `Script::SetDepthOfField`, but the body sets the
+/// maximum anisotropy: parses a `float`, truncates it (`_ftol2`) and maps it
+/// to a level (below 2: 1, below 4: 2, below 8: 4, below 12: 8, below 16: 12,
+/// otherwise 16). With the TLS echo flag set prints "Maxaniso set to %d".
+/// The level goes to the integer at `011a9608`.
+pub fn fn_005d4660(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let requested = float_to_int(e, f32::from_bits(value)) as i32;
+    let level: u32 = if requested < 2 {
+        1
+    } else if requested < 4 {
+        2
+    } else if requested < 8 {
+        4
+    } else if requested < 12 {
+        8
+    } else if requested < 16 {
+        12
+    } else {
+        16
+    };
+    if echo_enabled(e) {
+        console_print(e, &args![MSG_MAX_ANISO, level]);
+    }
+    e.mem.set_u32(MAX_ANISOTROPY, level);
+    true
+}
+
+// Translated from 005d4740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a `float` (default 0.0) and does nothing with it: the code
+/// compares it with 0 and, when it is positive, converts it to an integer
+/// shifted left by 20, but only into locals that are never read. Fails when
+/// the parameters do not parse.
+pub fn fn_005d4740(e: &mut Engine, a: ScriptArgs) -> bool {
+    parse_params(e, a, [0]).is_some()
+}
+
+// Translated from 005d47c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters: when the byte `011f941e` is set calls
+/// `ImageSpaceEffectHDR::ClearAdaptedLight`. Always succeeds.
+pub fn fn_005d47c0(e: &mut Engine, _args: ScriptArgs) -> bool {
+    if e.mem.u8(HDR_ACTIVE_FLAG) != 0 {
+        e.call(IMAGE_SPACE_HDR_CLEAR_ADAPTED_LIGHT, &args![]);
+    }
+    true
+}
+
+// Translated from 005d47e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses one value; when it is not zero and `thisObj` is an actor calls
+/// `008c0ec0` on the parsed value with the actor, the actor's base form and
+/// -1. Succeeds whenever the parameters parse.
+pub fn fn_005d47e0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([target]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let actor = actor_of(e, a.this_obj.addr());
+    if target != 0 && actor != 0 {
+        let form = e.call(GET_BASE_FORM, &args![actor]).u32();
+        e.call(
+            ACTOR_UNIT_METHOD_008C0EC0,
+            &args![target, actor, form, 0xffff_ffffu32],
+        );
+    }
+    true
+}
+
+// Translated from 005d4870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleCastShadows` (Xbox PDB): parses a shadow object type; outside
+/// 0 to 6 prints (with the TLS echo flag) that it must be in [0,6]. Otherwise
+/// flips that bit of the mask at `011ad82c` and, with the echo flag set, prints
+/// "Shadows <category>: On/Off". Succeeds whenever the parameters parse.
+pub fn script_toggle_cast_shadows(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([category]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let category = category as i32;
+    if !(0..=6).contains(&category) {
+        if echo_enabled(e) {
+            console_print(e, &args![MSG_SHADOW_TYPE_RANGE]);
+        }
+        return true;
+    }
+    let bit = 1u32 << category;
+    let mask = e.mem.u32(SHADOW_CATEGORY_MASK);
+    let toggled = if mask & bit != 0 {
+        mask & !bit
+    } else {
+        mask | bit
+    };
+    e.mem.set_u32(SHADOW_CATEGORY_MASK, toggled);
+    if echo_enabled(e) {
+        let name = SHADOW_CATEGORY_NAMES[category as usize];
+        let state = if e.mem.u32(SHADOW_CATEGORY_MASK) & bit != 0 {
+            TEXT_ON
+        } else {
+            TEXT_OFF
+        };
+        console_print(e, &args![MSG_SHADOWS, name, state]);
+    }
+    true
+}
+
+// Translated from 005d49c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer; [`fn_005d4a30`] gets whether it is non-zero and so does
+/// the byte `012682f8`. Fails when the parameters do not parse.
+pub fn fn_005d49c0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let flag = (value != 0) as u8;
+    fn_005d4a30(e, flag);
+    e.mem.set_u8(SWITCH_FLAG_005D49C0, flag);
+    true
+}
+
+// Translated from 005d4a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` (`byte`): stores the byte at `011dea2a`.
+pub fn fn_005d4a30(e: &mut Engine, value: u8) {
+    e.mem.set_u8(SAVED_FLAG_005D4A30, value);
+}
+
+// Translated from 005d4a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns 1 in `AL`.
+pub fn fn_005d4a40(_e: &mut Engine) -> u8 {
+    1
+}
+
+// Translated from 005d4a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsEssentialFunction` (Xbox PDB): calls the `IsEssential` condition
+/// function on `thisObj`, echoes the result double with the TLS echo flag
+/// ("IsEssential >> %0.2f") and always succeeds.
+pub fn script_is_essential_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_echo_then_true(e, a, IS_ESSENTIAL_CONDITION, MSG_IS_ESSENTIAL)
+}
+
+// Translated from 005d4aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsActorFunction` (Xbox PDB): like [`script_is_essential_function`]
+/// with the `IsActor` condition function ("IsActor >> %0.2f").
+pub fn script_is_actor_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_echo_then_true(e, a, IS_ACTOR_CONDITION, MSG_IS_ACTOR)
+}
+
+// Translated from 005d4af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsPlayerMovingIntoNewSpaceFunction` (Xbox PDB): like
+/// [`script_is_essential_function`] with its condition function ("Player is
+/// moving to new area >> %0.2f").
+pub fn script_is_player_moving_into_new_space_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_echo_then_true(
+        e,
+        a,
+        IS_PLAYER_MOVING_INTO_NEW_SPACE_CONDITION,
+        MSG_PLAYER_MOVING_TO_NEW_AREA,
+    )
+}
+
+// Translated from 005d4b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetTimeDeadFunction` (Xbox PDB): like [`script_is_essential_function`]
+/// with its condition function ("time dead >> %0.2f").
+pub fn script_get_time_dead_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_echo_then_true(e, a, GET_TIME_DEAD_CONDITION, MSG_TIME_DEAD)
+}
+
+// Translated from 005d4b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a `float`; fails without a `thisObj`. When the integer game setting
+/// `011c3ea4` is at most 1 the value goes to [`fn_005d4c20`]; otherwise the
+/// call `0087a8b0(owner, 0x116c, thisObj, value as a double)` is made, `owner`
+/// being what `004537b0` returns (the same shape as `005d3b90`, with another
+/// event code).
+pub fn fn_005d4b90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    if a.this_obj.is_null() {
+        return false;
+    }
+    let value = f32::from_bits(value);
+    let setting = e.call(GET_SETTING_INTEGER, &args![EVENT_SETTING]).u32();
+    if e.mem.i32(setting) > 1 {
+        let owner = e.call(GET_QUEUE_OWNER, &args![]).u32();
+        e.call(
+            SEND_REFERENCE_EVENT,
+            &args![owner, EVENT_CODE_116C, a.this_obj, f64::from(value)],
+        );
+    } else {
+        fn_005d4c20(e, a.this_obj, value);
+    }
+    true
+}
+
+// Translated from 005d4c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` (`reference, float`): calls virtual slot `0x144` of the reference
+/// with the `float` and 1.
+pub fn fn_005d4c20(e: &mut Engine, reference: Ptr, value: f32) {
+    e.vcall(reference.addr(), REFR_SLOT_144, &args![value, 1u32]);
+}
+
+// Translated from 005d4c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters that returns the `AL` of condition function
+/// `005a3af0` called on `thisObj`.
+pub fn fn_005d4c40(e: &mut Engine, a: ScriptArgs) -> bool {
+    call_condition(e, CONDITION_005A3AF0, a, 0)
+}
+
+// Translated from 005d4c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsPlayerActionActiveFunction` (Xbox PDB): parses an integer and
+/// returns the `AL` of the `IsPlayerActionActive` condition function with it.
+pub fn script_is_player_action_active_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([action]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    call_condition(e, IS_PLAYER_ACTION_ACTIVE_CONDITION, a, action)
+}
+
+// Translated from 005d4cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses one value (whether it parsed is not checked); with a `thisObj`
+/// whose base form has the form type byte `0x16`, calls `004ff0e0` on that
+/// base form with the value. Always succeeds.
+pub fn fn_005d4cc0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let value = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        parse(e, a, &[slot.addr()]);
+        e.mem.u32(slot.addr())
+    });
+    if !a.this_obj.is_null() {
+        let form = e.call(GET_BASE_FORM, &args![a.this_obj]).u32();
+        if e.call(FORM_TYPE_BYTE, &args![form]).u8() as u32 == FORM_TYPE_CHECKED {
+            let form = e.call(GET_BASE_FORM, &args![a.this_obj]).u32();
+            e.call(FORM_TYPE_CHECKED_METHOD, &args![form, value]);
+        }
+    }
+    true
+}
+
+// Translated from 005d4d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer and returns the `AL` of condition function `005a3b90`
+/// called with it.
+pub fn fn_005d4d30(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([argument]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    call_condition(e, CONDITION_005A3B90, a, argument)
+}
+
+// Translated from 005d4d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::AddPerkFunction` (Xbox PDB): parses a perk and a flag. When the
+/// perk is not null and `thisObj` is an actor (virtual slot `0x100`): reads
+/// the actor's rank of the perk (slot `0x4a0`); when it is below the perk's
+/// highest rank ([`fn_005d4ee0`]) sets the rank plus one (slot `0x498`), with
+/// the TLS echo flag prints "Added Perk %s to %s with rank %i" and stores the
+/// new rank in the result double; otherwise stores the current rank.
+/// Succeeds whenever the parameters parse.
+pub fn script_add_perk_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([perk, flag]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    let flag = (flag != 0) as u32;
+    let actor = a.this_obj.addr();
+    if perk != 0 && e.vcall(actor, REFR_IS_ACTOR_SLOT, &args![]).bool() {
+        let rank = e
+            .vcall(actor, ACTOR_GET_PERK_RANK_SLOT, &args![perk, flag])
+            .u8() as u32;
+        let highest = fn_005d4ee0(e, perk) as u32;
+        if highest > rank {
+            e.vcall(
+                actor,
+                ACTOR_SET_PERK_RANK_SLOT,
+                &args![perk, rank + 1, flag],
+            );
+            if echo_enabled(e) {
+                let reference_name = e.call(GET_REFERENCE_NAME, &args![actor]).u32();
+                // The perk's name component, `perk + 0x18`.
+                let perk_name = e.call(GET_NAME_TEXT, &args![perk + 0x18]).u32();
+                console_print(
+                    e,
+                    &args![MSG_ADDED_PERK, perk_name, reference_name, rank + 1],
+                );
+            }
+            e.mem.set_f64(a.result.addr(), f64::from(rank + 1));
+        } else {
+            e.mem.set_f64(a.result.addr(), f64::from(rank));
+        }
+    }
+    true
+}
+
+// Translated from 005d4ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fastcall` (`this`): the byte at `this + 0x3a` (the perk's highest rank).
+pub fn fn_005d4ee0(e: &mut Engine, this: u32) -> u8 {
+    e.mem.u8(this + PERK_MAX_RANK_OFFSET)
+}
+
+// Translated from 005d4f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a perk and a flag; when the perk is not null and `thisObj` is an
+/// actor (virtual slot `0x100`) calls the actor's slot `0x49c` with them.
+/// Succeeds whenever the parameters parse.
+pub fn fn_005d4f00(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([perk, flag]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    let flag = (flag != 0) as u32;
+    let actor = a.this_obj.addr();
+    if perk != 0 && e.vcall(actor, REFR_IS_ACTOR_SLOT, &args![]).bool() {
+        e.vcall(actor, ACTOR_PERK_SLOT_49C, &args![perk, flag]);
+    }
+    true
+}
+
+// Translated from 005d4fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::HasPerkFunction` (Xbox PDB): parses a perk and a rank and returns
+/// the `AL` of the `HasPerk` condition function with them.
+pub fn script_has_perk_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([perk, rank]) = parse_params(e, a, [0, 0]) else {
+        return false;
+    };
+    e.call(HAS_PERK_CONDITION, &args![a.this_obj, perk, rank, a.result])
+        .bool()
+}
+
+// Translated from 005d5020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SendSherlockDebugPage` (Xbox PDB): clears a 0x800-byte buffer and
+/// parses a string into it. When debug text is not visible and the string is
+/// empty prints that a page name is needed. Otherwise the page name is the
+/// buffer, or, when debug text is visible and the string is empty, the slot
+/// [`fn_005d5120`] gives for the debug text table. With the player standing in
+/// for a missing `thisObj`, calls `00802a00` on the table with the page name
+/// and the reference. Always succeeds (even when the parameters do not
+/// parse).
+pub fn script_send_sherlock_debug_page(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.with_stack(0x800, |e, buffer| {
+        let buffer = buffer.addr();
+        e.mem.set_u32(buffer, 0);
+        e.call(MEMSET, &args![buffer + 4, 0u32, 0x7fcu32]);
+        if parse(e, a, &[buffer]) {
+            let visible = e.call(INTERFACE_IS_DEBUG_TEXT_VISIBLE, &args![]).bool();
+            let has_name = e.mem.u32(buffer) != 0;
+            if !visible && !has_name {
+                console_print(e, &args![MSG_DEBUG_PAGE_NAME_REQUIRED]);
+            } else {
+                let visible = e.call(INTERFACE_IS_DEBUG_TEXT_VISIBLE, &args![]).bool();
+                let page_name = if visible && !has_name {
+                    let table = e.call(DEBUG_TEXT_TABLE_GETTER, &args![]).u32();
+                    fn_005d5120(e, table)
+                } else {
+                    buffer
+                };
+                let reference = if a.this_obj.is_null() {
+                    e.global::<u32>(PLAYER)
+                } else {
+                    a.this_obj.addr()
+                };
+                let table = e.call(DEBUG_TEXT_TABLE_GETTER, &args![]).u32();
+                e.call(
+                    DEBUG_TEXT_TABLE_SEND_PAGE,
+                    &args![table, page_name, reference],
+                );
+            }
+        }
+    });
+    true
+}
+
+// Translated from 005d5120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fastcall` (`this`): `this + 0x20 + *(this + 0x18) * 0x44`, the address of
+/// the entry after the table's last (entries of 0x44 bytes from `this + 0x20`,
+/// the count at `this + 0x18`).
+pub fn fn_005d5120(e: &mut Engine, this: u32) -> u32 {
+    let count = e.mem.u32(this + 0x18);
+    this.wrapping_add(count.wrapping_mul(0x44))
+        .wrapping_add(0x20)
+}
+
+// Translated from 005d5140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer and calls virtual slot `0x488` of the player with it.
+/// Fails when the parameters do not parse.
+pub fn fn_005d5140(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let player = player(e);
+    e.vcall(player.addr(), PLAYER_SLOT_488, &args![value]);
+    true
+}
+
+// Translated from 005d51a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RewardKarmaFunction` (Xbox PDB): parses an integer and calls
+/// `PlayerCharacter::RewardKarma` on the player with it. Fails when the
+/// parameters do not parse.
+pub fn script_reward_karma_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([amount]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    let player = player(e);
+    e.call(PLAYER_REWARD_KARMA, &args![player, amount]);
+    true
+}
+
+// Translated from 005d5200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command without parameters: when `thisObj` is an actor (virtual slot
+/// `0x100`) calls `00704690(thisObj)`. Always succeeds.
+pub fn fn_005d5200(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !a.this_obj.is_null()
+        && e.vcall(a.this_obj.addr(), REFR_IS_ACTOR_SLOT, &args![])
+            .bool()
+    {
+        e.call(INTERFACE_FUNCTION_00704690, &args![a.this_obj]);
+    }
+    true
+}
+
+// Translated from 005d5230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::AddNoteFunction` (Xbox PDB): parses a note; when it is not null
+/// calls `PlayerCharacter::AddNote` on the player with the note and the TLS
+/// echo flag byte. Fails when the parameters do not parse.
+pub fn script_add_note_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([note]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    if note != 0 {
+        let tls = e.tls();
+        let echo = e.mem.u8(tls + TLS_ECHO) as u32;
+        let player = player(e);
+        e.call(PLAYER_ADD_NOTE, &args![player, note, echo]);
+    }
+    true
+}
+
+// Translated from 005d52a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RemoveNoteFunction` (Xbox PDB): parses a note; when it is not null
+/// calls `00966b80` on the player with it. With the TLS echo flag set prints
+/// "Removed Note %s from Player " with the text of the name component at
+/// `note + 0x48` (read even for a null note, as the code does). Fails when
+/// the parameters do not parse.
+pub fn script_remove_note_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([note]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    if note != 0 {
+        let player = player(e);
+        e.call(PLAYER_REMOVE_NOTE, &args![player, note]);
+    }
+    if echo_enabled(e) {
+        let name = e.call(GET_NAME_TEXT, &args![note.wrapping_add(0x48)]).u32();
+        console_print(e, &args![MSG_REMOVED_NOTE, name]);
+    }
+    true
+}
+
+// Translated from 005d5330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses an integer and returns the `AL` of condition function `005a3bf0`
+/// called with it.
+pub fn fn_005d5330(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([argument]) = parse_params(e, a, [0]) else {
+        return false;
+    };
+    call_condition(e, CONDITION_005A3BF0, a, argument)
+}
+
+// Translated from 005d5390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a value and a second value (default -1); when the first is not zero
+/// and `thisObj` is an actor (virtual slot `0x100`) calls `008b8e20` on
+/// `thisObj` with the two. Succeeds whenever the parameters parse.
+pub fn fn_005d5390(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second]) = parse_params(e, a, [0, 0xffff_ffff]) else {
+        return false;
+    };
+    if first != 0
+        && e.vcall(a.this_obj.addr(), REFR_IS_ACTOR_SLOT, &args![])
+            .bool()
+    {
+        e.call(
+            ACTOR_UNIT_METHOD_008B8E20,
+            &args![a.this_obj, first, second],
+        );
     }
     true
 }
@@ -1733,6 +2492,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005d4190, script_run_cell_test(ScriptArgs) -> bool),
         entry!(0x005d41f0, script_start_all_quests(ScriptArgs) -> bool),
         entry!(0x005d4280, script_complete_all_quest_stages(ScriptArgs) -> bool),
+        entry!(0x005d43c0, fn_005d43c0(u32) -> u32),
+        entry!(0x005d43e0, fn_005d43e0(u32) -> u32),
+        entry!(0x005d4400, script_flush_persistant_actors(ScriptArgs) -> bool),
+        entry!(0x005d4480, script_delete_reference(ScriptArgs) -> bool),
+        entry!(0x005d4510, script_toggle_fog_of_war(ScriptArgs) -> bool),
+        entry!(0x005d4580, fn_005d4580(ScriptArgs) -> bool),
+        entry!(0x005d45c0, fn_005d45c0()),
+        entry!(0x005d45e0, fn_005d45e0()),
+        entry!(0x005d4600, fn_005d4600(ScriptArgs) -> bool),
+        entry!(0x005d4660, fn_005d4660(ScriptArgs) -> bool),
+        entry!(0x005d4740, fn_005d4740(ScriptArgs) -> bool),
+        entry!(0x005d47c0, fn_005d47c0(ScriptArgs) -> bool),
+        entry!(0x005d47e0, fn_005d47e0(ScriptArgs) -> bool),
+        entry!(0x005d4870, script_toggle_cast_shadows(ScriptArgs) -> bool),
+        entry!(0x005d49c0, fn_005d49c0(ScriptArgs) -> bool),
+        entry!(0x005d4a30, fn_005d4a30(u8)),
+        entry!(0x005d4a40, fn_005d4a40() -> u8),
+        entry!(0x005d4a50, script_is_essential_function(ScriptArgs) -> bool),
+        entry!(0x005d4aa0, script_is_actor_function(ScriptArgs) -> bool),
+        entry!(0x005d4af0, script_is_player_moving_into_new_space_function(ScriptArgs) -> bool),
+        entry!(0x005d4b40, script_get_time_dead_function(ScriptArgs) -> bool),
+        entry!(0x005d4b90, fn_005d4b90(ScriptArgs) -> bool),
+        entry!(0x005d4c20, fn_005d4c20(Ptr, f32)),
+        entry!(0x005d4c40, fn_005d4c40(ScriptArgs) -> bool),
+        entry!(0x005d4c60, script_is_player_action_active_function(ScriptArgs) -> bool),
+        entry!(0x005d4cc0, fn_005d4cc0(ScriptArgs) -> bool),
+        entry!(0x005d4d30, fn_005d4d30(ScriptArgs) -> bool),
+        entry!(0x005d4d90, script_add_perk_function(ScriptArgs) -> bool),
+        entry!(0x005d4ee0, fn_005d4ee0(u32) -> u8),
+        entry!(0x005d4f00, fn_005d4f00(ScriptArgs) -> bool),
+        entry!(0x005d4fa0, script_has_perk_function(ScriptArgs) -> bool),
+        entry!(0x005d5020, script_send_sherlock_debug_page(ScriptArgs) -> bool),
+        entry!(0x005d5120, fn_005d5120(u32) -> u32),
+        entry!(0x005d5140, fn_005d5140(ScriptArgs) -> bool),
+        entry!(0x005d51a0, script_reward_karma_function(ScriptArgs) -> bool),
+        entry!(0x005d5200, fn_005d5200(ScriptArgs) -> bool),
+        entry!(0x005d5230, script_add_note_function(ScriptArgs) -> bool),
+        entry!(0x005d52a0, script_remove_note_function(ScriptArgs) -> bool),
+        entry!(0x005d5330, fn_005d5330(ScriptArgs) -> bool),
+        entry!(0x005d5390, fn_005d5390(ScriptArgs) -> bool),
     ]
 }
 
@@ -1778,7 +2577,6 @@ mod tests {
         e.register(FTOL2, |_, a| {
             (f64::from_bits(a[0] as u64 | (a[1] as u64) << 32) as i32 as u32).into_ret()
         });
-        e.register(EXTRA_DATA_LIST, |_, a| (a[0] + 0x44).into_ret());
         e.register(TES_GET_WATER_SYSTEM, |_, a| (a[0] + 0x64).into_ret());
         for v in [V_PATH, V_IS_ACTOR, V_SLOT, V_TARGET, V_PROXY_SLOT] {
             e.register(v, |_, _| Ret::default());
@@ -3488,29 +4286,21 @@ mod tests {
         e.register(QUEST_STAGE_SET_DONE, |_, _| Ret::default());
         e.register(QUEST_TARGET_SET_STATE, |_, _| Ret::default());
         // Two quests; the first has two stages and one target, the second
-        // none. The quest items are addresses whose `+0x44` / `+0x4c` give
-        // the list heads.
+        // none. The lists are embedded in the quest: nodes at `quest + 0x44`
+        // (stages) and `quest + 0x4c` (targets).
         let (quest_a, quest_b) = (0x0b00_0000u32, 0x0b01_0000u32);
         e.map(quest_a, 0x1000);
         e.map(quest_b, 0x1000);
-        e.register(EXTRA_DATA_LIST, |_, a| match a[0] {
-            0x0b00_0000 => 0x0c00_0100u32.into_ret(),
-            _ => Ret::default(),
-        });
-        e.register(QUEST_LIST_4C, |_, a| match a[0] {
-            0x0b00_0000 => 0x0d00_0100u32.into_ret(),
-            _ => Ret::default(),
-        });
         node_doubles(
             &mut e,
             vec![
                 (0x0a00_0100, quest_a, 0x0a00_0200),
                 (0x0a00_0200, quest_b, 0),
-                (0x0c00_0100, 0xe1, 0x0c00_0200),
+                (0x0b00_0044, 0xe1, 0x0c00_0200),
                 (0x0c00_0200, 0xe2, 0),
-                (0x0d00_0100, 0xf1, 0),
+                (0x0b00_004c, 0xf1, 0),
             ],
-            vec![],
+            vec![0x0b01_0044, 0x0b01_004c],
         );
         e.register(DATA_HANDLER_QUEST_LIST, |_, _| 0x0a00_0100u32.into_ret());
         let a = command(&mut e, 0);
@@ -3548,15 +4338,13 @@ mod tests {
         e.register(QUEST_TARGET_SET_STATE, |_, _| Ret::default());
         let quest = 0x0b00_0000u32;
         e.map(quest, 0x1000);
-        e.register(EXTRA_DATA_LIST, |_, _| 0x0c00_0100u32.into_ret());
-        e.register(QUEST_LIST_4C, |_, _| 0x0d00_0100u32.into_ret());
         node_doubles(
             &mut e,
             vec![
                 (0x0a00_0100, quest, 0),
-                (0x0c00_0100, 0xe1, 0x0c00_0200),
+                (0x0b00_0044, 0xe1, 0x0c00_0200),
                 (0x0c00_0200, 0xe2, 0),
-                (0x0d00_0100, 0xf1, 0x0d00_0200),
+                (0x0b00_004c, 0xf1, 0x0d00_0200),
                 (0x0d00_0200, 0xf2, 0),
             ],
             vec![0x0c00_0200, 0x0d00_0200],
@@ -3568,5 +4356,865 @@ mod tests {
         assert_eq!(calls(&e, QUEST_STAGE_SET_DONE).len(), 1);
         assert_eq!(calls(&e, QUEST_TARGET_SET_STATE).len(), 2);
         assert_eq!(calls(&e, SET_PROCESS_SCRIPTS), vec![vec![0], vec![0]]);
+    }
+
+    // ---- 005d43c0 .. 005d4a40 --------------------------------------------
+
+    /// The same pages `engine()` maps plus the one of `012682f8`.
+    fn engine_with_high_globals() -> Engine {
+        let mut e = engine();
+        e.map(0x0126_0000, 0x1_0000);
+        e
+    }
+
+    #[test]
+    fn the_list_accessors_add_their_offsets() {
+        let mut e = engine();
+        assert_eq!(e.call(0x005d_43c0, &args![0x1000u32]).u32(), 0x1044);
+        assert_eq!(e.call(0x005d_43e0, &args![0x1000u32]).u32(), 0x104c);
+    }
+
+    #[test]
+    fn flush_persistant_actors_flushes_the_process_lists() {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(PROCESS_LISTS_FLUSH_NON_PERSISTENT_ACTORS, |_, _| {
+            Ret::default()
+        });
+        parse_gives(&mut e, true, &[7]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4400, &args![a]).bool());
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_FLUSH_NON_PERSISTENT_ACTORS),
+            vec![vec![PROCESS_LISTS, 7]]
+        );
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005d_4400, &args![a]).bool());
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_FLUSHED_ACTORS]]);
+        assert_fails_when_unparsed(0x005d_4400, PROCESS_LISTS_FLUSH_NON_PERSISTENT_ACTORS);
+    }
+
+    #[test]
+    fn delete_reference_calls_the_virtual_delete_and_reports_false() {
+        let mut e = engine();
+        let reference = object_with(&mut e, &[(REFR_DELETE_SLOT, V_SLOT)]);
+        let a = command(&mut e, reference);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_4480, &args![a]).bool());
+        assert_eq!(calls(&e, V_SLOT), vec![vec![reference, 1]]);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        assert!(!e.call(0x005d_4480, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_DELETING_REFERENCE, 0xaaaa]]
+        );
+    }
+
+    #[test]
+    fn delete_reference_without_a_reference_succeeds_and_says_so() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4480, &args![a]).bool());
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005d_4480, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_NO_REFERENCE_TO_FLUSH]]
+        );
+    }
+
+    #[test]
+    fn toggle_fog_of_war_sets_the_opposite_and_reports_the_new_state() {
+        use std::{cell::Cell, rc::Rc};
+        for (before, text) in [(false, TEXT_ENABLED), (true, TEXT_DISABLED)] {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            let state = Rc::new(Cell::new(before));
+            let read = state.clone();
+            e.register_double(FOG_OF_WAR_IS_ENABLED, move |_, _| read.get().into_ret());
+            let write = state.clone();
+            e.register_double(FOG_OF_WAR_SET, move |_, a| {
+                write.set(a[0] != 0);
+                Ret::default()
+            });
+            start_log(&mut e);
+            assert!(e.call(0x005d_4510, &args![a]).bool());
+            assert_eq!(calls(&e, FOG_OF_WAR_SET), vec![vec![(!before) as u32]]);
+            assert!(calls(&e, CONSOLE_PRINT).is_empty());
+            set_echo(&mut e, true);
+            state.set(before);
+            start_log(&mut e);
+            assert!(e.call(0x005d_4510, &args![a]).bool());
+            assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_FOG_OF_WAR, text]]);
+        }
+    }
+
+    #[test]
+    fn fn_005d45c0_clears_the_word_of_the_object_when_there_is_one() {
+        let mut e = engine();
+        e.call(0x005d_45c0, &args![]);
+        let menu = object(&mut e);
+        e.mem.set_u32(menu + 0x128, 5);
+        e.set_global(MAP_MENU, menu);
+        e.call(0x005d_45c0, &args![]);
+        assert_eq!(e.mem.u32(menu + 0x128), 0);
+    }
+
+    #[test]
+    fn fn_005d45e0_calls_the_menu_function_when_there_is_an_object() {
+        let mut e = engine();
+        e.register(MAP_MENU_FUNCTION_0079FFB0, |_, _| Ret::default());
+        start_log(&mut e);
+        e.call(0x005d_45e0, &args![]);
+        assert!(calls(&e, MAP_MENU_FUNCTION_0079FFB0).is_empty());
+        let menu = object(&mut e);
+        e.set_global(MAP_MENU, menu);
+        e.call(0x005d_45e0, &args![]);
+        assert_eq!(calls(&e, MAP_MENU_FUNCTION_0079FFB0), vec![vec![1]]);
+    }
+
+    #[test]
+    fn fn_005d4580_runs_the_menu_function_25_times_with_the_byte_set() {
+        let mut e = engine();
+        let menu = object(&mut e);
+        e.mem.set_u32(menu + 0x128, 9);
+        e.set_global(MAP_MENU, menu);
+        e.register(MAP_MENU_FUNCTION_0079FFB0, |e, _| {
+            // The byte is set while the loop runs and the word is cleared.
+            assert_eq!(e.mem.u8(MAP_MENU_BUSY_FLAG), 1);
+            let menu: u32 = e.global(MAP_MENU);
+            assert_eq!(e.mem.u32(menu + 0x128), 0);
+            Ret::default()
+        });
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4580, &args![a]).bool());
+        assert_eq!(calls(&e, MAP_MENU_FUNCTION_0079FFB0).len(), 25);
+        assert_eq!(e.mem.u8(MAP_MENU_BUSY_FLAG), 0);
+        // Without the object nothing is called but the command succeeds.
+        e.set_global(MAP_MENU, 0u32);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4580, &args![a]).bool());
+        assert!(calls(&e, MAP_MENU_FUNCTION_0079FFB0).is_empty());
+    }
+
+    #[test]
+    fn fn_005d4600_hands_the_float_to_the_renderer() {
+        let mut e = engine();
+        e.register(RENDERER_SET_VALUE, |_, _| Ret::default());
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        parse_gives(&mut e, true, &[2.5f32.to_bits()]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4600, &args![a]).bool());
+        assert_parsed(&e, this_obj);
+        assert_eq!(calls(&e, RENDERER_SET_VALUE), vec![vec![2.5f32.to_bits()]]);
+        assert_fails_when_unparsed(0x005d_4600, RENDERER_SET_VALUE);
+    }
+
+    #[test]
+    fn fn_005d4660_maps_the_value_to_an_anisotropy_level() {
+        let cases = [
+            (-5.0f32, 1u32),
+            (0.5, 1),
+            (1.9, 1),
+            (2.0, 2),
+            (3.9, 2),
+            (4.0, 4),
+            (7.0, 4),
+            (8.0, 8),
+            (11.9, 8),
+            (12.0, 12),
+            (15.0, 12),
+            (16.0, 16),
+            (100.0, 16),
+        ];
+        for (value, level) in cases {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            parse_gives(&mut e, true, &[value.to_bits()]);
+            start_log(&mut e);
+            assert!(e.call(0x005d_4660, &args![a]).bool());
+            assert_eq!(e.mem.u32(MAX_ANISOTROPY), level, "value {value}");
+            assert!(calls(&e, CONSOLE_PRINT).is_empty());
+            set_echo(&mut e, true);
+            assert!(e.call(0x005d_4660, &args![a]).bool());
+            assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_MAX_ANISO, level]]);
+        }
+        // Not parsed: false and the setting stays.
+        let mut e = engine();
+        e.mem.set_u32(MAX_ANISOTROPY, 3);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_4660, &args![a]).bool());
+        assert_eq!(e.mem.u32(MAX_ANISOTROPY), 3);
+    }
+
+    #[test]
+    fn fn_005d4740_only_parses() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[3.0f32.to_bits()]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4740, &args![a]).bool());
+        assert_parsed(&e, 0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_4740, &args![a]).bool());
+    }
+
+    #[test]
+    fn fn_005d47c0_clears_the_adapted_light_only_when_the_byte_is_set() {
+        let mut e = engine();
+        e.register(IMAGE_SPACE_HDR_CLEAR_ADAPTED_LIGHT, |_, _| Ret::default());
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_47c0, &args![a]).bool());
+        assert!(calls(&e, IMAGE_SPACE_HDR_CLEAR_ADAPTED_LIGHT).is_empty());
+        e.mem.set_u8(HDR_ACTIVE_FLAG, 1);
+        assert!(e.call(0x005d_47c0, &args![a]).bool());
+        assert_eq!(calls(&e, IMAGE_SPACE_HDR_CLEAR_ADAPTED_LIGHT).len(), 1);
+    }
+
+    #[test]
+    fn fn_005d47e0_calls_the_method_on_the_parsed_value_for_an_actor() {
+        let mut e = engine();
+        let actor = object(&mut e);
+        let a = command(&mut e, actor);
+        e.register(GET_BASE_FORM, |_, _| 0xf0f0u32.into_ret());
+        e.register(ACTOR_UNIT_METHOD_008C0EC0, |_, _| Ret::default());
+        parse_gives(&mut e, true, &[0x7777]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_47e0, &args![a]).bool());
+        assert_parsed(&e, actor);
+        assert_eq!(
+            calls(&e, ACTOR_UNIT_METHOD_008C0EC0),
+            vec![vec![0x7777, actor, 0xf0f0, 0xffff_ffff]]
+        );
+        // A zero value, or no actor: nothing, still true.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_47e0, &args![a]).bool());
+        parse_gives(&mut e, true, &[0x7777]);
+        e.register(DYNAMIC_CAST, |_, _| Ret::default());
+        assert!(e.call(0x005d_47e0, &args![a]).bool());
+        assert!(calls(&e, ACTOR_UNIT_METHOD_008C0EC0).is_empty());
+        assert_fails_when_unparsed(0x005d_47e0, ACTOR_UNIT_METHOD_008C0EC0);
+    }
+
+    #[test]
+    fn toggle_cast_shadows_flips_the_bit_and_reports_the_state() {
+        let mut e = engine();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[3]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4870, &args![a]).bool());
+        assert_eq!(e.mem.u32(SHADOW_CATEGORY_MASK), 0b1000);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        // The second call clears the bit again and says "Off".
+        assert!(e.call(0x005d_4870, &args![a]).bool());
+        assert_eq!(e.mem.u32(SHADOW_CATEGORY_MASK), 0);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_SHADOWS, SHADOW_CATEGORY_NAMES[3], TEXT_OFF]]
+        );
+        // And once more sets it, with "On"; the other bits stay.
+        e.mem.set_u32(SHADOW_CATEGORY_MASK, 0b10_0001);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4870, &args![a]).bool());
+        assert_eq!(e.mem.u32(SHADOW_CATEGORY_MASK), 0b10_1001);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_SHADOWS, SHADOW_CATEGORY_NAMES[3], TEXT_ON]]
+        );
+        assert_fails_when_unparsed(0x005d_4870, CONSOLE_PRINT);
+    }
+
+    #[test]
+    fn toggle_cast_shadows_rejects_categories_outside_0_to_6() {
+        for category in [7u32, 0xffff_ffff, 100] {
+            let mut e = engine();
+            e.mem.set_u32(SHADOW_CATEGORY_MASK, 0b101);
+            let a = command(&mut e, 0);
+            parse_gives(&mut e, true, &[category]);
+            start_log(&mut e);
+            assert!(e.call(0x005d_4870, &args![a]).bool());
+            assert_eq!(e.mem.u32(SHADOW_CATEGORY_MASK), 0b101);
+            assert!(calls(&e, CONSOLE_PRINT).is_empty());
+            set_echo(&mut e, true);
+            assert!(e.call(0x005d_4870, &args![a]).bool());
+            assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![MSG_SHADOW_TYPE_RANGE]]);
+        }
+        // The edges 0 and 6 are accepted.
+        for (category, mask) in [(0u32, 1u32), (6, 0x40)] {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            parse_gives(&mut e, true, &[category]);
+            assert!(e.call(0x005d_4870, &args![a]).bool());
+            assert_eq!(e.mem.u32(SHADOW_CATEGORY_MASK), mask);
+        }
+    }
+
+    #[test]
+    fn fn_005d49c0_stores_whether_the_value_is_non_zero() {
+        let mut e = engine_with_high_globals();
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[5]);
+        assert!(e.call(0x005d_49c0, &args![a]).bool());
+        assert_eq!(e.mem.u8(SAVED_FLAG_005D4A30), 1);
+        assert_eq!(e.mem.u8(SWITCH_FLAG_005D49C0), 1);
+        parse_gives(&mut e, true, &[0]);
+        assert!(e.call(0x005d_49c0, &args![a]).bool());
+        assert_eq!(e.mem.u8(SAVED_FLAG_005D4A30), 0);
+        assert_eq!(e.mem.u8(SWITCH_FLAG_005D49C0), 0);
+        parse_gives(&mut e, true, &[1]);
+        assert!(e.call(0x005d_49c0, &args![a]).bool());
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005d_49c0, &args![a]).bool());
+        // Not parsed: the bytes stay.
+        assert_eq!(e.mem.u8(SWITCH_FLAG_005D49C0), 1);
+    }
+
+    #[test]
+    fn fn_005d4a30_stores_its_byte_and_fn_005d4a40_returns_one() {
+        let mut e = engine();
+        e.call(0x005d_4a30, &args![0x7fu8]);
+        assert_eq!(e.mem.u8(SAVED_FLAG_005D4A30), 0x7f);
+        assert_eq!(e.call(0x005d_4a40, &args![]).u8(), 1);
+    }
+
+    // ---- 005d4a50 .. 005d4cc0 --------------------------------------------
+
+    /// The test of a "condition function, echo the result double, always
+    /// true" command.
+    fn check_condition_echo_always_true(command_address: u32, condition: u32, format: u32) {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(condition, |e, a| {
+            e.mem.set_f64(a[3], 1.5);
+            false.into_ret()
+        });
+        start_log(&mut e);
+        // The condition function's `AL` is ignored.
+        assert!(e.call(command_address, &args![a]).bool());
+        assert_eq!(
+            calls(&e, condition),
+            vec![vec![this_obj, 0, 0, a.result.addr()]]
+        );
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(command_address, &args![a]).bool());
+        let [low, high] = f64_words(1.5);
+        assert_eq!(calls(&e, CONSOLE_PRINT), vec![vec![format, low, high]]);
+    }
+
+    #[test]
+    fn the_always_true_condition_commands_echo_their_result() {
+        check_condition_echo_always_true(0x005d_4a50, IS_ESSENTIAL_CONDITION, MSG_IS_ESSENTIAL);
+        check_condition_echo_always_true(0x005d_4aa0, IS_ACTOR_CONDITION, MSG_IS_ACTOR);
+        check_condition_echo_always_true(
+            0x005d_4af0,
+            IS_PLAYER_MOVING_INTO_NEW_SPACE_CONDITION,
+            MSG_PLAYER_MOVING_TO_NEW_AREA,
+        );
+        check_condition_echo_always_true(0x005d_4b40, GET_TIME_DEAD_CONDITION, MSG_TIME_DEAD);
+    }
+
+    #[test]
+    fn fn_005d4b90_picks_the_path_by_the_setting() {
+        let mut e = engine();
+        let reference = object_with(&mut e, &[(REFR_SLOT_144, V_SLOT)]);
+        let a = command(&mut e, reference);
+        e.register(SEND_REFERENCE_EVENT, |_, _| Ret::default());
+        e.register(GET_QUEUE_OWNER, |_, _| 0x8000u32.into_ret());
+        let setting = e.mem.alloc(4);
+        e.register_double(GET_SETTING_INTEGER, move |_, a| {
+            assert_eq!(a, [EVENT_SETTING]);
+            setting.into_ret()
+        });
+        parse_gives(&mut e, true, &[2.5f32.to_bits()]);
+
+        // Setting at most 1: the virtual call with the float and 1.
+        e.mem.set_u32(setting, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4b90, &args![a]).bool());
+        assert_parsed(&e, reference);
+        assert_eq!(
+            calls(&e, V_SLOT),
+            vec![vec![reference, 2.5f32.to_bits(), 1]]
+        );
+        assert!(calls(&e, SEND_REFERENCE_EVENT).is_empty());
+
+        // Above 1: the event, with the float as a double.
+        e.mem.set_u32(setting, 2);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4b90, &args![a]).bool());
+        let [low, high] = f64_words(2.5);
+        assert_eq!(
+            calls(&e, SEND_REFERENCE_EVENT),
+            vec![vec![0x8000, 0x116c, reference, low, high]]
+        );
+        assert!(calls(&e, V_SLOT).is_empty());
+
+        // No reference: false without anything else.
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(!e.call(0x005d_4b90, &args![a]).bool());
+        assert!(calls(&e, GET_SETTING_INTEGER).is_empty());
+        assert_fails_when_unparsed(0x005d_4b90, GET_SETTING_INTEGER);
+    }
+
+    #[test]
+    fn fn_005d4c20_calls_slot_144_with_the_float_and_one() {
+        let mut e = engine();
+        let reference = object_with(&mut e, &[(REFR_SLOT_144, V_SLOT)]);
+        start_log(&mut e);
+        e.call(0x005d_4c20, &args![reference, 1.25f32]);
+        assert_eq!(
+            calls(&e, V_SLOT),
+            vec![vec![reference, 1.25f32.to_bits(), 1]]
+        );
+    }
+
+    #[test]
+    fn fn_005d4c40_returns_the_condition_functions_al() {
+        check_condition_only(0x005d_4c40, CONDITION_005A3AF0);
+    }
+
+    /// The test of a "parse one integer, give it to a condition function,
+    /// return its `AL`" command.
+    fn check_condition_with_argument(command_address: u32, condition: u32) {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(condition, |_, _| false.into_ret());
+        parse_gives(&mut e, true, &[9]);
+        start_log(&mut e);
+        assert!(!e.call(command_address, &args![a]).bool());
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, condition),
+            vec![vec![this_obj, 9, 0, a.result.addr()]]
+        );
+        e.register(condition, |_, _| true.into_ret());
+        assert!(e.call(command_address, &args![a]).bool());
+        assert_fails_when_unparsed(command_address, condition);
+    }
+
+    #[test]
+    fn the_commands_with_one_integer_return_the_condition_functions_al() {
+        check_condition_with_argument(0x005d_4c60, IS_PLAYER_ACTION_ACTIVE_CONDITION);
+        check_condition_with_argument(0x005d_4d30, CONDITION_005A3B90);
+        check_condition_with_argument(0x005d_5330, CONDITION_005A3BF0);
+    }
+
+    #[test]
+    fn fn_005d4cc0_calls_the_method_for_a_base_form_of_the_checked_type() {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(GET_BASE_FORM, |_, _| 0xf0f0u32.into_ret());
+        e.register(FORM_TYPE_CHECKED_METHOD, |_, _| Ret::default());
+        e.register_double(FORM_TYPE_BYTE, |_, a| {
+            assert_eq!(a, [0xf0f0]);
+            // The code reads a byte: the other bytes of the word are junk.
+            0xaaaa_aa16u32.into_ret()
+        });
+        parse_gives(&mut e, true, &[0x55]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4cc0, &args![a]).bool());
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, FORM_TYPE_CHECKED_METHOD),
+            vec![vec![0xf0f0, 0x55]]
+        );
+        // Another type: nothing.
+        e.register(FORM_TYPE_BYTE, |_, _| 0x15u32.into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005d_4cc0, &args![a]).bool());
+        assert!(calls(&e, FORM_TYPE_CHECKED_METHOD).is_empty());
+        // The parse result is not checked: the command still succeeds, and the
+        // value is whatever the parse left.
+        e.register(FORM_TYPE_BYTE, |_, _| 0x16u32.into_ret());
+        parse_gives(&mut e, false, &[0x66]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4cc0, &args![a]).bool());
+        assert_eq!(
+            calls(&e, FORM_TYPE_CHECKED_METHOD),
+            vec![vec![0xf0f0, 0x66]]
+        );
+        // No reference: nothing.
+        let a = command(&mut e, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4cc0, &args![a]).bool());
+        assert!(calls(&e, GET_BASE_FORM).is_empty());
+    }
+
+    // ---- 005d4d90 .. 005d5390 --------------------------------------------
+
+    const V_RANK: u32 = 0x0900_0006;
+    const V_SET_RANK: u32 = 0x0900_0007;
+    const V_SLOT_49C: u32 = 0x0900_0008;
+
+    /// An actor whose slots for the perk commands are the fake functions.
+    fn perk_actor(e: &mut Engine, is_actor: bool, rank: u8) -> u32 {
+        e.register_double(V_IS_ACTOR, move |_, _| is_actor.into_ret());
+        e.register_double(V_RANK, move |_, _| (rank as u32).into_ret());
+        e.register(V_SET_RANK, |_, _| Ret::default());
+        e.register(V_SLOT_49C, |_, _| Ret::default());
+        object_with(
+            e,
+            &[
+                (REFR_IS_ACTOR_SLOT, V_IS_ACTOR),
+                (ACTOR_GET_PERK_RANK_SLOT, V_RANK),
+                (ACTOR_SET_PERK_RANK_SLOT, V_SET_RANK),
+                (ACTOR_PERK_SLOT_49C, V_SLOT_49C),
+            ],
+        )
+    }
+
+    /// A perk object with the given highest rank at `+0x3a`.
+    fn perk_with_max_rank(e: &mut Engine, max_rank: u8) -> u32 {
+        let perk = e.mem.alloc(0x100);
+        e.mem.set_u8(perk + 0x3a, max_rank);
+        perk
+    }
+
+    #[test]
+    fn add_perk_raises_the_rank_below_the_maximum() {
+        let mut e = engine();
+        let actor = perk_actor(&mut e, true, 1);
+        let perk = perk_with_max_rank(&mut e, 3);
+        let a = command(&mut e, actor);
+        e.register(GET_NAME_TEXT, |_, _| 0xbbbbu32.into_ret());
+        parse_gives(&mut e, true, &[perk, 4]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert_parsed(&e, actor);
+        assert_eq!(calls(&e, V_RANK), vec![vec![actor, perk, 1]]);
+        assert_eq!(calls(&e, V_SET_RANK), vec![vec![actor, perk, 2, 1]]);
+        assert_eq!(e.mem.f64(a.result.addr()), 2.0);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        // With the echo flag: the perk name component is `perk + 0x18`.
+        set_echo(&mut e, true);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert_eq!(calls(&e, GET_NAME_TEXT), vec![vec![perk + 0x18]]);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_ADDED_PERK, 0xbbbb, 0xaaaa, 2]]
+        );
+    }
+
+    #[test]
+    fn add_perk_keeps_a_rank_that_reached_the_maximum() {
+        let mut e = engine();
+        let actor = perk_actor(&mut e, true, 3);
+        let perk = perk_with_max_rank(&mut e, 3);
+        let a = command(&mut e, actor);
+        e.mem.set_f64(a.result.addr(), -1.0);
+        parse_gives(&mut e, true, &[perk, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert!(calls(&e, V_SET_RANK).is_empty());
+        assert_eq!(e.mem.f64(a.result.addr()), 3.0);
+        assert_eq!(calls(&e, V_RANK), vec![vec![actor, perk, 0]]);
+    }
+
+    #[test]
+    fn add_perk_does_nothing_without_a_perk_or_an_actor() {
+        let mut e = engine();
+        let actor = perk_actor(&mut e, false, 1);
+        let perk = perk_with_max_rank(&mut e, 3);
+        let a = command(&mut e, actor);
+        e.mem.set_f64(a.result.addr(), -1.0);
+        parse_gives(&mut e, true, &[perk, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert!(calls(&e, V_RANK).is_empty());
+        assert_eq!(e.mem.f64(a.result.addr()), -1.0);
+        let actor = perk_actor(&mut e, true, 1);
+        let a = command(&mut e, actor);
+        parse_gives(&mut e, true, &[0, 0]);
+        assert!(e.call(0x005d_4d90, &args![a]).bool());
+        assert!(calls(&e, V_RANK).is_empty());
+        assert_fails_when_unparsed(0x005d_4d90, V_RANK);
+    }
+
+    #[test]
+    fn fn_005d4ee0_reads_the_byte_at_0x3a() {
+        let mut e = engine();
+        let perk = perk_with_max_rank(&mut e, 7);
+        assert_eq!(e.call(0x005d_4ee0, &args![perk]).u8(), 7);
+    }
+
+    #[test]
+    fn fn_005d4f00_calls_slot_49c_for_a_perk_on_an_actor() {
+        let mut e = engine();
+        let actor = perk_actor(&mut e, true, 0);
+        let a = command(&mut e, actor);
+        parse_gives(&mut e, true, &[0x4444, 9]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert_parsed(&e, actor);
+        // The flag is reduced to 0 or 1.
+        assert_eq!(calls(&e, V_SLOT_49C), vec![vec![actor, 0x4444, 1]]);
+        parse_gives(&mut e, true, &[0, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert!(calls(&e, V_SLOT_49C).is_empty());
+        let actor = perk_actor(&mut e, false, 0);
+        let a = command(&mut e, actor);
+        parse_gives(&mut e, true, &[0x4444, 0]);
+        assert!(e.call(0x005d_4f00, &args![a]).bool());
+        assert!(calls(&e, V_SLOT_49C).is_empty());
+        assert_fails_when_unparsed(0x005d_4f00, V_SLOT_49C);
+    }
+
+    #[test]
+    fn has_perk_returns_the_condition_functions_al() {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(HAS_PERK_CONDITION, |_, _| true.into_ret());
+        parse_gives(&mut e, true, &[0x4444, 2]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_4fa0, &args![a]).bool());
+        assert_parsed(&e, this_obj);
+        assert_eq!(
+            calls(&e, HAS_PERK_CONDITION),
+            vec![vec![this_obj, 0x4444, 2, a.result.addr()]]
+        );
+        e.register(HAS_PERK_CONDITION, |_, _| false.into_ret());
+        assert!(!e.call(0x005d_4fa0, &args![a]).bool());
+        assert_fails_when_unparsed(0x005d_4fa0, HAS_PERK_CONDITION);
+    }
+
+    /// The doubles of the debug page command: memset, the visibility, the
+    /// table (count 3 at `+0x18`) and the page call. Returns the table.
+    fn debug_page_scene(e: &mut Engine, visible: bool) -> u32 {
+        let table = e.mem.alloc(0x400);
+        e.mem.set_u32(table + 0x18, 3);
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register_double(INTERFACE_IS_DEBUG_TEXT_VISIBLE, move |_, _| {
+            visible.into_ret()
+        });
+        e.register_double(DEBUG_TEXT_TABLE_GETTER, move |_, _| table.into_ret());
+        e.register(DEBUG_TEXT_TABLE_SEND_PAGE, |_, _| Ret::default());
+        table
+    }
+
+    #[test]
+    fn sherlock_page_uses_the_parsed_name_as_the_page() {
+        let mut e = engine();
+        let table = debug_page_scene(&mut e, false);
+        let reference = object(&mut e);
+        let a = command(&mut e, reference);
+        // The parse writes a non-empty name into the buffer.
+        parse_gives(&mut e, true, &[0x6e61_6d65]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5020, &args![a]).bool());
+        assert_parsed(&e, reference);
+        let buffer = calls(&e, PARSE_PARAMETERS)[0][7];
+        // The buffer is cleared first: memset after the first word.
+        assert_eq!(calls(&e, MEMSET), vec![vec![buffer + 4, 0, 0x7fc]]);
+        assert_eq!(
+            calls(&e, DEBUG_TEXT_TABLE_SEND_PAGE),
+            vec![vec![table, buffer, reference]]
+        );
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn sherlock_page_asks_for_a_name_when_debug_text_is_hidden() {
+        let mut e = engine();
+        debug_page_scene(&mut e, false);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5020, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_DEBUG_PAGE_NAME_REQUIRED]]
+        );
+        assert!(calls(&e, DEBUG_TEXT_TABLE_SEND_PAGE).is_empty());
+    }
+
+    #[test]
+    fn sherlock_page_uses_the_table_slot_when_visible_without_a_name() {
+        let mut e = engine();
+        let table = debug_page_scene(&mut e, true);
+        let player = set_player(&mut e);
+        // No `thisObj`: the player stands in.
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5020, &args![a]).bool());
+        assert_eq!(
+            calls(&e, DEBUG_TEXT_TABLE_SEND_PAGE),
+            vec![vec![table, table + 0x20 + 3 * 0x44, player]]
+        );
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn sherlock_page_succeeds_even_when_the_parameters_do_not_parse() {
+        let mut e = engine();
+        debug_page_scene(&mut e, true);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5020, &args![a]).bool());
+        assert!(calls(&e, DEBUG_TEXT_TABLE_SEND_PAGE).is_empty());
+        assert!(calls(&e, INTERFACE_IS_DEBUG_TEXT_VISIBLE).is_empty());
+    }
+
+    #[test]
+    fn fn_005d5120_gives_the_entry_after_the_last() {
+        let mut e = engine();
+        let table = e.mem.alloc(0x400);
+        e.mem.set_u32(table + 0x18, 0);
+        assert_eq!(e.call(0x005d_5120, &args![table]).u32(), table + 0x20);
+        e.mem.set_u32(table + 0x18, 5);
+        assert_eq!(
+            e.call(0x005d_5120, &args![table]).u32(),
+            table + 0x20 + 5 * 0x44
+        );
+    }
+
+    #[test]
+    fn fn_005d5140_calls_slot_488_of_the_player() {
+        let mut e = engine();
+        let player = object_with(&mut e, &[(PLAYER_SLOT_488, V_SLOT)]);
+        e.set_global(PLAYER, player);
+        let a = command(&mut e, 0);
+        parse_gives(&mut e, true, &[12]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5140, &args![a]).bool());
+        assert_eq!(calls(&e, V_SLOT), vec![vec![player, 12]]);
+        assert_fails_when_unparsed(0x005d_5140, V_SLOT);
+    }
+
+    #[test]
+    fn reward_karma_rewards_the_player() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        e.register(PLAYER_REWARD_KARMA, |_, _| Ret::default());
+        parse_gives(&mut e, true, &[0xffff_fff6]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_51a0, &args![a]).bool());
+        assert_eq!(
+            calls(&e, PLAYER_REWARD_KARMA),
+            vec![vec![player, 0xffff_fff6]]
+        );
+        assert_fails_when_unparsed(0x005d_51a0, PLAYER_REWARD_KARMA);
+    }
+
+    #[test]
+    fn fn_005d5200_calls_the_function_for_an_actor_only() {
+        let mut e = engine();
+        e.register(INTERFACE_FUNCTION_00704690, |_, _| Ret::default());
+        e.register(V_IS_ACTOR, |_, _| true.into_ret());
+        let actor = object_with(&mut e, &[(REFR_IS_ACTOR_SLOT, V_IS_ACTOR)]);
+        let a = command(&mut e, actor);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5200, &args![a]).bool());
+        assert_eq!(calls(&e, INTERFACE_FUNCTION_00704690), vec![vec![actor]]);
+        e.register(V_IS_ACTOR, |_, _| false.into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005d_5200, &args![a]).bool());
+        assert!(calls(&e, INTERFACE_FUNCTION_00704690).is_empty());
+        let a = command(&mut e, 0);
+        assert!(e.call(0x005d_5200, &args![a]).bool());
+        assert!(calls(&e, INTERFACE_FUNCTION_00704690).is_empty());
+    }
+
+    #[test]
+    fn add_note_passes_the_echo_byte() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        e.register(PLAYER_ADD_NOTE, |_, _| Ret::default());
+        parse_gives(&mut e, true, &[0x3300]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5230, &args![a]).bool());
+        assert_eq!(calls(&e, PLAYER_ADD_NOTE), vec![vec![player, 0x3300, 0]]);
+        set_echo(&mut e, true);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5230, &args![a]).bool());
+        assert_eq!(calls(&e, PLAYER_ADD_NOTE), vec![vec![player, 0x3300, 1]]);
+        // A null note: nothing.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5230, &args![a]).bool());
+        assert!(calls(&e, PLAYER_ADD_NOTE).is_empty());
+        assert_fails_when_unparsed(0x005d_5230, PLAYER_ADD_NOTE);
+    }
+
+    #[test]
+    fn remove_note_removes_it_and_reports_the_name() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        let a = command(&mut e, 0);
+        e.register(PLAYER_REMOVE_NOTE, |_, _| Ret::default());
+        e.register(GET_NAME_TEXT, |_, _| 0xccccu32.into_ret());
+        parse_gives(&mut e, true, &[0x3300]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_52a0, &args![a]).bool());
+        assert_parsed(&e, 0);
+        assert_eq!(calls(&e, PLAYER_REMOVE_NOTE), vec![vec![player, 0x3300]]);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005d_52a0, &args![a]).bool());
+        assert_eq!(calls(&e, GET_NAME_TEXT), vec![vec![0x3300 + 0x48]]);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_REMOVED_NOTE, 0xcccc]]
+        );
+        // A null note is not removed, but the message is still printed.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_52a0, &args![a]).bool());
+        assert!(calls(&e, PLAYER_REMOVE_NOTE).is_empty());
+        assert_eq!(calls(&e, GET_NAME_TEXT), vec![vec![0x48]]);
+        assert_fails_when_unparsed(0x005d_52a0, PLAYER_REMOVE_NOTE);
+    }
+
+    #[test]
+    fn fn_005d5390_calls_the_method_for_an_actor() {
+        let mut e = engine();
+        e.register(V_IS_ACTOR, |_, _| true.into_ret());
+        let actor = object_with(&mut e, &[(REFR_IS_ACTOR_SLOT, V_IS_ACTOR)]);
+        let a = command(&mut e, actor);
+        e.register(ACTOR_UNIT_METHOD_008B8E20, |_, _| Ret::default());
+        // The second value defaults to -1: the parse double leaves it alone.
+        e.register_double(PARSE_PARAMETERS, |e, a| {
+            assert_eq!(e.mem.u32(a[7]), 0);
+            assert_eq!(e.mem.u32(a[8]), 0xffff_ffff);
+            e.mem.set_u32(a[7], 0x5151);
+            true.into_ret()
+        });
+        start_log(&mut e);
+        assert!(e.call(0x005d_5390, &args![a]).bool());
+        assert_eq!(
+            calls(&e, ACTOR_UNIT_METHOD_008B8E20),
+            vec![vec![actor, 0x5151, 0xffff_ffff]]
+        );
+        // A zero first value, or not an actor: nothing.
+        parse_gives(&mut e, true, &[0, 5]);
+        start_log(&mut e);
+        assert!(e.call(0x005d_5390, &args![a]).bool());
+        parse_gives(&mut e, true, &[0x5151, 5]);
+        e.register(V_IS_ACTOR, |_, _| false.into_ret());
+        assert!(e.call(0x005d_5390, &args![a]).bool());
+        assert!(calls(&e, ACTOR_UNIT_METHOD_008B8E20).is_empty());
+        assert_fails_when_unparsed(0x005d_5390, ACTOR_UNIT_METHOD_008B8E20);
     }
 }
