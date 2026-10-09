@@ -4925,19 +4925,19 @@ pub(crate) const FN_004A5FF0: u32 = 0x004a_5ff0;
 /// entries (`NiTPointerListBase::RemoveAll`, Xbox PDB).
 pub(crate) const FN_004ED900: u32 = 0x004e_d900;
 /// `float` `15.0`.
-pub(crate) const FLOAT_0101E580: u32 = 0x0101_e580;
+pub(crate) const F32_0101E580: u32 = 0x0101_e580;
 /// `float` `500.0`.
-pub(crate) const FLOAT_01013D84: u32 = 0x0101_3d84;
+pub(crate) const F32_01013D84: u32 = 0x0101_3d84;
 /// `float` `0.1`.
-pub(crate) const FLOAT_0101E2BC: u32 = 0x0101_e2bc;
+pub(crate) const F32_0101E2BC: u32 = 0x0101_e2bc;
 /// `float` `0.05`.
-pub(crate) const FLOAT_010181BC: u32 = 0x0101_81bc;
+pub(crate) const F32_010181BC: u32 = 0x0101_81bc;
 /// `float` `0.0005`.
-pub(crate) const FLOAT_010780A4: u32 = 0x0107_80a4;
+pub(crate) const F32_010780A4: u32 = 0x0107_80a4;
 /// `float` `0.5`.
-pub(crate) const FLOAT_01016248: u32 = 0x0101_6248;
+pub(crate) const F32_01016248: u32 = 0x0101_6248;
 /// `float` `50.0`.
-pub(crate) const FLOAT_0101B268: u32 = 0x0101_b268;
+pub(crate) const F32_0101B268: u32 = 0x0101_b268;
 /// `float` `pi / 2`.
 pub(crate) const FLOAT_HALF_PI: u32 = 0x0103_9f00;
 /// `ImageSpaceModifierInstance::Stop` (Xbox PDB), `cdecl` (`instance`).
@@ -5092,7 +5092,7 @@ fn set_interface_object_word(e: &mut Engine, value: u32) {
 /// `00800ac0` on the interface object [`INTERFACE_GET_1DC_OBJECT`], with 0
 /// as third argument, and then stores 0 in the first word of that object.
 pub fn fn_005bb570(e: &mut Engine, a: ScriptArgs) -> bool {
-    let default = e.global::<u32>(FLOAT_0101E580);
+    let default = e.global::<u32>(F32_0101E580);
     let Some([value, _, _, _]) = a.parse_into(e, [default, 0, 0, 0]) else {
         return false;
     };
@@ -5115,7 +5115,7 @@ pub fn fn_005bb570(e: &mut Engine, a: ScriptArgs) -> bool {
 /// on the interface object [`INTERFACE_GET_1DC_OBJECT`] and stores 1 in the
 /// first word of that object.
 pub fn fn_005bb610(e: &mut Engine, a: ScriptArgs) -> bool {
-    let default = e.global::<u32>(FLOAT_0101E580);
+    let default = e.global::<u32>(F32_0101E580);
     if a.parse_into(e, [default, 0, 0, 0]).is_none() {
         return false;
     }
@@ -5139,7 +5139,7 @@ pub fn fn_005bb610(e: &mut Engine, a: ScriptArgs) -> bool {
 /// interface object [`INTERFACE_GET_1DC_OBJECT`] and stores 0 in the first word
 /// of that object.
 pub fn fn_005bb6c0(e: &mut Engine, a: ScriptArgs) -> bool {
-    let default = e.global::<u32>(FLOAT_0101E580);
+    let default = e.global::<u32>(F32_0101E580);
     if a.parse_into(e, [default, 0, 0, 0]).is_none() {
         return false;
     }
@@ -5163,9 +5163,9 @@ pub fn fn_005bb6c0(e: &mut Engine, a: ScriptArgs) -> bool {
 /// hands them to `007f7880` on the object [`INTERFACE_GET_178_OBJECT`] returns.
 pub fn fn_005bb770(e: &mut Engine, a: ScriptArgs) -> bool {
     let defaults = [
-        e.global::<u32>(FLOAT_01013D84),
-        e.global::<u32>(FLOAT_0101E2BC),
-        e.global::<u32>(FLOAT_010181BC),
+        e.global::<u32>(F32_01013D84),
+        e.global::<u32>(F32_0101E2BC),
+        e.global::<u32>(F32_010181BC),
         0,
     ];
     let Some([first, second, third, _]) = a.parse_into(e, defaults) else {
@@ -5184,7 +5184,7 @@ pub fn script_move_pipboy_knob_function(e: &mut Engine, a: ScriptArgs) -> bool {
     let Some([knob, amount]) = a.parse_into(e, [0, 0]) else {
         return false;
     };
-    let step = e.global::<u32>(FLOAT_010780A4);
+    let step = e.global::<u32>(F32_010780A4);
     let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
     e.call(FN_007F8610, &args![pipboy, knob, amount, step, 1u32]);
     true
@@ -5292,7 +5292,7 @@ pub fn fn_005bb9e0(e: &mut Engine, a: ScriptArgs) -> bool {
             fn_005bbc10(e, Ptr::new(list));
             return true;
         }
-        let default = e.global::<f32>(FLOAT_0101B268);
+        let default = e.global::<f32>(F32_0101B268);
         if f64::from(x) <= zero {
             e.mem.set_f32(point, default);
         }
@@ -5375,7 +5375,7 @@ pub fn script_set_global_radial_blur(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     let instance = e.with_stack(8, |e, point| {
-        let half = e.global::<f32>(FLOAT_01016248);
+        let half = e.global::<f32>(F32_01016248);
         e.call(NI_POINT2_CONSTRUCT, &args![point, half, half]);
         e.call(
             RADIAL_BLUR_TRIGGER,
@@ -10507,7 +10507,7 @@ mod tests {
     fn interface_object_commands_need_a_reference_with_an_object() {
         let mut e = engine_d();
         interface_doubles(&mut e);
-        e.set_global(FLOAT_0101E580, 15.0f32);
+        e.set_global(F32_0101E580, 15.0f32);
         e.register(FTOL, |_, a| (f64::take(a, &mut 0) as i32 as u32).into_ret());
         accept(
             &mut e,
@@ -10578,9 +10578,9 @@ mod tests {
         let mut e = engine_d();
         interface_doubles(&mut e);
         accept(&mut e, &[FN_007F7880]);
-        e.set_global(FLOAT_01013D84, 500.0f32);
-        e.set_global(FLOAT_0101E2BC, 0.1f32);
-        e.set_global(FLOAT_010181BC, 0.05f32);
+        e.set_global(F32_01013D84, 500.0f32);
+        e.set_global(F32_0101E2BC, 0.1f32);
+        e.set_global(F32_010181BC, 0.05f32);
         parse_gives(&mut e, true, &[]);
         start_log(&mut e);
         assert!(e.call(0x005b_b770, &args![script(0)]).bool());
@@ -10616,7 +10616,7 @@ mod tests {
         let mut e = engine_d();
         interface_doubles(&mut e);
         accept(&mut e, &[FN_007F8610]);
-        e.set_global(FLOAT_010780A4, 0.0005f32);
+        e.set_global(F32_010780A4, 0.0005f32);
         e.register_double(PARSE_PARAMETERS, |e, a| {
             assert_eq!(a.len(), 9);
             e.mem.set_u32(a[7], 3);
@@ -10720,7 +10720,7 @@ mod tests {
     /// `+0x1f0`), the list and the construction calls, which are logged.
     fn marker_doubles(e: &mut Engine) -> u32 {
         e.set_global(FLOAT_MINUS_ONE, -1.0f32);
-        e.set_global(FLOAT_0101B268, 50.0f32);
+        e.set_global(F32_0101B268, 50.0f32);
         e.set_global(FLOAT_HALF_PI, std::f32::consts::FRAC_PI_2);
         let owner = e.mem.alloc(0x210);
         for (i, word) in [1.5f32, 2.5, 3.5].iter().enumerate() {
@@ -10883,7 +10883,7 @@ mod tests {
     #[test]
     fn radial_blur_replaces_the_running_instance() {
         let mut e = engine_d();
-        e.set_global(FLOAT_01016248, 0.5f32);
+        e.set_global(F32_01016248, 0.5f32);
         e.register(NI_POINT2_CONSTRUCT, |e, a| {
             e.mem.set_u32(a[0], a[1]);
             e.mem.set_u32(a[0] + 4, a[2]);
