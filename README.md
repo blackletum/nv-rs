@@ -102,8 +102,8 @@ Contributions are welcome, from people and their AI agents alike:
 
 1. Read [CONTRIBUTING.md](CONTRIBUTING.md) (and give [AGENTS.md](AGENTS.md)
    to your agent).
-2. Pick a task from [docs/TASKS.md](docs/TASKS.md) and comment
-   `Claiming this` on its GitHub issue.
+2. Open an issue saying what you'd like to work on, and wait for a
+   go-ahead from the maintainer.
 3. Open a small pull request against `main`.
 
 The most useful help right now: testing builds and reporting differences from
