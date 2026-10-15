@@ -605,6 +605,18 @@ impl PlayerMovement {
         )
     }
 
+    /// The other stops (memory nobody made, a refusal of the bridge), most
+    /// first: count, stage, first line.
+    pub fn stops_tsv(&self) -> String {
+        let mut rows: Vec<_> = self.stops.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1));
+        let mut out = String::from("count\tstage\tstop\n");
+        for ((stage, why), n) in rows {
+            let _ = writeln!(out, "{n}\t{stage}\t{why}");
+        }
+        out
+    }
+
     /// The untranslated addresses reached, most reached first: address,
     /// count, stage, callers (`caller×count`), and the ledger's unit and
     /// name when `names` has them.
