@@ -35,6 +35,12 @@ macro_rules! assemble {
 /// A test double that may keep state (see [`Engine::register_double`]).
 pub type Double = Rc<RefCell<dyn FnMut(&mut Engine, &[u32]) -> Ret>>;
 
+/// What runs when a call reaches an address nobody has translated
+/// ([`Engine::on_open`]): given the address and the argument words, it may
+/// record the miss; `Some(ret)` makes the call return `ret` (a diagnostic
+/// run that goes on past the gap), `None` stops as without a handler.
+pub type OpenHandler = Rc<RefCell<dyn FnMut(&mut Engine, u32, &[u32]) -> Option<Ret>>>;
+
 #[derive(Clone)]
 enum Callable {
     Abi(AbiFn),
@@ -56,6 +62,16 @@ pub struct Engine {
     /// The Windows kernel objects the platform imports hand out (events,
     /// semaphores, threads, `VirtualAlloc` regions; `units/platform.rs`).
     pub kernel: crate::units::platform::Kernel,
+    /// The functions entered through [`Engine::call`] that haven't returned,
+    /// innermost last: the nearest caller entered by address of whatever
+    /// runs now (calls within one unit file are direct and not on it). A
+    /// stop (a panic) leaves it as it was; whoever catches the stop
+    /// truncates it.
+    pub call_stack: Vec<u32>,
+    /// Runs when a call reaches an untranslated address, before the stop
+    /// ([`OpenHandler`]). The host uses it to record which addresses a run
+    /// of the game's code needs, and from where.
+    pub on_open: Option<OpenHandler>,
 }
 
 impl Default for Engine {
@@ -95,6 +111,8 @@ impl Engine {
             tls: 0,
             clock_ms: 0,
             kernel: Default::default(),
+            call_stack: Vec::new(),
+            on_open: None,
         }
     }
 
@@ -185,14 +203,25 @@ impl Engine {
         }
         let Some(f) = self.funcs.get(&addr).cloned() else {
             if let Some(row) = crate::static_exit::row(addr) {
-                return crate::static_exit::run_row(self, row);
+                self.call_stack.push(addr);
+                let ret = crate::static_exit::run_row(self, row);
+                self.call_stack.pop();
+                return ret;
+            }
+            if let Some(handler) = self.on_open.clone() {
+                if let Some(ret) = (handler.borrow_mut())(self, addr, args) {
+                    return ret;
+                }
             }
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
         };
-        match f {
+        self.call_stack.push(addr);
+        let ret = match f {
             Callable::Abi(f) => f(self, args),
             Callable::Double(d) => (d.borrow_mut())(self, args),
-        }
+        };
+        self.call_stack.pop();
+        ret
     }
 
     /// [`Engine::call`] with the result converted.
@@ -307,5 +336,30 @@ mod tests {
     #[should_panic(expected = "open function 00abcdef")]
     fn untranslated_calls_name_the_address() {
         Engine::new().call(0x00ab_cdef, &[]);
+    }
+
+    /// The open-function handler sees the address, the arguments and the
+    /// nearest caller entered by address; returning a value goes on, and
+    /// the call stack is back to empty after the outer call.
+    #[test]
+    fn the_open_handler_sees_the_miss_and_its_caller() {
+        let mut e = Engine::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.on_open = Some(Rc::new(RefCell::new(
+            move |e: &mut Engine, addr: u32, args: &[u32]| {
+                record
+                    .borrow_mut()
+                    .push((addr, args.to_vec(), e.call_stack.last().copied()));
+                Some(Ret {
+                    eax: 7,
+                    ..Ret::default()
+                })
+            },
+        )));
+        e.register(0x00aa_0000, |e, a| e.call(0x00ab_cdef, &[a[0] + 1]));
+        assert_eq!(e.call(0x00aa_0000, &[1]).u32(), 7);
+        assert_eq!(*seen.borrow(), vec![(0x00ab_cdef, vec![2], Some(0x00aa_0000))]);
+        assert!(e.call_stack.is_empty());
     }
 }

@@ -70,7 +70,7 @@ pub mod units;
 pub mod x87;
 
 pub use abi::{AbiFn, Ret};
-pub use engine::Engine;
+pub use engine::{Engine, OpenHandler};
 pub use mem::Mem;
 pub use ptr::{Field, Inline, Layout, Ptr, Scalar};
 

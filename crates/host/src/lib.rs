@@ -18,6 +18,7 @@
 
 pub mod game_file;
 pub mod global_form;
+pub mod player_move;
 pub mod quest_form;
 pub mod quest_vm;
 pub mod script_form;
@@ -35,6 +36,9 @@ pub struct Host {
     /// The quests run through the game's interpreter for the world
     /// ([`quest_vm`]).
     pub quests: quest_vm::QuestVm,
+    /// The player's movement through the game's code, and what it
+    /// reached that isn't translated ([`player_move`]).
+    pub movement: player_move::PlayerMovement,
 }
 
 impl Host {
@@ -64,6 +68,7 @@ impl Host {
             exe,
             static_init,
             quests: quest_vm::QuestVm::default(),
+            movement: player_move::PlayerMovement::default(),
         })
     }
 

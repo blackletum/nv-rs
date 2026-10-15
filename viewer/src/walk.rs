@@ -10,8 +10,107 @@ use cellview::{space, DoorData, EYE_HEIGHT};
 use physics::{Character, CharacterShape, Collider};
 use world::locomotion::{self, SpeedSettings};
 
+use crate::args::MovementMode;
 use crate::exterior::{door_start, PendingExterior};
 use crate::{FlyCamera, GameFiles, PendingScene};
+
+/// How the player moves (`--movement`), and the comparison and
+/// missing-function outputs (`--movement-log`, `--movement-missing`).
+#[derive(Resource, Default)]
+pub struct Movement {
+    pub mode: MovementMode,
+    /// `--movement-log`: one line a frame.
+    pub log: Option<std::io::LineWriter<std::fs::File>>,
+    /// `--movement-missing`: rewritten every 5 s.
+    pub missing: Option<std::path::PathBuf>,
+    frames: u64,
+    last_written: f32,
+}
+
+impl Movement {
+    pub fn new(
+        mode: MovementMode,
+        log: Option<&std::path::Path>,
+        missing: Option<std::path::PathBuf>,
+    ) -> std::io::Result<Self> {
+        let log = match log {
+            Some(path) => {
+                let mut file = std::io::LineWriter::new(std::fs::File::create(path)?);
+                use std::io::Write;
+                writeln!(
+                    file,
+                    "frame\ttime\tdt\told_x\told_y\told_z\told_vx\told_vy\told_vz\tengine\t\
+                     engine_x\tengine_y\tengine_z\tengine_vx\tengine_vy\tengine_vz"
+                )?;
+                Some(file)
+            }
+            None => None,
+        };
+        Ok(Movement {
+            mode,
+            log,
+            missing,
+            frames: 0,
+            last_written: 0.0,
+        })
+    }
+
+    /// The frame's line: where the viewer's step has the player (`old`: in
+    /// `compare` and `old` mode, and on a fallback frame, `crates/physics`;
+    /// with the game's code moving the player, the same as `engine`) and
+    /// the game's code's result; the velocity is the move over the frame.
+    /// Every 5 s, the missing-function list and the status line.
+    fn record(
+        &mut self,
+        now: f32,
+        dt: f32,
+        before: [f32; 3],
+        character: &physics::Character,
+        engine: Option<host::player_move::MoveOutput>,
+        host: Option<&host::Host>,
+    ) {
+        self.frames += 1;
+        if let Some(log) = &mut self.log {
+            use std::io::Write;
+            let after = character.feet;
+            let v = |a: f32, b: f32| if dt > 0.0 { (a - b) / dt } else { 0.0 };
+            let mut line = format!(
+                "{}\t{now:.4}\t{dt:.5}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{:.2}",
+                self.frames,
+                after[0],
+                after[1],
+                after[2],
+                v(after[0], before[0]),
+                v(after[1], before[1]),
+                v(after[2], before[2])
+            );
+            match engine {
+                Some(out) => {
+                    line += &format!(
+                        "\t1\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{:.2}",
+                        out.feet[0],
+                        out.feet[1],
+                        out.feet[2],
+                        v(out.feet[0], before[0]),
+                        v(out.feet[1], before[1]),
+                        v(out.feet[2], before[2])
+                    );
+                }
+                None => line += "\t0\t\t\t\t\t\t",
+            }
+            let _ = writeln!(log, "{line}");
+        }
+        if now - self.last_written >= 5.0 && self.mode != MovementMode::Old {
+            self.last_written = now;
+            if let Some(host) = host {
+                println!("{}", host.movement.summary());
+                if let Some(path) = &self.missing {
+                    let _ = std::fs::write(path, host.movement.missing_tsv(&|_| None));
+                }
+            }
+        }
+    }
+}
 
 /// The current cell's solid surfaces.
 #[derive(Resource)]
@@ -238,9 +337,11 @@ pub fn walk(
     walkers: Query<&crate::ai::Walker>,
     mut settings: Local<Option<SpeedSettings>>,
     (mut attack, mut sounds, anim, mut heights, nav): SneakParts,
-    (mouse, controls): (
+    (mouse, controls, mut movement, mut host): (
         Res<ButtonInput<MouseButton>>,
         Option<Res<crate::controls::Controls>>,
+        ResMut<Movement>,
+        Option<NonSendMut<host::Host>>,
     ),
 ) {
     if !player.walking || !player.ready {
@@ -341,7 +442,7 @@ pub fn walk(
     state.0.player_sneaking = sneak;
     // The same as the game's movement flags, for `IsMoving`, `IsRunning`
     // and `IsSneaking` (`world::more_functions::movement`).
-    {
+    let move_flags = {
         use world::more_functions::movement as m;
         let mut flags = 0;
         for (key, flag) in [
@@ -378,7 +479,8 @@ pub fn walk(
                 ..Default::default()
             },
         );
-    }
+        flags
+    };
     let shape = CharacterShape::PLAYER;
     // Jump: not over-encumbered; `fJumpHeightMin` × the player's scale (1).
     let jump =
@@ -393,16 +495,62 @@ pub fn walk(
         ));
         player.reference_speed_set = true;
     }
-    // One controller move a frame (`bhkCharacterController::Move`): on the
-    // ground at the wanted velocity, in the air steered 0.3 of the way to
-    // it; a jump asked for here leaves the ground the next frame.
-    player.character.update_controlled(
-        &collision.0,
-        &shape,
-        velocity,
-        jump,
-        locomotion::air_gain(locomotion::AIR_CONTROL),
+    // The game's own movement code first (`host::player_move`: `PlayerMover::
+    // Update` → `Actor::Move` → `MobileObject::Move` →
+    // `bhkCharacterController::Move`), unless `--movement old`.
+    let before = player.character.feet;
+    let engine_move = match (movement.mode, host.as_deref_mut()) {
+        (MovementMode::Old, _) | (_, None) => None,
+        (_, Some(host)) => {
+            // The mover's bits as the control handler sets them (`0093e860`):
+            // each direction also walks (0x100) unless running (0x200).
+            let mut bits = u32::from(move_flags);
+            if bits & 0xf != 0 && bits & 0x200 == 0 {
+                bits |= host::player_move::move_bits::WALKING;
+            }
+            let input = host::player_move::MoveInput {
+                feet: player.character.feet,
+                // The game's z angle: clockwise from north (forward is
+                // (sin, cos) of it), the camera's yaw the other way.
+                heading: -camera.yaw,
+                move_bits: bits,
+                seconds: dt,
+                jump: jump.is_some(),
+            };
+            host.move_player(order, state.0.player_cell, &input)
+        }
+    };
+    match (movement.mode, engine_move) {
+        (MovementMode::Engine, Some(out)) => {
+            // Moved by the game's code: the viewer's character follows it
+            // (its other state, `on_ground` and the surface contacts, isn't
+            // read back from the game's controller yet).
+            player.character.feet = out.feet;
+            player.character.horizontal = [out.velocity[0], out.velocity[1]];
+            player.character.vertical_speed = out.velocity[2];
+        }
+        _ => {
+            // One controller move a frame (`bhkCharacterController::Move`):
+            // on the ground at the wanted velocity, in the air steered 0.3 of
+            // the way to it; a jump asked for here leaves the ground the next
+            // frame.
+            player.character.update_controlled(
+                &collision.0,
+                &shape,
+                velocity,
+                jump,
+                locomotion::air_gain(locomotion::AIR_CONTROL),
+                dt,
+            );
+        }
+    }
+    movement.record(
+        time.elapsed_secs(),
         dt,
+        before,
+        &player.character,
+        engine_move,
+        host.as_deref(),
     );
     player.surface_serial = player.surface_serial.wrapping_add(1);
     // Outdoors, feet more than 30 under the land are put on it, the player's
