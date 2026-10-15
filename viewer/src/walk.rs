@@ -51,7 +51,7 @@ impl Movement {
             log,
             missing,
             frames: 0,
-            last_written: 0.0,
+            last_written: -5.0,
         })
     }
 

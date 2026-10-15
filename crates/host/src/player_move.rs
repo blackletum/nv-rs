@@ -277,14 +277,9 @@ impl PlayerMovement {
                 *self.stops.entry((stage, why.clone())).or_default() += 1;
             }
         }
-        // In a probe run a miss doesn't stop the run; it still means the
-        // state isn't the game's.
-        if self.probe && out.is_ok() && !reached.borrow().is_empty() {
-            return Err(format!(
-                "probe: went on past {} untranslated calls",
-                reached.borrow().len()
-            ));
-        }
+        // In a probe run a miss doesn't stop the run, so the stages after it
+        // run too; the state made is not the game's, and `step` never moves
+        // the player with it.
         out
     }
 
@@ -542,18 +537,21 @@ impl PlayerMovement {
         cell: Option<FormId>,
         input: &MoveInput,
     ) -> Option<MoveOutput> {
-        let ready = self.prepare(e, order, cell, input) && !self.probe;
-        let (Some(player), Some(controller), true) = (self.player.done(), self.controller.done(), ready)
-        else {
-            self.fallback_frames += 1;
-            self.in_step = false;
-            return None;
+        let ready = self.prepare(e, order, cell, input);
+        let (player, controller) = (self.player.done(), self.controller.done());
+        // A probe run goes through the frame with whatever was made (and
+        // never moves the player).
+        let runs = if self.probe {
+            player.is_some()
+        } else {
+            ready && player.is_some() && controller.is_some()
         };
-        if input.jump {
+        if !runs || input.jump {
             self.fallback_frames += 1;
             self.in_step = false;
             return None;
         }
+        let (player, controller) = (player.unwrap_or(0), controller.unwrap_or(0));
         let resync = !self.in_step;
         let out = self.guarded(e, "frame", |e| {
             if resync {
@@ -569,12 +567,12 @@ impl PlayerMovement {
             Ok(MoveOutput { feet, velocity })
         });
         match out {
-            Ok(out) => {
+            Ok(out) if !self.probe => {
                 self.engine_frames += 1;
                 self.in_step = true;
                 Some(out)
             }
-            Err(_) => {
+            _ => {
                 self.fallback_frames += 1;
                 self.in_step = false;
                 None
@@ -701,7 +699,7 @@ mod tests {
     }
 
     /// A probe run goes on past a miss with a zero result, records every
-    /// miss, and still reports the run as not the game's state.
+    /// miss; `step` never moves the player in a probe run.
     #[test]
     fn a_probe_goes_on_past_misses() {
         let mut e = Engine::new();
@@ -714,7 +712,7 @@ mod tests {
             let b = e.call(0x00ab_0002, &[]).u32();
             Ok(a + b)
         });
-        assert!(out.unwrap_err().starts_with("probe"));
+        assert_eq!(out, Ok(0));
         assert_eq!(m.misses.len(), 2);
     }
 
