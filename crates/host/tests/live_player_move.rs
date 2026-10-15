@@ -32,9 +32,8 @@ fn the_player_walks_through_the_games_code_or_says_what_is_missing() {
         .iter()
         .find_map(|r| {
             let data = r.subrecord(FourCC(*b"DATA")).ok().flatten()?;
-            (data.len() >= 12).then(|| {
-                [0, 4, 8].map(|o| f32::from_le_bytes(data[o..o + 4].try_into().unwrap()))
-            })
+            (data.len() >= 12)
+                .then(|| [0, 4, 8].map(|o| f32::from_le_bytes(data[o..o + 4].try_into().unwrap())))
         })
         .unwrap_or([0.0; 3]);
     let mut moved = 0;
@@ -49,7 +48,10 @@ fn the_player_walks_through_the_games_code_or_says_what_is_missing() {
         if let Some(out) = host.move_player(&order, Some(cell), &input) {
             moved += 1;
             if frame % 10 == 0 {
-                println!("frame {frame}: feet {:?}, velocity {:?}", out.feet, out.velocity);
+                println!(
+                    "frame {frame}: feet {:?}, velocity {:?}",
+                    out.feet, out.velocity
+                );
             }
         }
     }

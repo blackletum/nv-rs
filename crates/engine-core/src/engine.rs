@@ -359,7 +359,10 @@ mod tests {
         )));
         e.register(0x00aa_0000, |e, a| e.call(0x00ab_cdef, &[a[0] + 1]));
         assert_eq!(e.call(0x00aa_0000, &[1]).u32(), 7);
-        assert_eq!(*seen.borrow(), vec![(0x00ab_cdef, vec![2], Some(0x00aa_0000))]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x00ab_cdef, vec![2], Some(0x00aa_0000))]
+        );
         assert!(e.call_stack.is_empty());
     }
 }

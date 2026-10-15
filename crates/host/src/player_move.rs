@@ -401,7 +401,9 @@ impl PlayerMovement {
         let form = self.guarded(e, "forms", |e| {
             let form = e.call(CREATE_FORM_OF_TYPE, &[u32::from(form_type)]).u32();
             if form == 0 {
-                return Err(format!("form {id}: CreateFormOfType({form_type:#x}) gave none"));
+                return Err(format!(
+                    "form {id}: CreateFormOfType({form_type:#x}) gave none"
+                ));
             }
             file.supply(e, plugin, entry)?;
             if !e.call(LOAD_FORM, &[form, file.file]).bool() {
@@ -456,7 +458,10 @@ impl PlayerMovement {
         if unloaded > 0 {
             *self
                 .stops
-                .entry(("cell", format!("{unloaded} base forms of the cell's references didn't load")))
+                .entry((
+                    "cell",
+                    format!("{unloaded} base forms of the cell's references didn't load"),
+                ))
                 .or_default() += 1;
         }
         let cell = self.load_form(e, order, id)?;
@@ -489,7 +494,9 @@ impl PlayerMovement {
                 ))
                 .or_default() += 1;
         }
-        let bytes = plugin.plugin.file_bytes(start..end.min(plugin.plugin.file_size()));
+        let bytes = plugin
+            .plugin
+            .file_bytes(start..end.min(plugin.plugin.file_size()));
         let refs: Vec<FormId> = children
             .iter()
             .filter(|r| r.header.kind.as_bytes() == b"REFR")
@@ -508,9 +515,8 @@ impl PlayerMovement {
         })?;
         let mut loaded = 0;
         for reference in refs {
-            let made = self.guarded(e, "cell", |e| {
-                Ok(e.call(LOOKUP_FORM, &[reference.0]).u32())
-            })?;
+            let made =
+                self.guarded(e, "cell", |e| Ok(e.call(LOOKUP_FORM, &[reference.0]).u32()))?;
             if made == 0 {
                 continue;
             }

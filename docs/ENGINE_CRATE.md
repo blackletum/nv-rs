@@ -377,6 +377,54 @@ scripts that call one stay on `crates/script`), stages (`SetStage`/
 `GetStage` need the stage list), and the frame's call site (`00455490` at
 PostSwapProcess).
 
+### The player's movement (Build 43)
+
+The viewer offers each frame's player move to the game's code first
+(`host::player_move`, `Host::move_player`; the viewer's `walk::walk`):
+`PlayerMover::Update` (`009e9e50`, the mover's vtable +0x14) →
+`Actor::Move` (`008a62b0`) → `MobileObject::Move` (`0092f260`) →
+`bhkCharacterController::Move` (`00c73170`) → the proxy, casts, agents and
+shapes. The state it needs is made by the game's own code, in the game's
+order, each stage once (the cell's once per cell): `InitHavokSystem`
+(`00624bf0`); the player as `Main::InitTES` makes it (`operator new`
+0xE50, `PlayerCharacter::PlayerCharacter` `00938180`, `011dea3c`, form id
+0x14; its base `NPC_` 7, `SetObjectReference`, position, angle,
+`InitItem`); the player's cell (`CreateFormOfType`,
+`TESDataHandler::LoadForm`, `InitItem`; its references' base forms first;
+`TESObjectCELL::LoadTempDataFromFile` `00550500`, `Load3D` `00545cf0`, which
+makes the cell's `bhkWorld` in `00552dc0`, and each reference's `Load3D`
+`0056b2d0`); then `SetParentCell`, `PlayerCharacter::Load3D` (`0094e1d0`)
+and `MobileObject::InitHavok` (`00930c70`, the controller). Each frame the
+mover's bits are set with `PlayerMover::ForceMoveMode` (`009ea3e0`) and its
+`Update` runs; the player's position (vtable +0x1F4) and the controller's
+`OutVelocity` come back.
+
+Bridged, and said so in the module: the file reading (as for quests); the
+keys (the control handler `0093e860` reads DirectInput; the viewer gives the
+same move bits); a resync of the position after a frame the viewer moved
+itself; each form's `InitItem` right after its load (the game runs them all
+after loading); `InitTES`'s `CastPermanentMagic` left out; jumping not
+connected (a jump frame goes to `crates/physics`).
+
+When a run reaches an untranslated address, `Engine::on_open` records it
+with the nearest caller entered by address (`Engine::call_stack`), the run
+stops, and the viewer moves the player with `crates/physics` for that frame.
+`--movement old` keeps the old path only, `--movement compare` runs both
+(the old one moves you) and `--movement-log FILE` writes both per frame;
+`--movement-missing FILE` writes the addresses reached with counts, stage
+and callers (and the other stops beside it, `FILE.stops.tsv`). Every 5 s the
+viewer prints `Game's movement: ...` with each stage's state.
+`--movement-probe` goes on past each miss with a zero result to list more
+of them (indicative only; it never moves the player). Opt-in headless run:
+
+```sh
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_player_move -- --ignored --nocapture
+```
+
+State on 2026-10-15: no frame runs on the game's code yet; the first stops
+are `InitHavokSystem` and `00822a40` in the player's constructor (the list:
+the Build 43 report).
+
 ### Static initializers
 
 The game constructs many globals before `WinMain`: `__cinit` (`00eccd14`)
