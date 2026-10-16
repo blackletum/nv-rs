@@ -322,6 +322,16 @@ type SneakParts<'w, 's> = (
     Option<Res<'w, crate::ai::CellNav>>,
 );
 
+/// What walking needs for the player's movement through the game's code
+/// (Build 43): the mouse and controls (the move keys), the movement log and
+/// the host that runs it.
+type MoveParts<'w> = (
+    Res<'w, ButtonInput<MouseButton>>,
+    Option<Res<'w, crate::controls::Controls>>,
+    ResMut<'w, Movement>,
+    Option<NonSendMut<'w, host::Host>>,
+);
+
 /// Walking: the keys set the wanted speed, the character moves through the
 /// cell's collision and around the people in it, and the camera sits at eye
 /// height (lower while sneaking, [`eye_offset`]). Not while scripts have
@@ -339,12 +349,7 @@ pub fn walk(
     walkers: Query<&crate::ai::Walker>,
     mut settings: Local<Option<SpeedSettings>>,
     (mut attack, mut sounds, anim, mut heights, nav): SneakParts,
-    (mouse, controls, mut movement, mut host): (
-        Res<ButtonInput<MouseButton>>,
-        Option<Res<crate::controls::Controls>>,
-        ResMut<Movement>,
-        Option<NonSendMut<host::Host>>,
-    ),
+    (mouse, controls, mut movement, mut host): MoveParts,
 ) {
     if !player.walking || !player.ready {
         return;
