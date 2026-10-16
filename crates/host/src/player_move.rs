@@ -258,6 +258,10 @@ impl PlayerMovement {
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
         std::panic::set_hook(hook);
         e.on_open = None;
+        // After a panic the stack still holds the functions it unwound
+        // through (`Engine::call` pops only on return): the innermost few go
+        // with the stop, so a fault inside translated code says where.
+        let unwound: Vec<u32> = e.call_stack.iter().rev().take(6).copied().collect();
         e.call_stack.clear();
         for &(addr, caller) in reached.borrow().iter() {
             let miss = self.misses.entry(addr).or_insert_with(|| Miss {
@@ -275,7 +279,13 @@ impl PlayerMovement {
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_default();
-                Err(text.lines().next().unwrap_or("").to_string())
+                let first = text.lines().next().unwrap_or("");
+                if unwound.is_empty() {
+                    Err(first.to_string())
+                } else {
+                    let path: Vec<String> = unwound.iter().map(|a| format!("{a:08x}")).collect();
+                    Err(format!("{first} (in {})", path.join(" < ")))
+                }
             }
         };
         if let Err(why) = &out {
@@ -703,6 +713,41 @@ impl crate::Host {
         input: &MoveInput,
     ) -> Option<MoveOutput> {
         self.movement.step(&mut self.engine, order, cell, input)
+    }
+
+    /// The static initializers start-up skipped (`static_init` in
+    /// [`crate::Host::start`]), one row each: the entry, why (`open`: not
+    /// translated; `callee`: a callee isn't; `stopped`: stopped part-way),
+    /// the untranslated callee, and the global the entry makes (its table
+    /// row's object or register global; empty for others). The movement
+    /// path reads globals these make (the process lists, `011e0e80`, among
+    /// them), so a fault in translated code there can come from a skipped
+    /// one.
+    pub fn static_skips_tsv(&self) -> String {
+        use engine::static_init::Row;
+        let rows = engine::static_init::table();
+        let global = |entry: u32| match rows.get(&entry) {
+            Some(Row::Object { this, .. }) => format!("{this:08x}"),
+            Some(Row::Reg { global, .. }) => format!("{global:08x}"),
+            _ => String::new(),
+        };
+        let report = &self.static_init;
+        let mut out = String::from("entry\twhy\tcallee\tglobal\tstop\n");
+        for &entry in &report.open {
+            let _ = writeln!(out, "{entry:08x}\topen\t\t{}\t", global(entry));
+        }
+        for &(entry, callee) in &report.callee_open {
+            let _ = writeln!(
+                out,
+                "{entry:08x}\tcallee\t{callee:08x}\t{}\t",
+                global(entry)
+            );
+        }
+        for (entry, stop) in &report.stopped {
+            let stop = stop.lines().next().unwrap_or("");
+            let _ = writeln!(out, "{entry:08x}\tstopped\t\t{}\t{stop}", global(*entry));
+        }
+        out
     }
 }
 

@@ -108,6 +108,8 @@ impl Movement {
                     let _ = std::fs::write(path, host.movement.missing_tsv(&|_| None));
                     let _ =
                         std::fs::write(path.with_extension("stops.tsv"), host.movement.stops_tsv());
+                    let _ =
+                        std::fs::write(path.with_extension("static.tsv"), host.static_skips_tsv());
                 }
             }
         }
