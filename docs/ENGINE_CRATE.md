@@ -422,8 +422,9 @@ NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_
 ```
 
 State on 2026-10-15: no frame runs on the game's code yet; the first stops
-are `InitHavokSystem` and `00822a40` in the player's constructor (the list:
-the Build 43 report).
+are Havok's memory system (`hkMemorySystem::FrameInfo::FrameInfo`,
+`00cbbfa0`, from `bhkWorld::InitSystem`) and `005f78e0` in the player's
+constructor (the list: the Build 43 report).
 
 ### Static initializers
 
