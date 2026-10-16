@@ -763,6 +763,30 @@ mod tests {
     }
 
     #[test]
+    fn an_object_runs_while_its_destructor_is_untranslated() {
+        // The destructor is only registered with `_atexit` (by address, as
+        // the exe does) and never runs during a session, so it doesn't hold
+        // the constructor back (Build 43: the process lists, 00fa9890).
+        let mut e = Engine::new();
+        e.map(0x0101_0000, 0x20);
+        e.register(0x00f0_0f00, |e, a| {
+            e.mem.set_u32(a[0], 7);
+            a[0].into_ret()
+        });
+        e.register(ATEXIT, |_, _| crate::Ret::default());
+        assert!(!e.is_translated(0x00f0_0fd0));
+        let rows = parse("00f00010\tobject\t00f00f00 01010010 00f00fd0\n").unwrap();
+        let mut report = Report::default();
+        assert_eq!(
+            run_entry(&mut e, &rows, &[], 0x00f0_0010, &mut report),
+            Some(0)
+        );
+        assert_eq!(e.mem.u32(0x0101_0010), 7);
+        assert!(report.callee_open.is_empty());
+        assert_eq!(report.rows, 1);
+    }
+
+    #[test]
     fn untranslated_entries_and_callees_are_skipped_and_counted() {
         let mut e = Engine::new();
         e.map(0x0101_0000, 0x20);
