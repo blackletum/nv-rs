@@ -47,8 +47,12 @@
 //! is the bridge's, not the game's).
 //!
 //! Bridged (stand-ins for exe code, each named):
-//! - The file reading below `TESFile` (`BSFile`, platform; `crate::game_file`)
-//!   and `TESFile::OpenTES`, as for quests.
+//! - The file reading below `TESFile` (`BSFile`, platform; `crate::game_file`):
+//!   each plugin is opened by the game's `OpenTES` and header reader with
+//!   an in-memory `BSFile` already in place, and its masters resolved by
+//!   `TESFile::GenIndexTable` against a file list made here (standing in
+//!   for the data handler's, [`GameFile::open_with_header`]). Compressed
+//!   records are decompressed by the game's own reading (zlib included).
 //! - The keys: the game's control handler (`PlayerCharacter::Update`'s
 //!   `0093e860`) reads them through `OSInputGlobals` (DirectInput); here the
 //!   viewer's keys give the mover's move bits, set with the game's own
@@ -199,6 +203,7 @@ pub struct PlayerMovement {
     cell: Option<(FormId, Stage<u32>)>,
     controller: Stage<u32>,
     files: HashMap<u8, GameFile>,
+    failed_files: HashMap<u8, String>,
     forms: HashMap<FormId, u32>,
     /// The last frame's result came from the game's code (no resync needed).
     in_step: bool,
@@ -217,6 +222,7 @@ impl Default for PlayerMovement {
             cell: None,
             controller: Stage::NotTried,
             files: HashMap::new(),
+            failed_files: HashMap::new(),
             forms: HashMap::new(),
             in_step: false,
         }
@@ -374,13 +380,68 @@ impl PlayerMovement {
     }
 
     /// The plugin's file in the game's memory, made on first need.
-    fn file(&mut self, e: &mut Engine, plugin: &esm::LoadedPlugin) -> Result<GameFile, String> {
+    /// Opened by the game's `OpenTES` and header reader
+    /// ([`GameFile::open_with_header`]), its masters first; then its master
+    /// table by `TESFile::GenIndexTable` ([`crate::game_file::gen_index_table`])
+    /// against every file opened so far.
+    fn file(
+        &mut self,
+        e: &mut Engine,
+        order: &LoadOrder,
+        plugin: &esm::LoadedPlugin,
+    ) -> Result<GameFile, String> {
         if let Some(file) = self.files.get(&plugin.load_index) {
             return Ok(*file);
         }
-        // `GameFile::open` runs the game's `TESFile` constructor.
-        let file = self.guarded(e, "forms", |e| GameFile::open(e, plugin))?;
+        if let Some(why) = self.failed_files.get(&plugin.load_index) {
+            return Err(why.clone());
+        }
+        let made = self.open_file(e, order, plugin);
+        if let Err(why) = &made {
+            self.failed_files.insert(plugin.load_index, why.clone());
+        }
+        made
+    }
+
+    fn open_file(
+        &mut self,
+        e: &mut Engine,
+        order: &LoadOrder,
+        plugin: &esm::LoadedPlugin,
+    ) -> Result<GameFile, String> {
+        for master in &plugin.plugin.header().masters {
+            let Some(m) = order
+                .plugins()
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(master))
+            else {
+                return Err(format!("{}: master {master} not loaded", plugin.name));
+            };
+            self.file(e, order, m)?;
+        }
+        let directory = plugin
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| format!("{}\\", d.display()))
+            .unwrap_or_else(|| "Data\\".into());
+        let file = self.guarded(e, "files", |e| {
+            GameFile::open_with_header(e, plugin, &directory)
+        })?;
         self.files.insert(plugin.load_index, file);
+        let mut opened: Vec<(u8, GameFile)> = self.files.iter().map(|(i, f)| (*i, *f)).collect();
+        opened.sort_by_key(|(i, _)| *i);
+        let opened: Vec<GameFile> = opened.into_iter().map(|(_, f)| f).collect();
+        self.guarded(e, "files", |e| {
+            if crate::game_file::gen_index_table(e, &file, &opened) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{}: TESFile::GenIndexTable missed a master",
+                    plugin.name
+                ))
+            }
+        })?;
         Ok(file)
     }
 
@@ -395,7 +456,7 @@ impl PlayerMovement {
         let kind = record.entry.header.kind;
         let form_type = world::more_functions::form_type_number(kind)
             .ok_or_else(|| format!("form {id}: record type {kind} has no form type"))?;
-        let file = self.file(e, record.plugin)?;
+        let file = self.file(e, order, record.plugin)?;
         let plugin = record.plugin;
         let entry = record.entry;
         let form = self.guarded(e, "forms", |e| {
@@ -405,7 +466,7 @@ impl PlayerMovement {
                     "form {id}: CreateFormOfType({form_type:#x}) gave none"
                 ));
             }
-            file.supply(e, plugin, entry)?;
+            file.supply_any(e, plugin, entry)?;
             if !e.call(LOAD_FORM, &[form, file.file]).bool() {
                 return Err(format!("form {id}: {kind} Load failed"));
             }
@@ -465,7 +526,7 @@ impl PlayerMovement {
                 .or_default() += 1;
         }
         let cell = self.load_form(e, order, id)?;
-        let file = self.file(e, plugin)?;
+        let file = self.file(e, order, plugin)?;
         // The cell's record and its children groups, as one range of the
         // file (the groups follow the record), and the 0x18 bytes after it.
         let start = record.entry.offset;
@@ -478,22 +539,6 @@ impl PlayerMovement {
             .max()
             .unwrap_or(start)
             + HEADER_SIZE;
-        let compressed = children
-            .iter()
-            .filter(|r| r.header.flags & 0x0004_0000 != 0)
-            .count();
-        if compressed > 0 {
-            *self
-                .stops
-                .entry((
-                    "cell",
-                    format!(
-                        "{compressed} of the cell's records are compressed (zlib, \
-                         TESFile::DecompressCurrentForm, not translated)"
-                    ),
-                ))
-                .or_default() += 1;
-        }
         let bytes = plugin
             .plugin
             .file_bytes(start..end.min(plugin.plugin.file_size()));
