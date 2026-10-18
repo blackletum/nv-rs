@@ -236,6 +236,24 @@ pub fn fn_00aa20b0(e: &mut Engine, holder: u32) {
     e.mem.set_u8(STARTUP_FINISHED, 1);
 }
 
+// Translated from 00aa2200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word; run by `fn_00aa20b0` on the 8-byte
+/// block it allocates for the holder): allocates 4 bytes from the memory manager
+/// (`00aa3e40`); when that succeeds it stores the vtable `010a24fc` in them and their
+/// address at `this`, otherwise null at `this`; the byte at `this + 4` is set to 1 either
+/// way. Returns `this`.
+pub fn fn_00aa2200(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 4u32]).u32();
+    if block != 0 {
+        e.mem.set_u32(block, 0x010a_24fc);
+        e.mem.set_u32(this.addr(), block);
+    } else {
+        e.mem.set_u32(this.addr(), 0);
+    }
+    e.mem.set_u8(this.addr() + 4, 1);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -248,6 +266,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00aa_2080, fn_00aa2080(u32, u32) -> u32),
         entry!(0x00aa_20b0, fn_00aa20b0(u32)),
         entry!(0x00aa_3050, fn_00aa3050()),
+        entry!(0x00aa_2200, fn_00aa2200(Ptr) -> Ptr),
     ]
 }
 
@@ -559,5 +578,36 @@ mod startup_tests {
             .filter(|a| (0x2000..0x3000).contains(a))
             .collect();
         assert_eq!(ran, vec![0x2000, 0x2100]);
+    }
+}
+
+#[cfg(test)]
+mod holder_tests {
+    use super::*;
+
+    #[test]
+    fn holder_takes_a_four_byte_block_with_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        let block = e.mem.alloc(4);
+        e.register_double(ALLOCATE, move |_, a| {
+            assert_eq!(a, &[MEMORY_MANAGER, 4]);
+            block.into_ret()
+        });
+        assert_eq!(e.call(0x00aa_2200, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), block);
+        assert_eq!(e.mem.u8(this + 4), 1);
+        assert_eq!(e.mem.u32(block), 0x010a_24fc);
+    }
+
+    #[test]
+    fn holder_keeps_null_when_the_allocation_fails() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0x1234);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00aa_2200, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u8(this + 4), 1);
     }
 }

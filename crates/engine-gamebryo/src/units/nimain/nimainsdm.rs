@@ -187,6 +187,165 @@ pub fn fn_00a8a5f0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `00aa13e0` (`cdecl`, one word): allocates a block of that size.
+pub(crate) const ALLOCATE: u32 = 0x00aa_13e0;
+/// `00a5c200` (`thiscall`, unit `niobjectnet.cpp`): the constructor of the object base that
+/// the default property objects start with.
+pub(crate) const OBJECT_BASE_CONSTRUCTOR: u32 = 0x00a5_c200;
+/// `00a5b690` (`cdecl`, one word): the fixed-string handle for a C string.
+pub(crate) const GET_FIXED_STRING: u32 = 0x00a5_b690;
+/// Import slots of `InterlockedIncrement` and `InterlockedDecrement` (`stdcall`, one word).
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// `0109b220`: the fixed-string handle of the empty string, which is never counted.
+pub(crate) const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
+
+/// `InterlockedIncrement` on the counted word at `address`.
+pub(crate) fn interlocked_increment(e: &mut Engine, address: u32) {
+    e.call(INTERLOCKED_INCREMENT, &args![address]);
+}
+
+/// `InterlockedDecrement` on the counted word at `address`; the new count.
+pub(crate) fn interlocked_decrement(e: &mut Engine, address: u32) -> u32 {
+    e.call(INTERLOCKED_DECREMENT, &args![address]).u32()
+}
+
+/// The compiler's smart-pointer assignment of a reference-counted object (count at `+4`,
+/// virtual slot `+4` frees it) to the pointer at `slot`: nothing when `new` is already
+/// there; otherwise the old object is released (freed through its vtable slot `+4` when its
+/// count reaches 0), `new` is stored and `new` is counted.
+pub(crate) fn assign_ref_counted(e: &mut Engine, slot: u32, new: u32) {
+    let old = e.mem.u32(slot);
+    if old == new {
+        return;
+    }
+    if old != 0 && interlocked_decrement(e, old.wrapping_add(4)) == 0 {
+        e.vcall(old, 4, &args![]);
+    }
+    e.mem.set_u32(slot, new);
+    if new != 0 {
+        interlocked_increment(e, new.wrapping_add(4));
+    }
+}
+
+/// Releases a fixed-string handle (count at `-8`) unless it is the empty string's.
+pub(crate) fn release_fixed_string(e: &mut Engine, handle: u32) {
+    if handle != e.mem.u32(EMPTY_FIXED_STRING) {
+        interlocked_decrement(e, handle.wrapping_sub(8));
+    }
+}
+
+/// Counts a fixed-string handle (count at `-8`) unless it is the empty string's.
+pub(crate) fn acquire_fixed_string(e: &mut Engine, handle: u32) {
+    if handle != e.mem.u32(EMPTY_FIXED_STRING) {
+        interlocked_increment(e, handle.wrapping_sub(8));
+    }
+}
+
+/// The compiler's initialization of a static fixed string from a literal: when the word at
+/// `slot` is not already the literal's address, stores the handle for the literal there and
+/// releases the old one.
+pub(crate) fn set_literal_fixed_string(e: &mut Engine, slot: u32, literal: u32) {
+    let old = e.mem.u32(slot);
+    if old != literal {
+        let handle = e.call(GET_FIXED_STRING, &args![literal]).u32();
+        e.mem.set_u32(slot, handle);
+        release_fixed_string(e, old);
+    }
+}
+
+/// Test doubles shared by the start-up units' tests (default property objects, static
+/// strings).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    pub(crate) use super::{
+        ALLOCATE, EMPTY_FIXED_STRING, GET_FIXED_STRING, OBJECT_BASE_CONSTRUCTOR,
+    };
+
+    /// The vtable address given to every previous object, and its slot `+4`.
+    pub(crate) const DELETE_SLOT_DOUBLE: u32 = 0x00ee_0004;
+
+    pub(crate) fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// An engine with the start-up globals mapped (`011f4000` to `011f7000`, the empty
+    /// string handle's page) and doubles for the allocation (`00aa13e0` hands out zeroed
+    /// test heap) and the interlocked imports (they count in place and answer the new
+    /// count).
+    pub(crate) fn engine_with_counting() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x3000);
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x0109_b228);
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(OBJECT_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e
+    }
+
+    /// What `run_default_instance` found.
+    pub(crate) struct Instance {
+        pub(crate) engine: Engine,
+        /// The object now held by the global (0 when none).
+        pub(crate) object: u32,
+        /// The object that was held before, a counted object with count 1.
+        pub(crate) previous: u32,
+        /// The objects the previous object's destructor slot was run on.
+        pub(crate) freed: Rc<RefCell<Vec<u32>>>,
+    }
+
+    /// Runs the function at `address` (no arguments) in an engine where `global` holds a
+    /// previous counted object (count 1, vtable slot `+4` a recording double), after
+    /// `setup` has registered the doubles the function needs.
+    pub(crate) fn run_default_instance(
+        address: u32,
+        global: u32,
+        setup: impl FnOnce(&mut Engine),
+    ) -> Instance {
+        let mut e = engine_with_counting();
+        setup(&mut e);
+        let freed: Rc<RefCell<Vec<u32>>> = Rc::default();
+        let log = freed.clone();
+        e.register_double(DELETE_SLOT_DOUBLE, move |_, a| {
+            log.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        e.put_vtable(0x0300_0000, &[0, DELETE_SLOT_DOUBLE]);
+        let previous = e.mem.alloc(0x10);
+        e.mem.set_u32(previous, 0x0300_0000);
+        e.mem.set_u32(previous + 4, 1);
+        e.mem.set_u32(global, previous);
+        e.call(address, &args![]);
+        let object = e.mem.u32(global);
+        Instance {
+            engine: e,
+            object,
+            previous,
+            freed,
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -280,5 +439,70 @@ mod tests {
         assert_eq!(e.call(0x00a8_a5f0, &args![this]).u32(), this);
         assert_eq!(calls_to(&e, SET_START_HOOK).len(), 1);
         assert_eq!(e.mem.u32(CONSTRUCTED_COUNT), 2);
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::test_support::*;
+    use super::*;
+
+    #[test]
+    fn assigning_the_held_object_does_nothing() {
+        let mut e = engine_with_counting();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(0x011f_4a00, object);
+        e.mem.set_u32(object + 4, 5);
+        assign_ref_counted(&mut e, 0x011f_4a00, object);
+        assert_eq!(e.mem.u32(object + 4), 5);
+        assert_eq!(e.mem.u32(0x011f_4a00), object);
+    }
+
+    #[test]
+    fn assigning_releases_the_old_object_and_counts_the_new_one() {
+        let mut e = engine_with_counting();
+        e.put_vtable(0x0300_0000, &[0, DELETE_SLOT_DOUBLE]);
+        e.register(DELETE_SLOT_DOUBLE, |_, _| Ret::default());
+        let old = e.mem.alloc(0x10);
+        e.mem.set_u32(old, 0x0300_0000);
+        e.mem.set_u32(old + 4, 2);
+        let new = e.mem.alloc(0x10);
+        e.mem.set_u32(0x011f_4a00, old);
+        e.call_log = Some(vec![]);
+        assign_ref_counted(&mut e, 0x011f_4a00, new);
+        // Still held elsewhere: not freed.
+        assert_eq!(e.mem.u32(old + 4), 1);
+        assert!(calls_to(&e, DELETE_SLOT_DOUBLE).is_empty());
+        assert_eq!(e.mem.u32(0x011f_4a00), new);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        // The last holder gone: freed through the vtable slot.
+        e.mem.set_u32(new, 0x0300_0000);
+        assign_ref_counted(&mut e, 0x011f_4a00, 0);
+        assert_eq!(e.mem.u32(new + 4), 0);
+        assert_eq!(calls_to(&e, DELETE_SLOT_DOUBLE), vec![vec![new]]);
+        assert_eq!(e.mem.u32(0x011f_4a00), 0);
+    }
+
+    #[test]
+    fn literal_fixed_string_is_set_once_and_the_old_handle_released() {
+        let mut e = engine_with_counting();
+        e.register(GET_FIXED_STRING, |_, a| (a[0] + 0x1000).into_ret());
+        let old = e.mem.alloc(0x20) + 8;
+        e.mem.set_u32(old - 8, 3);
+        e.mem.set_u32(0x011f_4a10, old);
+        e.call_log = Some(vec![]);
+        set_literal_fixed_string(&mut e, 0x011f_4a10, 0x0108_0000);
+        assert_eq!(e.mem.u32(0x011f_4a10), 0x0108_1000);
+        assert_eq!(e.mem.u32(old - 8), 2);
+        assert_eq!(calls_to(&e, GET_FIXED_STRING), vec![vec![0x0108_0000]]);
+        // The word already equals the literal's address: untouched.
+        e.mem.set_u32(0x011f_4a14, 0x0108_0000);
+        set_literal_fixed_string(&mut e, 0x011f_4a14, 0x0108_0000);
+        assert_eq!(calls_to(&e, GET_FIXED_STRING).len(), 1);
+        // An old empty-string handle is not released.
+        let empty = e.mem.u32(EMPTY_FIXED_STRING);
+        e.mem.set_u32(0x011f_4a18, empty);
+        set_literal_fixed_string(&mut e, 0x011f_4a18, 0x0108_0004);
+        assert_eq!(e.mem.u32(0x011f_4a18), 0x0108_1004);
     }
 }
