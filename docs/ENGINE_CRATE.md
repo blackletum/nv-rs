@@ -18,6 +18,11 @@ each function belongs to.
   against 1.4.0.525) at their addresses. Constants, strings, vtables and
   initial globals are therefore the game's own; nothing from the exe is in
   the repository. Tests run without the exe and set what they need.
+  The code section (`.text`) is not mapped (the Steam exe encrypts it): the
+  compiler's `switch` jump tables and byte maps are translated as ordinary
+  `match` arms on the case value (control flow), and the few data-like tables
+  that live there (colours, type names) as `match` arms too. No table is
+  copied into a constant array and none is read from the exe's code.
 - **Functions**: every translation is a typed Rust function and is also
   registered under its exe address in a uniform form (argument words,
   `this` first; see `abi.rs`). `e.call(addr, &args![...])` calls any

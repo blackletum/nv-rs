@@ -251,7 +251,7 @@ pub fn hk_inspect_process_init(e: &mut Engine, this: Ptr) {
 /// number); then the stack words `path` (a pointer to a record whose first word points at an
 /// array of 16-bit path steps) and `start` (the index of the step before the first to use,
 /// the code reads `steps[start + 1]` next). Each step moves on by the current kind (a table
-/// of 32 kinds read from the exe: kinds 1 to 13, 24 and 30 to 32 end the walk and answer the
+/// of 32 kinds: kinds 1 to 13, 24 and 30 to 32 end the walk and answer the
 /// address; kinds 14 to 18 add `step * 16` and become kind 12; kinds 22 and 26 are arrays:
 /// the address becomes the pointer stored there plus `step` times
 /// `hkClassMember::getArrayMemberSize`, and the kind becomes the member's byte at `+0xd`;
@@ -276,7 +276,16 @@ pub fn find_member_item(
         if index > 0x1f {
             return 0;
         }
-        let case = FIND_MEMBER_CASES[index as usize];
+        // The compiler's switch on the member kind less 1 (`0..=0x1f`): the case of each kind.
+        let case = match index {
+            0..=12 | 23 | 29..=31 => 0,
+            13..=17 => 1,
+            18 | 20 | 22 | 26..=28 => 5,
+            19 => 2,
+            21 | 25 => 3,
+            24 => 4,
+            _ => unreachable!(),
+        };
         match case {
             0 => return address,
             1 => {
@@ -315,12 +324,6 @@ pub fn find_member_item(
         }
     }
 }
-
-/// The exe's byte table (`00ddb524`) that maps kind - 1 to the handler: 0 answers the address,
-/// 1 the 16-byte step, 2 and 5 fail, 3 the array step, 4 the struct step.
-const FIND_MEMBER_CASES: [u8; 32] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 5, 2, 5, 3, 5, 0, 4, 3, 5, 5, 5, 0, 0, 0,
-];
 
 // Translated from 00ddb550 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkInspectProcess::removeTopLevelObject` (Xbox PDB), `thiscall`, `RET 4` (`object`):

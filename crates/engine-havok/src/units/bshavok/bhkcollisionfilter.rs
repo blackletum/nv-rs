@@ -58,11 +58,30 @@ enum Component {
 }
 
 /// The case (an index into [`debug_color_components`], 18 for the default) of each layer from
-/// 1 to 31, as the exe's byte table at `00c84720` has it.
-const LAYER_CASE: [u8; 31] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 1, 9, 10, 11, 10, 18, 12, 13, 14, 18, 18, 18, 18, 18, 15, 18, 18,
-    18, 18, 18, 16, 17,
-];
+/// 1 to 31: the compiler's switch on the layer.
+fn layer_case(layer: u32) -> u8 {
+    match layer {
+        1 => 0,
+        2 | 10 => 1,
+        3 => 2,
+        4 => 3,
+        5 => 4,
+        6 => 5,
+        7 => 6,
+        8 => 7,
+        9 => 8,
+        11 => 9,
+        12 | 14 => 10,
+        13 => 11,
+        16 => 12,
+        17 => 13,
+        18 => 14,
+        24 => 15,
+        30 => 16,
+        31 => 17,
+        _ => 18,
+    }
+}
 
 /// The three components of the debug color of case `case` (the jump table at `00c846d4`), or
 /// `None` for the default case.
@@ -186,10 +205,7 @@ fn answer(e: &mut Engine, out: Ptr, first: u32, second: u32) -> Ptr {
 /// copies the three words at `011a9b7c`. Answers `color`.
 pub fn bhk_collision_filter_get_debug_color(e: &mut Engine, filter: u32, color: Ptr) -> Ptr {
     let layer = filter & 0x7f;
-    let case = LAYER_CASE
-        .get(layer.wrapping_sub(1) as usize)
-        .copied()
-        .unwrap_or(18);
+    let case = layer_case(layer);
     match debug_color_components(case) {
         Some(components) => {
             for (index, component) in components.into_iter().enumerate() {
