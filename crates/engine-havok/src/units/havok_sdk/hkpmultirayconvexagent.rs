@@ -281,8 +281,10 @@ pub fn hkp_multi_ray_convex_agent_static_get_penetrations(
 /// `hkpMultiRayConvexAgent::getPenetrations` (Xbox PDB), `(body_a, body_b, input,
 /// collector)`, `RET 0x10`: calls `staticGetPenetrations` (`00d374f0`) with the same four
 /// words.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_multi_ray_convex_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     body_a: Ptr,
     body_b: Ptr,
     input: u32,
@@ -522,10 +524,10 @@ pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points
 /// method with `RET 0x10`, stack words `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
 /// `010ce81c`, a byte 0 at +4 and `a3` at +8; the other three bytes of that word are never
 /// written) and calls `getPenetrations` (`00d37690`) with `(a1, a0, a2, collector)`.
-/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+/// Virtual method: the first word is `this` (`ECX` in the exe), left in `ECX` for the callee.
 pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_penetrations(
     e: &mut Engine,
-    _this: u32,
+    this: u32,
     a0: Ptr,
     a1: Ptr,
     a2: u32,
@@ -536,7 +538,7 @@ pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_penetrations(
         e.mem.set_u32(c + 8, a3);
         e.mem.set_u8(c + 4, 0);
         e.mem.set_u32(c, PENETRATION_COLLECTOR_VTABLE);
-        hkp_multi_ray_convex_agent_get_penetrations(e, a1, a0, a2, collector);
+        hkp_multi_ray_convex_agent_get_penetrations(e, this, a1, a0, a2, collector);
     });
 }
 
@@ -655,7 +657,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d3_7690,
-            hkp_multi_ray_convex_agent_get_penetrations(Ptr, Ptr, u32, Ptr)
+            hkp_multi_ray_convex_agent_get_penetrations(u32, Ptr, Ptr, u32, Ptr)
         ),
         entry!(0x00d3_76b0, fn_00d376b0(Ptr, Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00d3_77d0, fn_00d377d0(Ptr)),
@@ -1083,7 +1085,10 @@ mod tests {
         let (ray_body, target_body) = r.bodies(&TWO_RAYS, 0.5);
         r.set_script(&[Some(([0.0, 0.0, 1.0, 0.0], 0.5)), None]);
         let (collector, seen) = collector_with_snapshot(&mut r);
-        r.e.call(0x00d3_7690, &args![ray_body, target_body, 0u32, collector]);
+        r.e.call(
+            0x00d3_7690,
+            &args![VCALL_THIS, ray_body, target_body, 0u32, collector],
+        );
         assert_eq!(*seen.borrow(), [vec![collector, ray_body, target_body]]);
         assert_eq!(r.casts.borrow().len(), 2);
     }

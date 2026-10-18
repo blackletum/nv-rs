@@ -235,8 +235,10 @@ pub fn hkp_bv_tree_agent_static_linear_cast(
 // Translated from 00d315a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBvTreeAgent::linearCast` (Xbox PDB): forwards its five words to `staticLinearCast`
 /// (`00d30f50`).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_bv_tree_agent_linear_cast(
     e: &mut Engine,
+    _this: u32,
     first: Ptr,
     second: Ptr,
     input: Ptr,
@@ -1390,7 +1392,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d3_15a0,
-            hkp_bv_tree_agent_linear_cast(Ptr, Ptr, Ptr, u32, u32)
+            hkp_bv_tree_agent_linear_cast(u32, Ptr, Ptr, Ptr, u32, u32)
         ),
         entry!(0x00d2_f550, hkp_bv_tree_agent_cleanup(Ptr, u32)),
         entry!(0x00d2_f5a0, hkp_bv_tree_agent_invalidate_tim(Ptr, u32)),
@@ -1438,6 +1440,9 @@ mod movement_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// An engine with the exe's data range and the import page mapped, as the tests run without the exe.
     fn test_engine() -> Engine {
@@ -1650,7 +1655,10 @@ mod movement_tests {
         e.mem.set_u32(second, owner);
         let input = e.mem.alloc(0x100);
         // The allocator the array would be freed through (never needed: inline storage).
-        e.call(0x00d3_15a0, &args![first, second, input, 1u32, 2u32]);
+        e.call(
+            0x00d3_15a0,
+            &args![VCALL_THIS, first, second, input, 1u32, 2u32],
+        );
         assert_eq!(calls(&log, 0x0900_0030).len(), 1);
         assert_eq!(calls(&log, 0x0900_0010).len(), 1);
         assert_eq!(e.mem.u32(stream + 4), records);

@@ -712,7 +712,8 @@ const POST_COLLIDE_JOB: u32 = 0x00d9_31a0;
 const CONSTRAINT_QUERY_SET: u32 = 0x00cf_a6e0;
 const COPY_INTEGRATION_INFO: u32 = 0x00cf_a7d0;
 /// `hkpContinuousSimulation::processAgentNnEntries` (`00d0c9c0`, translated as taking
-/// `(entries, count, input, owner, use_toi_quality)`).
+/// `(this, entries, count, input, owner, use_toi_quality)`; the callers leave their
+/// `this` in `ECX`).
 const CONTINUOUS_PROCESS_ENTRIES: u32 = 0x00d0_c9c0;
 /// The vtable word the post collide job state keeps at `+0x11c`.
 const POST_COLLIDE_STATE_TABLE: u32 = 0x0126_9210;
@@ -1014,7 +1015,7 @@ pub fn process_agent_nn_entries(
     if queue == 0 || count <= e.mem.i32(world + 0xec) {
         e.call(
             CONTINUOUS_PROCESS_ENTRIES,
-            &args![entries, count, input, owner, use_toi_quality],
+            &args![me, entries, count, input, owner, use_toi_quality],
         );
         return;
     }
@@ -1116,7 +1117,7 @@ pub fn process_agent_nn_entries_from_multiple_islands(
             let (count, island) = (e.mem.u32(record + 4), e.mem.u32(record));
             e.call(
                 CONTINUOUS_PROCESS_ENTRIES,
-                &args![entries, count, input, island, use_toi_quality],
+                &args![me, entries, count, input, island, use_toi_quality],
             );
         }
         return;
@@ -1211,7 +1212,7 @@ pub fn process_agent_nn_entries_from_multiple_islands(
         let (count, island) = (e.mem.u32(remembered + 4), e.mem.u32(remembered));
         e.call(
             CONTINUOUS_PROCESS_ENTRIES,
-            &args![entries, count, input, island, 0u32],
+            &args![me, entries, count, input, island, 0u32],
         );
     }
     let router = e.call(MEMORY_ROUTER, &args![]).u32();
@@ -3410,7 +3411,7 @@ mod step_tests {
         let log: Log = j.r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![0x1000_0000u32, 4u32, input, owner, 0x1ffu32]]
+            vec![args![sim, 0x1000_0000u32, 4u32, input, owner, 0x1ffu32]]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
         // A negative count is below the limit too (signed compare).
@@ -3545,7 +3546,7 @@ mod step_tests {
         // The world's own island runs directly, with the low byte of the last word clear.
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![base + 12, 4u32, input, 0x22u32, 0u32]]
+            vec![args![sim, base + 12, 4u32, input, 0x22u32, 0u32]]
         );
         assert_eq!(
             order(
@@ -3583,9 +3584,9 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![base, 3u32, input, first, 0x77u32],
-                args![base + 12, 4u32, input, 0x22u32, 0x77u32],
-                args![base + 28, 0u32, input, third, 0x77u32],
+                args![sim, base, 3u32, input, first, 0x77u32],
+                args![sim, base + 12, 4u32, input, 0x22u32, 0x77u32],
+                args![sim, base + 28, 0u32, input, third, 0x77u32],
             ]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
@@ -3713,7 +3714,7 @@ mod step_tests {
         assert_eq!(e.mem.u32(list), a1);
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![list, 1u32, 0x7777_0000u32, island, 0u32]]
+            vec![args![sim, list, 1u32, 0x7777_0000u32, island, 0u32]]
         );
         // The array the last scan left is given back (2 pairs of words); the list and the flags
         // are on the temporary stack.
@@ -3891,8 +3892,8 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![top, 2u32, integrator, 0x100u32, 0u32],
-                args![top + 8, 1u32, integrator, 0x200u32, 0u32]
+                args![sim, top, 2u32, integrator, 0x100u32, 0u32],
+                args![sim, top + 8, 1u32, integrator, 0x200u32, 0u32]
             ]
         );
         assert_eq!(e.mem.u32(p.r.router), top);

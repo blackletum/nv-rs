@@ -1408,8 +1408,10 @@ pub fn hkp_continuous_simulation_reset_collision_information_for_entities(
 /// virtual slot `0x18` is called with the entry's two collidables, the input
 /// and the output. The compiler's stack probe (`00ec8660`, 0x3094 bytes) is
 /// not modelled.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_continuous_simulation_process_agent_nn_entries(
     e: &mut Engine,
+    _this: u32,
     entries: u32,
     count: i32,
     input: u32,
@@ -4021,7 +4023,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d0c9c0,
-            hkp_continuous_simulation_process_agent_nn_entries(u32, i32, u32, u32, u32)
+            hkp_continuous_simulation_process_agent_nn_entries(u32, u32, i32, u32, u32, u32)
         ),
         entry!(
             0x00d0cb00,
@@ -4161,6 +4163,9 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Calls = Vec<(u32, Vec<u32>)>;
     type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
@@ -5218,7 +5223,10 @@ mod tests {
         });
         let entries = word_array(&mut e, &[entry_a, entry_b], 2);
         let list = e.mem.u32(entries);
-        e.call(0x00d0_c9c0, &args![list, 2i32, input, 0x9999u32, 0u32]);
+        e.call(
+            0x00d0_c9c0,
+            &args![VCALL_THIS, list, 2i32, input, 0x9999u32, 0u32],
+        );
         let processed = processed.borrow().clone();
         assert_eq!(processed.len(), 2);
         let (first_args, quality_info, creation, owner, time, pointer, output) =
@@ -5249,7 +5257,10 @@ mod tests {
         assert_eq!(e.mem.u32(STREAM_RECORDS), PROFILE_TT_NARROW_PHASE_TOI);
         assert_eq!(e.mem.u32(STREAM_RECORDS + 0xc), PROFILE_END);
         // With the time-of-impact quality flag the block at 0x1de0 is used.
-        e.call(0x00d0_c9c0, &args![list, 1i32, input, 0x9999u32, 1u32]);
+        e.call(
+            0x00d0_c9c0,
+            &args![VCALL_THIS, list, 1i32, input, 0x9999u32, 1u32],
+        );
         assert_eq!(e.mem.u32(input + 0x60), dispatcher + 0x1de0);
     }
 
