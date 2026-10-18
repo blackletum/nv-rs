@@ -987,6 +987,28 @@ pub fn vsprintf(e: &mut Engine, dest: Ptr, format: Ptr, va_list: u32) -> i32 {
     out.len() as i32
 }
 
+// Platform: replaces 00ec6bb5 (_vsprintf_s, LIBCMT)
+/// `vsprintf_s(dest, size, format, va_list)` as the 2008 runtime's
+/// `_vsprintf_s_l` does it (release build): a null `dest` or `format`, or a
+/// `size` of 0, is an invalid parameter; text that doesn't fit in `size`
+/// bytes with its terminating zero leaves `dest` empty and is an invalid
+/// parameter ("buffer too small"; the handler ends the program); otherwise
+/// the text and its zero are written and its length returned. The
+/// formatting is [`format_va`]'s.
+pub fn vsprintf_s(e: &mut Engine, dest: Ptr, size: u32, format: Ptr, va_list: u32) -> i32 {
+    if format.is_null() || dest.is_null() || size == 0 {
+        invalid_parameter("vsprintf_s");
+    }
+    let text = e.mem.cstr(format.addr());
+    let out = format_va(e, &text, va_list);
+    if out.len() >= size as usize {
+        e.mem.set_u8(dest.addr(), 0);
+        invalid_parameter("vsprintf_s: buffer too small");
+    }
+    e.mem.set_cstr(dest.addr(), &out);
+    out.len() as i32
+}
+
 /// Copies variable-argument words to game memory and formats them there as
 /// the `va_list` ([`format_va`]).
 fn format_words(e: &mut Engine, format: &[u8], args: &[u32]) -> Vec<u8> {
@@ -2294,6 +2316,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec658f, atexit(Ptr) -> i32),
         (0x00eccd99, doexit_entry as AbiFn),
         entry!(0x00ec6cc4, vsprintf(Ptr, Ptr, u32) -> i32),
+        entry!(0x00ec6bb5, vsprintf_s(Ptr, u32, Ptr, u32) -> i32),
         (0x00ec623a, sprintf_entry as AbiFn),
         (0x00eca38d, snprintf_entry as AbiFn),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
@@ -2743,6 +2766,26 @@ mod tests {
         // A null buffer with a zero count only counts.
         let n = e.call(0x00eca38d, &args![0u32, 0u32, short, 12u32]);
         assert_eq!(n.i32(), 5);
+    }
+
+    #[test]
+    fn vsprintf_s_writes_text_that_fits_and_stops_on_text_that_does_not() {
+        let mut e = Engine::new();
+        let f = cstr(&mut e, b"%s %d");
+        let s = cstr(&mut e, b"level");
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, s.addr());
+        e.mem.set_u32(list + 4, 2);
+        let dest: Ptr = Ptr::new(e.mem.alloc(16));
+        let n = e.call(0x00ec_6bb5, &args![dest, 16u32, f, list]).i32();
+        assert_eq!(n, 7);
+        assert_eq!(e.mem.cstr(dest.addr()), b"level 2");
+        // Seven characters and the zero don't fit in seven bytes.
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00ec_6bb5, &args![dest, 7u32, f, list]);
+        }));
+        assert!(stop.is_err());
+        assert_eq!(e.mem.u8(dest.addr()), 0, "left empty");
     }
 
     #[test]
