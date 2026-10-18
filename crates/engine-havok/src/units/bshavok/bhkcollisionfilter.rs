@@ -370,6 +370,461 @@ pub fn c_filter_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
     }
 }
 
+/// `_memset` (`00ec61c0`, cdecl: destination, byte, size).
+const MEMSET: u32 = 0x00ec_61c0;
+/// `00c827f0` (unnamed in the engine map; cdecl: layer, other layer, enable byte): by its body,
+/// sets (enable nonzero) or clears the bit of each layer in the other layer's mask of the layer
+/// table.
+const LAYER_PAIR_COLLISION: u32 = 0x00c8_27f0;
+/// `bhkCollisionFilter::SetMultiLayerCollision` (engine map name, `00c82870`, cdecl: layer, low
+/// and high words of a layer mask).
+const SET_MULTI_LAYER_COLLISION: u32 = 0x00c8_2870;
+/// The layer table (`01267f20`, 0x158 bytes): two words (a 64-bit mask of layers) per layer, the
+/// low word at `01267f20 + 8 * layer`, the high word 4 bytes after it; `00c827f0` and
+/// `SetMultiLayerCollision` index it by layer. Its size is that of the Xbox PDB's static
+/// `bhkCollisionFilter::iLayerFlagA`.
+const LAYER_FLAGS: u32 = 0x0126_7f20;
+/// The table of 32 words at `01268078` (0x80 bytes, the size of the Xbox PDB's static
+/// `bhkCollisionFilter::iPartFlagA`; that it is that table is unconfirmed).
+const PART_FLAGS: u32 = 0x0126_8078;
+/// The table of 43 words at `01267e70` (0xac bytes, the size of the Xbox PDB's static
+/// `bhkCollisionFilter::iLayerGroupA`; that it is that table is unconfirmed).
+const LAYER_GROUPS: u32 = 0x0126_7e70;
+
+/// What `InitFlags` does to the words of the layer table and of the table at `01268078` between
+/// its `memset`s and its first call, one row per word it stores: (address, the bits it keeps,
+/// the bits it sets); the word becomes `(word & keep) | set`. The exe does this as hundreds of
+/// bitfield operations (loads, `AND`s, `OR`s, stores, in a scheduled order, several stores to a
+/// word); each word's result depends only on its own value after the `memset`s and nothing
+/// else is read or called before the first call, so the rows are the net effect of those
+/// instructions, word by word, in address order. Rows keeping every bit and setting none are
+/// words the exe stores back unchanged (the other half of a bitfield it rewrites).
+const INIT_BITS: [(u32, u32, u32); 96] = [
+    (0x0126_7f20, 0xffdf_ffff, 0),
+    (0x0126_7f24, 0xffff_ffff, 0),
+    (0x0126_7f28, 0xffdb_7fff, 0),
+    (0x0126_7f2c, 0xffff_ffff, 0),
+    (0x0126_7f30, 0xffdb_7fff, 0),
+    (0x0126_7f34, 0xffff_ffff, 0),
+    (0x0126_7f38, 0xffd3_7fff, 0),
+    (0x0126_7f3c, 0xffff_ffff, 0),
+    (0x0126_7f40, 0xffdb_7eff, 0),
+    (0x0126_7f44, 0xffff_ffff, 0),
+    (0x0126_7f48, 0xffdb_7eff, 0),
+    (0x0126_7f4c, 0xffff_ffff, 0),
+    (0x0126_7f50, 0xffd3_7fff, 0),
+    (0x0126_7f54, 0xffff_ffff, 0),
+    (0x0126_7f58, 0xffd3_7fff, 0),
+    (0x0126_7f5c, 0xffff_ffff, 0),
+    (0x0126_7f60, 0x9fc3_7bcf, 0),
+    (0x0126_7f64, 0xffff_ffff, 0),
+    (0x0126_7f68, 0xffdb_7fff, 0),
+    (0x0126_7f6c, 0xffff_ffff, 0),
+    (0x0126_7f70, 0xffdb_7eff, 0),
+    (0x0126_7f74, 0xffff_ffff, 0),
+    (0x0126_7f78, 0xbfc3_7fff, 0x4000_0000),
+    (0x0126_7f7c, 0xffff_ffff, 0),
+    (0x0126_7f80, 0xffd3_7fff, 0),
+    (0x0126_7f84, 0xffff_ffff, 0),
+    (0x0126_7f88, 0xffdb_7fff, 0),
+    (0x0126_7f8c, 0xffff_ffff, 0),
+    (0x0126_7f90, 0xffdb_7fff, 0),
+    (0x0126_7f94, 0xffff_ffff, 0),
+    (0x0126_7f98, 0xcbc0_0001, 0),
+    (0x0126_7f9c, 0xffff_ffff, 0),
+    (0x0126_7fa0, 0xffc3_7fff, 0),
+    (0x0126_7fa4, 0xffff_ffff, 0),
+    (0x0126_7fa8, 0xffdb_7fff, 0),
+    (0x0126_7fac, 0xffff_ffff, 0),
+    (0x0126_7fb0, 0x0be0_0001, 0),
+    (0x0126_7fb4, 0xffff_fc17, 0),
+    (0x0126_7fb8, 0x2bfa_6637, 0),
+    (0x0126_7fbc, 0xffff_fb85, 0),
+    (0x0126_7fc0, 0xfffa_76ff, 0),
+    (0x0126_7fc4, 0xffff_ffdf, 0),
+    (0x0126_7fc8, 0x03dc_0000, 0x4000_0000),
+    (0x0126_7fcc, 0xffff_fc15, 0x0000_0002),
+    (0x0126_7ff0, 0xffd3_7fff, 0),
+    (0x0126_7ff4, 0xffff_ffff, 0),
+    (0x0126_7ff8, 0xffdf_ffff, 0),
+    (0x0126_7ffc, 0xffff_ffff, 0),
+    (0x0126_8000, 0xffd3_7fff, 0),
+    (0x0126_8004, 0xffff_ffff, 0),
+    (0x0126_8008, 0xbfdb_7eff, 0),
+    (0x0126_800c, 0xffff_ffff, 0),
+    (0x0126_8010, 0xdfd3_f6ff, 0x0020_0800),
+    (0x0126_8014, 0xffff_ffff, 0),
+    (0x0126_8018, 0xffd3_ffff, 0),
+    (0x0126_801c, 0xffff_ffff, 0),
+    (0x0126_8028, 0xffd7_ffff, 0x0020_0000),
+    (0x0126_802c, 0xffff_ffff, 0),
+    (0x0126_8038, 0xffd3_ffff, 0),
+    (0x0126_803c, 0xffff_ffff, 0),
+    (0x0126_8040, 0xfff7_ffff, 0),
+    (0x0126_8044, 0xffff_ffff, 0),
+    (0x0126_8048, 0xffc3_ffff, 0),
+    (0x0126_804c, 0xffff_ffff, 0),
+    (0x0126_8050, 0xffd3_ffff, 0),
+    (0x0126_8054, 0xffff_ffff, 0),
+    (0x0126_8058, 0xffdb_ffff, 0),
+    (0x0126_805c, 0xffff_ffff, 0),
+    (0x0126_8060, 0xffdb_ffff, 0),
+    (0x0126_8064, 0xffff_ffff, 0),
+    (0x0126_8068, 0xffdb_ffff, 0),
+    (0x0126_806c, 0xffff_ffff, 0),
+    (0x0126_8070, 0xfff7_ffff, 0),
+    (0x0126_8074, 0xffff_ffff, 0),
+    (0x0126_807c, 0xffbd_cf3f, 0x0042_30c0),
+    (0x0126_8080, 0xfebf_cf3f, 0x0140_30c0),
+    (0x0126_8084, 0xfebf_cf3f, 0x0140_30c0),
+    (0x0126_8088, 0xfebd_cf3f, 0x0142_30c0),
+    (0x0126_808c, 0xffbf_cfff, 0x0040_3000),
+    (0x0126_8090, 0xffbd_86e1, 0x0042_791e),
+    (0x0126_8094, 0xffbe_00e1, 0x0041_ff1e),
+    (0x0126_8098, 0xfeba_0f3f, 0x0145_f0c0),
+    (0x0126_809c, 0xfeba_1f7f, 0x0145_e080),
+    (0x0126_80a0, 0xfebb_1f7f, 0x0144_e080),
+    (0x0126_80a4, 0xffbf_ff3f, 0x0040_00c0),
+    (0x0126_80a8, 0xffbd_be01, 0x0042_41fe),
+    (0x0126_80ac, 0xffba_3801, 0x0045_c7fe),
+    (0x0126_80b0, 0xfebb_c83f, 0x0144_37c0),
+    (0x0126_80b4, 0xfebb_d87f, 0x0144_2780),
+    (0x0126_80b8, 0xfebb_dc7f, 0x0144_2380),
+    (0x0126_80bc, 0xffbf_efad, 0x0040_1052),
+    (0x0126_80c0, 0xffbe_18ff, 0x0041_e700),
+    (0x0126_80c8, 0xffbf_ffff, 0x0040_0000),
+    (0x0126_80cc, 0xffbf_ffff, 0x0040_0000),
+    (0x0126_80d0, 0xffc8_0001, 0x0037_fffe),
+    (0x0126_80d8, 0xfffe_38e3, 0x0001_c71c),
+];
+
+/// The layer pairs (`00c827f0` with enable 0) `InitFlags` clears before setting the pair
+/// (0x21, 0xb) by hand.
+const PAIRS_BEFORE: [(u32, u32); 21] = [
+    (0xf, 0x1e),
+    (0xf, 0x1f),
+    (0xf, 0x23),
+    (0xf, 0x25),
+    (0xf, 0x26),
+    (0xf, 0x27),
+    (0xf, 0x28),
+    (0xf, 0x29),
+    (0x21, 0x1),
+    (0x21, 0x2),
+    (0x21, 0x3),
+    (0x21, 0x1a),
+    (0x21, 0x1c),
+    (0x21, 0x4),
+    (0x21, 0x5),
+    (0x21, 0x6),
+    (0x21, 0x7),
+    (0x21, 0x8),
+    (0x21, 0x1d),
+    (0x21, 0x9),
+    (0x21, 0xa),
+];
+
+/// The layer pairs (`00c827f0` with enable 0) `InitFlags` clears after it.
+const PAIRS_AFTER: [(u32, u32); 251] = [
+    (0x21, 0xc),
+    (0x21, 0xd),
+    (0x21, 0xe),
+    (0x21, 0x21),
+    (0x21, 0x11),
+    (0x21, 0xf),
+    (0x21, 0x10),
+    (0x21, 0x1e),
+    (0x21, 0x1f),
+    (0x21, 0x23),
+    (0x21, 0x25),
+    (0x21, 0x26),
+    (0x21, 0x27),
+    (0x21, 0x28),
+    (0x21, 0x29),
+    (0x23, 0x5),
+    (0x23, 0x7),
+    (0x23, 0xc),
+    (0x23, 0x23),
+    (0x23, 0xb),
+    (0x23, 0x6),
+    (0x24, 0x7),
+    (0x24, 0xc),
+    (0x24, 0xb),
+    (0x25, 0x3),
+    (0x25, 0x1a),
+    (0x25, 0x1c),
+    (0x25, 0x7),
+    (0x25, 0xb),
+    (0x25, 0xc),
+    (0x25, 0x1e),
+    (0x26, 0x1f),
+    (0x26, 0x4),
+    (0x26, 0x5),
+    (0x26, 0x6),
+    (0x26, 0x7),
+    (0x26, 0x8),
+    (0x26, 0x1d),
+    (0x26, 0x1e),
+    (0x26, 0xa),
+    (0x26, 0x23),
+    (0x26, 0xc),
+    (0x26, 0xe),
+    (0x26, 0x10),
+    (0x26, 0x29),
+    (0x26, 0x24),
+    (0x26, 0x25),
+    (0x1f, 0x1f),
+    (0x1f, 0x1),
+    (0x1f, 0x4),
+    (0x1f, 0x5),
+    (0x1f, 0x6),
+    (0x1f, 0x7),
+    (0x1f, 0x8),
+    (0x1f, 0x1d),
+    (0x1f, 0x9),
+    (0x1f, 0xa),
+    (0x1f, 0xb),
+    (0x1f, 0xd),
+    (0x1f, 0xf),
+    (0x1f, 0x11),
+    (0x1f, 0x23),
+    (0x1f, 0x29),
+    (0x1f, 0x24),
+    (0x1f, 0x25),
+    (0x29, 0x3),
+    (0x29, 0x1a),
+    (0x29, 0x1c),
+    (0x29, 0x7),
+    (0x29, 0xb),
+    (0x29, 0x23),
+    (0x29, 0x24),
+    (0x29, 0x25),
+    (0x29, 0x27),
+    (0x29, 0x28),
+    (0x29, 0x26),
+    (0x29, 0x29),
+    (0x6, 0x7),
+    (0x6, 0x10),
+    (0x6, 0x3),
+    (0xc, 0x1),
+    (0xc, 0x2),
+    (0xc, 0x3),
+    (0xc, 0x1a),
+    (0xc, 0x1c),
+    (0xc, 0x9),
+    (0xc, 0xa),
+    (0xc, 0xb),
+    (0xc, 0xc),
+    (0xc, 0xd),
+    (0xc, 0xf),
+    (0xc, 0x10),
+    (0xc, 0x11),
+    (0xc, 0x16),
+    (0xc, 0x20),
+    (0xc, 0x26),
+    (0xc, 0x2a),
+    (0xc, 0x25),
+    (0xc, 0x24),
+    (0xc, 0x29),
+    (0x16, 0x1),
+    (0x16, 0x2),
+    (0x16, 0x3),
+    (0x16, 0x1a),
+    (0x16, 0x4),
+    (0x16, 0x5),
+    (0x16, 0x6),
+    (0x16, 0x7),
+    (0x16, 0x8),
+    (0x16, 0x1d),
+    (0x16, 0x9),
+    (0x16, 0xa),
+    (0x16, 0xb),
+    (0x16, 0xc),
+    (0x16, 0xd),
+    (0x16, 0xe),
+    (0x16, 0xf),
+    (0x16, 0x10),
+    (0x16, 0x11),
+    (0x16, 0x12),
+    (0x16, 0x13),
+    (0x16, 0x14),
+    (0x16, 0x16),
+    (0x16, 0x17),
+    (0x16, 0x19),
+    (0x16, 0x1f),
+    (0x16, 0x20),
+    (0x16, 0x21),
+    (0x16, 0x23),
+    (0x16, 0x24),
+    (0x16, 0x25),
+    (0x16, 0x26),
+    (0x16, 0x29),
+    (0x16, 0x2a),
+    (0x16, 0x1b),
+    (0x16, 0x22),
+    (0x16, 0x0),
+    (0x17, 0x1),
+    (0x17, 0x2),
+    (0x17, 0x3),
+    (0x17, 0x1a),
+    (0x17, 0x1c),
+    (0x17, 0x4),
+    (0x17, 0x5),
+    (0x17, 0x7),
+    (0x17, 0x8),
+    (0x17, 0x1d),
+    (0x17, 0x9),
+    (0x17, 0xa),
+    (0x17, 0xb),
+    (0x17, 0xc),
+    (0x17, 0xd),
+    (0x17, 0xe),
+    (0x17, 0xf),
+    (0x17, 0x10),
+    (0x17, 0x11),
+    (0x17, 0x12),
+    (0x17, 0x13),
+    (0x17, 0x14),
+    (0x17, 0x16),
+    (0x17, 0x17),
+    (0x17, 0x19),
+    (0x17, 0x1e),
+    (0x17, 0x1f),
+    (0x17, 0x20),
+    (0x17, 0x21),
+    (0x17, 0x23),
+    (0x17, 0x24),
+    (0x17, 0x25),
+    (0x17, 0x26),
+    (0x17, 0x29),
+    (0x17, 0x2a),
+    (0x18, 0x1),
+    (0x18, 0x2),
+    (0x18, 0x3),
+    (0x18, 0x1a),
+    (0x18, 0x1c),
+    (0x18, 0x4),
+    (0x18, 0x5),
+    (0x18, 0x7),
+    (0x18, 0x8),
+    (0x18, 0x1d),
+    (0x18, 0x9),
+    (0x18, 0xa),
+    (0x18, 0xb),
+    (0x18, 0xc),
+    (0x18, 0xd),
+    (0x18, 0xe),
+    (0x18, 0xf),
+    (0x18, 0x10),
+    (0x18, 0x11),
+    (0x18, 0x12),
+    (0x18, 0x13),
+    (0x18, 0x14),
+    (0x18, 0x15),
+    (0x18, 0x16),
+    (0x18, 0x17),
+    (0x18, 0x18),
+    (0x18, 0x19),
+    (0x18, 0x1f),
+    (0x18, 0x20),
+    (0x18, 0x21),
+    (0x18, 0x23),
+    (0x18, 0x24),
+    (0x18, 0x25),
+    (0x18, 0x26),
+    (0x18, 0x2a),
+    (0x19, 0x3),
+    (0x19, 0x1a),
+    (0x19, 0x1c),
+    (0x19, 0x6),
+    (0x19, 0x7),
+    (0x19, 0x8),
+    (0x19, 0xc),
+    (0x19, 0xf),
+    (0x19, 0x10),
+    (0x19, 0x12),
+    (0x19, 0x1e),
+    (0x19, 0x1f),
+    (0x19, 0x23),
+    (0x19, 0x24),
+    (0x19, 0x25),
+    (0x19, 0x26),
+    (0x19, 0x2a),
+    (0x19, 0xb),
+    (0x7, 0x7),
+    (0x7, 0x10),
+    (0x7, 0x3),
+    (0x7, 0x1a),
+    (0x7, 0x1c),
+    (0x2a, 0x4),
+    (0x2a, 0x6),
+    (0x2a, 0x5),
+    (0x2a, 0xb),
+    (0x2a, 0x1d),
+    (0x2a, 0x1f),
+    (0x2a, 0x26),
+    (0x2a, 0x23),
+    (0x2a, 0x29),
+    (0x2a, 0x25),
+    (0x1b, 0x13),
+    (0x1b, 0x19),
+    (0x1b, 0x1f),
+    (0x1b, 0x20),
+    (0x1b, 0x21),
+    (0x1b, 0x23),
+    (0x1b, 0x25),
+    (0x1b, 0x2a),
+    (0x1b, 0x5),
+    (0x3, 0x0),
+    (0x3, 0xd),
+];
+
+/// `word |= bits` at `address`.
+fn or_word(e: &mut Engine, address: u32, bits: u32) {
+    let word = e.mem.u32(address);
+    e.mem.set_u32(address, word | bits);
+}
+
+// Translated from 00c828f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCollisionFilter::InitFlags` (Xbox PDB), no arguments (called by `bhkWorld::InitSystem`
+/// at `00c6835a`): fills the table at `01268078` with 0 (0x80 bytes), the layer table at
+/// `01267f20` with 0xff (0x158 bytes) and the table at `01267e70` with 0 (0xac bytes) through
+/// `_memset`; then sets and clears the bits of [`INIT_BITS`]; clears the collision of each
+/// layer pair of [`PAIRS_BEFORE`] through `00c827f0`; sets the pair (0x21, 0xb) itself (bit
+/// 0x800 of layer 0x21's low word, bit 2 of layer 0xb's high word: layer 0x21's high word and
+/// layer 0xb's low word are read before and stored back after, unchanged); clears the pairs of
+/// [`PAIRS_AFTER`]; gives layer 0x22 the mask `0x0000_0000_1000_0004` through
+/// `SetMultiLayerCollision`; and stores 2, 3 and 4 in the words 13, 9 and 11 of the table at
+/// `01267e70`. The exe has no branch: every call and store always happens.
+pub fn bhk_collision_filter_init_flags(e: &mut Engine) {
+    e.call(MEMSET, &args![PART_FLAGS, 0u32, 0x80u32]);
+    e.call(MEMSET, &args![LAYER_FLAGS, 0xffu32, 0x158u32]);
+    e.call(MEMSET, &args![LAYER_GROUPS, 0u32, 0xacu32]);
+    for (address, keep, set) in INIT_BITS {
+        let word = e.mem.u32(address);
+        e.mem.set_u32(address, (word & keep) | set);
+    }
+    for (layer, other) in PAIRS_BEFORE {
+        e.call(LAYER_PAIR_COLLISION, &args![layer, other, 0u32]);
+    }
+    let high_of_0x21 = e.mem.u32(LAYER_FLAGS + 8 * 0x21 + 4);
+    let low_of_0xb = e.mem.u32(LAYER_FLAGS + 8 * 0xb);
+    or_word(e, LAYER_FLAGS + 8 * 0x21, 0x800);
+    or_word(e, LAYER_FLAGS + 8 * 0xb + 4, 2);
+    e.mem.set_u32(LAYER_FLAGS + 8 * 0x21 + 4, high_of_0x21);
+    e.mem.set_u32(LAYER_FLAGS + 8 * 0xb, low_of_0xb);
+    for (layer, other) in PAIRS_AFTER {
+        e.call(LAYER_PAIR_COLLISION, &args![layer, other, 0u32]);
+    }
+    e.call(
+        SET_MULTI_LAYER_COLLISION,
+        &args![0x22u32, 0x1000_0004u32, 0u32],
+    );
+    e.mem.set_u32(LAYER_GROUPS + 4 * 13, 2);
+    e.mem.set_u32(LAYER_GROUPS + 4 * 9, 3);
+    e.mem.set_u32(LAYER_GROUPS + 4 * 11, 4);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -380,6 +835,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c84930, fn_00c84930(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00c84960, fn_00c84960(Ptr, Ptr, u32, Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00c849b0, c_filter_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00c828f0, bhk_collision_filter_init_flags()),
     ]
 }
 
@@ -713,5 +1169,110 @@ mod tests {
         e.call(0x00c8_49b0, &args![filter, array]);
         assert_eq!(calls_to(&e, VIEWER_STRING_OF_INT).len(), 1);
         assert_eq!(e.mem.u16(array + 0xa), 6);
+    }
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The words of each layer pair call, with the low word of layer 0x21 and the high word of
+    /// layer 0xb at that call (the words of the pair `InitFlags` sets by hand).
+    type PairCalls = Rc<RefCell<Vec<(Vec<u32>, u32, u32)>>>;
+
+    /// An engine whose `memset` fills (`fill`) or does nothing, with the layer pair calls
+    /// recorded and `SetMultiLayerCollision` doubled.
+    fn init_flags_engine(fill: bool) -> (Engine, PairCalls) {
+        let mut e = logged_engine();
+        if fill {
+            e.register(MEMSET, |e, a| {
+                for offset in 0..a[2] {
+                    e.mem.set_u8(a[0] + offset, a[1] as u8);
+                }
+                Ret::default()
+            });
+        } else {
+            e.register(MEMSET, |_, _| Ret::default());
+        }
+        let pairs: PairCalls = Rc::default();
+        let seen = Rc::clone(&pairs);
+        e.register_double(LAYER_PAIR_COLLISION, move |e, a| {
+            let low_of_0x21 = e.mem.u32(0x0126_8028);
+            let high_of_0xb = e.mem.u32(0x0126_7f7c);
+            seen.borrow_mut()
+                .push((a.to_vec(), low_of_0x21, high_of_0xb));
+            Ret::default()
+        });
+        e.register(SET_MULTI_LAYER_COLLISION, |_, _| Ret::default());
+        (e, pairs)
+    }
+
+    #[test]
+    fn bhk_collision_filter_init_flags_fills_the_tables_then_sets_the_layer_pairs() {
+        let (mut e, pairs) = init_flags_engine(true);
+        // The word between the table at 01267e70 and the layer table belongs to neither.
+        e.mem.set_u32(0x0126_7f1c, 0x5a5a_5a5a);
+        e.mem.set_u32(LAYER_GROUPS, 7);
+        e.call(0x00c8_28f0, &args![]);
+        assert_eq!(
+            calls_to(&e, MEMSET),
+            vec![
+                vec![PART_FLAGS, 0, 0x80],
+                vec![LAYER_FLAGS, 0xff, 0x158],
+                vec![LAYER_GROUPS, 0, 0xac],
+            ]
+        );
+        // The bits set on the zeroed table at 01268078; its first word is not touched.
+        assert_eq!(e.mem.u32(0x0126_80d0), 0x0037_fffe);
+        assert_eq!(e.mem.u32(0x0126_807c), 0x0042_30c0);
+        assert_eq!(e.mem.u32(PART_FLAGS), 0);
+        // The bits cleared (and set) on the layer table filled with ones.
+        assert_eq!(e.mem.u32(0x0126_7fb8), 0x2bfa_6637);
+        assert_eq!(e.mem.u32(0x0126_7fc8), 0x43dc_0000);
+        assert_eq!(e.mem.u32(0x0126_7fcc), 0xffff_fc17);
+        assert_eq!(e.mem.u32(0x0126_8010), 0xdff3_feff);
+        assert_eq!(e.mem.u32(0x0126_7f24), 0xffff_ffff);
+        assert_eq!(e.mem.u32(0x0126_7f1c), 0x5a5a_5a5a);
+        // The table at 01267e70: zeroed, then words 13, 9 and 11.
+        assert_eq!(e.mem.u32(LAYER_GROUPS), 0);
+        assert_eq!(
+            [13, 9, 11].map(|index| e.mem.u32(LAYER_GROUPS + 4 * index)),
+            [2, 3, 4]
+        );
+        let pairs = pairs.borrow();
+        assert_eq!(pairs.len(), 272);
+        assert!(pairs.iter().all(|pair| pair.0[2] == 0));
+        assert_eq!(pairs[0].0, vec![0xf, 0x1e, 0]);
+        assert_eq!(pairs[20].0, vec![0x21, 0xa, 0]);
+        assert_eq!(pairs[21].0, vec![0x21, 0xc, 0]);
+        assert_eq!(pairs[100].0, vec![6, 3, 0]);
+        assert_eq!(pairs[271].0, vec![3, 0xd, 0]);
+        // SetMultiLayerCollision comes last; nothing else is called.
+        let log = e.call_log.as_ref().unwrap();
+        assert_eq!(log.len(), 1 + 3 + 272 + 1);
+        assert_eq!(
+            log.last().unwrap(),
+            &(SET_MULTI_LAYER_COLLISION, vec![0x22, 0x1000_0004, 0])
+        );
+    }
+
+    #[test]
+    fn bhk_collision_filter_init_flags_keeps_the_bits_its_masks_keep() {
+        let (mut e, pairs) = init_flags_engine(false);
+        e.mem.set_u32(0x0126_8010, 0x1234_5678);
+        e.mem.set_u32(0x0126_80d0, 0x8000_0001);
+        e.mem.set_u32(0x0126_7f24, 0x8765_4321);
+        e.call(0x00c8_28f0, &args![]);
+        assert_eq!(e.mem.u32(0x0126_8010), 0x1230_5e78);
+        assert_eq!(e.mem.u32(0x0126_80d0), 0x8037_ffff);
+        // A word the exe stores back unchanged.
+        assert_eq!(e.mem.u32(0x0126_7f24), 0x8765_4321);
+        // The setup is done before the first pair call; the pair (0x21, 0xb) is set between the
+        // calls for (0x21, 0xa) and (0x21, 0xc).
+        let pairs = pairs.borrow();
+        assert_eq!((pairs[0].1, pairs[0].2), (0x0020_0000, 0));
+        assert_eq!((pairs[20].1, pairs[20].2), (0x0020_0000, 0));
+        assert_eq!((pairs[21].1, pairs[21].2), (0x0020_0800, 2));
+        assert_eq!((pairs[271].1, pairs[271].2), (0x0020_0800, 2));
+        assert_eq!(e.mem.u32(0x0126_8028), 0x0020_0800);
+        assert_eq!(e.mem.u32(0x0126_802c), 0);
     }
 }
