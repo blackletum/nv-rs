@@ -9,14 +9,20 @@
 //! `crates/` and `viewer/` for executable addresses. Each function gets one
 //! status:
 //!
-//! - `translated`: an address in it is cited on a translation marker line
-//!   (ADR-0003: `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`;
-//!   when the marker line itself holds no address, the line above counts).
+//! - `translated`: an address in it is cited on a translation marker line in
+//!   an engine crate (`crates/engine`, `crates/engine-*`; ADR-0003:
+//!   `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`; when the
+//!   marker line itself holds no address, the line above counts). A marker
+//!   elsewhere (the older viewer crates `crates/world`, `crates/physics`, ...)
+//!   does not count: the engine still has to translate that function, so it
+//!   is `traced`. This is the rule of the task queue ([`Func::in_engine`]).
 //! - `static init (table)`: a static initializer, or an `atexit` destructor,
 //!   run from a generated table (`crates/engine-core/data/static_initializers.tsv`,
 //!   `crates/engine-core/data/atexit_destructors.tsv`; research/initgen): engine
 //!   coverage, but not a hand translation.
-//! - `traced`: an address in it is cited anywhere else in Rust.
+//! - `traced`: an address in it is cited anywhere else in Rust, including a
+//!   translation marker outside the engine crates (the viewer describes it,
+//!   the engine still needs it).
 //! - `platform` / `library`: the platform layer stands in for it (operating
 //!   system glue, the Direct3D 9 / D3DX libraries, Xbox system services), or
 //!   it is compiler or runtime-library code (`base_status`). The game's
@@ -245,14 +251,22 @@ impl Func {
         }
     }
 
+    /// Whether a translation marker sits in an engine crate. A marker only in
+    /// another crate (the older viewer crates) does not count as a translation.
+    fn translated_in_engine(&self) -> bool {
+        self.translated.iter().any(|l| in_engine_crate(l))
+    }
+
     fn status(&self) -> &'static str {
-        if !self.translated.is_empty() {
+        if self.translated_in_engine() {
             "translated"
         } else if !self.table.is_empty() {
             TABLE
         } else if !self.replaced.is_empty() {
             "platform"
-        } else if !self.traced.is_empty() {
+        } else if !self.traced.is_empty() || !self.translated.is_empty() {
+            // A translation marker outside the engine crates only describes
+            // the function: `traced`, the engine still needs it.
             "traced"
         } else {
             self.base()
@@ -569,12 +583,14 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     let _ = writeln!(
         s,
         "| Status | Meaning |\n| --- | --- |\n\
-         | translated | cited on a translation marker (ADR-0003) in Rust |\n\
+         | translated | cited on a translation marker (ADR-0003) in an engine crate \
+         (`crates/engine*`) |\n\
          | static init (table) | a static initializer or an `atexit` destructor run \
          from a generated table (`crates/engine-core/data/static_initializers.tsv`, \
          `crates/engine-core/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
-         | traced | cited elsewhere in Rust |\n\
+         | traced | cited elsewhere in Rust, including a translation marker outside the \
+         engine crates (the viewer describes it, the engine still needs it) |\n\
          | platform | the platform layer stands in for it: OS glue, the Direct3D 9 / D3DX \
          libraries, Xbox system services (the renderer is game code, ADR-0007) |\n\
          | library | compiler-generated code, C/C++ runtime, zlib |\n\
@@ -594,7 +610,8 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     let partials: Vec<_> = funcs.iter().filter(|f| f.partial_in_engine()).collect();
     let _ = writeln!(
         s,
-        "\nTranslation totals count markers, not complete behavior. **{}** engine functions\n\
+        "\nTranslation totals count engine-crate markers, not complete behavior; a marker \
+         outside the engine crates counts as `traced`. **{}** engine functions\n\
          have explicit incomplete markers and remain `partial` in the task queue.\n",
         partials.len()
     );
@@ -1122,7 +1139,11 @@ mod tests {
         f.incomplete.insert("crates/engine/src/ai.rs:2".into());
         assert!(!f.in_engine());
         assert_eq!(f.queue_status(), "partial");
-        assert_eq!(f.status(), "translated", "totals still count markers");
+        // The engine marker still counts in the totals even with a gap in the
+        // same crate: `partial` is a task-queue state, the ledger counts
+        // engine markers, not complete behavior. (The marker above is in
+        // `crates/engine`; one only in `crates/world` would be `traced`.)
+        assert_eq!(f.status(), "translated", "totals still count engine markers");
         let report = render(&[f], &[], 0, 1);
         assert!(report.contains("**1** engine functions"));
         assert!(report.contains("| `008c94e0` |"));
@@ -1132,6 +1153,30 @@ mod tests {
         assert_eq!(f.queue_status(), "partial", "a gap needs no fake body");
         f.incomplete.clear();
         assert_eq!(f.queue_status(), "open");
+    }
+
+    #[test]
+    fn only_engine_markers_count_as_translated() {
+        // A marker only in an older viewer crate describes the function but
+        // the engine does not have it: traced, and still not done in the queue.
+        let mut f = func(0x008c_94e0, "fallout/ai");
+        f.translated.insert("crates/world/src/ai.rs:1".into());
+        assert_eq!(f.status(), "traced");
+        assert!(!f.in_engine());
+        assert_eq!(f.queue_status(), "traced");
+        // An engine marker makes it translated, whatever else cites it.
+        f.translated
+            .insert("crates/engine-fallout/src/ai.rs:1".into());
+        assert_eq!(f.status(), "translated");
+        assert_eq!(f.queue_status(), "done");
+        // Old-crate marker plus an old-crate trace: still traced.
+        let mut g = func(0x008c_9500, "fallout/ai");
+        g.traced.insert("viewer/src/x.rs:1".into());
+        g.translated.insert("crates/physics/src/y.rs:1".into());
+        assert_eq!(g.status(), "traced");
+        // The generated table keeps its own status.
+        g.table.insert(format!("{INITIALIZER_TABLE}:2"));
+        assert_eq!(g.status(), TABLE);
     }
 
     fn func(addr: u32, subsystem: &str) -> Func {
