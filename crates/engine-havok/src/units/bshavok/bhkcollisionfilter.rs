@@ -841,6 +841,87 @@ pub fn bhk_collision_filter_init_flags(e: &mut Engine) {
     e.mem.set_u32(LAYER_GROUPS + 4 * 11, 4);
 }
 
+/// The CRT's 64-bit left shift (`00ec7810`, `(value as 64-bit, shift)`).
+const SHIFT_LEFT_64: u32 = 0x00ec_7810;
+/// The size of the layer table in bytes (0x158, 43 layers of 8 bytes).
+const LAYER_FLAGS_SIZE: u32 = 0x158;
+
+/// The address of the layer table's entry of `layer` (`01267f20 + 8 * layer`, 32-bit wrapping
+/// like the exe's address arithmetic).
+fn layer_entry(layer: u32) -> u32 {
+    LAYER_FLAGS.wrapping_add(layer.wrapping_mul(8))
+}
+
+/// The 64-bit mask with the bit of `layer`, through `__allshl` (`1 << layer`, the shift count
+/// being the low byte of the layer).
+fn layer_bit(e: &mut Engine, layer: u32) -> u64 {
+    e.call(SHIFT_LEFT_64, &args![1u64, layer as u8]).u64()
+}
+
+/// Sets (`enable`) or clears the bits `bits` in the mask of `layer` in the layer table.
+fn update_layer_mask(e: &mut Engine, layer: u32, bits: u64, enable: bool) {
+    let entry = layer_entry(layer);
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    let (old_low, old_high) = (e.mem.u32(entry), e.mem.u32(entry.wrapping_add(4)));
+    if enable {
+        e.mem.set_u32(entry, old_low | low);
+        e.mem.set_u32(entry.wrapping_add(4), old_high | high);
+    } else {
+        e.mem.set_u32(entry, old_low & !low);
+        e.mem.set_u32(entry.wrapping_add(4), old_high & !high);
+    }
+}
+
+// Translated from 00c827f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00c827f0` (unnamed in the engine map), cdecl `(layer, other layer, enable byte)`: for the
+/// layer pair, sets (enable byte nonzero) or clears the bit of the other layer in the mask of
+/// the layer and the bit of the layer in the mask of the other layer, in the layer table at
+/// `01267f20`. The bit of the other layer is made first (before the test of the byte), then
+/// the bit of the layer, each through `__allshl`.
+pub fn fn_00c827f0(e: &mut Engine, layer: u32, other_layer: u32, enable: u8) {
+    let enable = enable != 0;
+    let bit_of_other = layer_bit(e, other_layer);
+    update_layer_mask(e, layer, bit_of_other, enable);
+    let bit_of_layer = layer_bit(e, layer);
+    update_layer_mask(e, other_layer, bit_of_layer, enable);
+}
+
+// Translated from 00c82870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCollisionFilter::SetMultiLayerCollision` (engine map name), cdecl `(layer, low word,
+/// high word)`: stores the 64-bit mask (high:low) as the layer's entry of the layer table at
+/// `01267f20`, then for each of the 43 table entries sets the bit of `layer` (made once at the
+/// start through `__allshl`) when the entry's own bit (1 << index) is in the mask and clears
+/// it when not. The entry of the layer itself is part of the loop, so it can change after the
+/// store.
+pub fn bhk_collision_filter_set_multi_layer_collision(
+    e: &mut Engine,
+    layer: u32,
+    low: u32,
+    high: u32,
+) {
+    let bit_of_layer = layer_bit(e, layer);
+    let entry = layer_entry(layer);
+    e.mem.set_u32(entry, low);
+    e.mem.set_u32(entry.wrapping_add(4), high);
+    let mask = u64::from(low) | (u64::from(high) << 32);
+    let mut probe = 1u64;
+    let mut offset = 0u32;
+    while offset < LAYER_FLAGS_SIZE {
+        let target = LAYER_FLAGS + offset;
+        let (old_low, old_high) = (e.mem.u32(target), e.mem.u32(target + 4));
+        let (bit_low, bit_high) = (bit_of_layer as u32, (bit_of_layer >> 32) as u32);
+        if probe & mask == 0 {
+            e.mem.set_u32(target, old_low & !bit_low);
+            e.mem.set_u32(target + 4, old_high & !bit_high);
+        } else {
+            e.mem.set_u32(target, old_low | bit_low);
+            e.mem.set_u32(target + 4, old_high | bit_high);
+        }
+        probe <<= 1;
+        offset += 8;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -851,6 +932,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c84930, fn_00c84930(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00c84960, fn_00c84960(Ptr, Ptr, u32, Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00c849b0, c_filter_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00c827f0, fn_00c827f0(u32, u32, u8)),
+        entry!(
+            0x00c82870,
+            bhk_collision_filter_set_multi_layer_collision(u32, u32, u32)
+        ),
         entry!(0x00c828f0, bhk_collision_filter_init_flags()),
     ]
 }
@@ -1290,5 +1376,104 @@ mod tests {
         assert_eq!((pairs[271].1, pairs[271].2), (0x0020_0800, 2));
         assert_eq!(e.mem.u32(0x0126_8028), 0x0020_0800);
         assert_eq!(e.mem.u32(0x0126_802c), 0);
+    }
+
+    /// `__allshl` (`00ec7810`) is an unplaced unit of `engine-fallout`, which this crate's tests
+    /// do not link: a double (the 64-bit value shifted left by the count; 0 from 64 on).
+    fn allshl_double(e: &mut Engine) {
+        e.register(SHIFT_LEFT_64, |_, a| {
+            let value = u64::from(a[0]) | (u64::from(a[1]) << 32);
+            let count = a[2] as u8;
+            (if count >= 0x40 { 0 } else { value << count }).into_ret()
+        });
+    }
+
+    fn layer_entry_words(e: &Engine, layer: u32) -> [u32; 2] {
+        [
+            e.mem.u32(layer_entry(layer)),
+            e.mem.u32(layer_entry(layer) + 4),
+        ]
+    }
+
+    #[test]
+    fn fn_00c827f0_sets_the_bit_of_each_layer_in_the_mask_of_the_other() {
+        let mut e = logged_engine();
+        allshl_double(&mut e);
+        e.call(0x00c8_27f0, &args![3u32, 0x22u32, 1u32]);
+        // Layer 3 gets the bit of layer 0x22 (bit 2 of the high word); layer 0x22 gets bit 3.
+        assert_eq!(layer_entry_words(&e, 3), [0, 4]);
+        assert_eq!(layer_entry_words(&e, 0x22), [8, 0]);
+        // The bit of the other layer is made first, then the bit of the layer.
+        let shifts = calls_to(&e, SHIFT_LEFT_64);
+        assert_eq!(shifts, vec![vec![1, 0, 0x22], vec![1, 0, 3]]);
+        // Any nonzero low byte enables; the bits already there stay.
+        e.call(0x00c8_27f0, &args![3u32, 0u32, 0x100u32 + 0x80]);
+        assert_eq!(layer_entry_words(&e, 3), [1, 4]);
+        assert_eq!(layer_entry_words(&e, 0), [8, 0]);
+        // The same layer twice sets its own bit in its mask.
+        e.call(0x00c8_27f0, &args![5u32, 5u32, 1u32]);
+        assert_eq!(layer_entry_words(&e, 5), [0x20, 0]);
+        // Only the low byte of the third word is the enable flag.
+        e.call(0x00c8_27f0, &args![6u32, 7u32, 0x100u32]);
+        assert_eq!(layer_entry_words(&e, 6), [0, 0]);
+        assert_eq!(layer_entry_words(&e, 7), [0, 0]);
+    }
+
+    #[test]
+    fn fn_00c827f0_clears_the_bit_of_each_layer_in_the_mask_of_the_other() {
+        let mut e = logged_engine();
+        allshl_double(&mut e);
+        for layer in 0..43 {
+            e.mem.set_u32(layer_entry(layer), 0xffff_ffff);
+            e.mem.set_u32(layer_entry(layer) + 4, 0xffff_ffff);
+        }
+        e.call(0x00c8_27f0, &args![3u32, 0x22u32, 0u32]);
+        assert_eq!(layer_entry_words(&e, 3), [0xffff_ffff, 0xffff_fffb]);
+        assert_eq!(layer_entry_words(&e, 0x22), [0xffff_fff7, 0xffff_ffff]);
+        assert_eq!(layer_entry_words(&e, 4), [0xffff_ffff; 2]);
+        e.call(0x00c8_27f0, &args![5u32, 5u32, 0u32]);
+        assert_eq!(layer_entry_words(&e, 5), [0xffff_ffdf, 0xffff_ffff]);
+    }
+
+    #[test]
+    fn bhk_collision_filter_set_multi_layer_collision_sets_the_layer_in_the_masks_it_names() {
+        let mut e = logged_engine();
+        allshl_double(&mut e);
+        for layer in 0..44 {
+            e.mem.set_u32(layer_entry(layer), 0x0f0f_0f0f);
+            e.mem.set_u32(layer_entry(layer) + 4, 0xf0f0_f0f0);
+        }
+        // The mask names the layers 0, 2 (low word) and 34 (bit 2 of the high word).
+        e.call(0x00c8_2870, &args![7u32, 0b101u32, 4u32]);
+        // The mask is stored, then the bit of layer 7 (0x80) is cleared in the entries of the
+        // layer itself and of the layers outside the mask, and set in the others.
+        assert_eq!(layer_entry_words(&e, 7), [0b101, 4]);
+        assert_eq!(layer_entry_words(&e, 0), [0x0f0f_0f8f, 0xf0f0_f0f0]);
+        assert_eq!(layer_entry_words(&e, 2), [0x0f0f_0f8f, 0xf0f0_f0f0]);
+        assert_eq!(layer_entry_words(&e, 34), [0x0f0f_0f8f, 0xf0f0_f0f0]);
+        assert_eq!(layer_entry_words(&e, 1), [0x0f0f_0f0f, 0xf0f0_f0f0]);
+        assert_eq!(layer_entry_words(&e, 42), [0x0f0f_0f0f, 0xf0f0_f0f0]);
+        // The entry past the table (43 entries) is left alone.
+        assert_eq!(layer_entry_words(&e, 43), [0x0f0f_0f0f, 0xf0f0_f0f0]);
+        // The bit of the layer is made once, before the mask is stored.
+        assert_eq!(calls_to(&e, SHIFT_LEFT_64), vec![vec![1, 0, 7]]);
+    }
+
+    #[test]
+    fn bhk_collision_filter_set_multi_layer_collision_changes_its_own_entry_in_the_loop() {
+        let mut e = logged_engine();
+        allshl_double(&mut e);
+        // Layer 0x22 (bit 2 of the high word) in its own mask: its entry gets its own bit.
+        e.call(0x00c8_2870, &args![0x22u32, 0u32, 4u32]);
+        assert_eq!(layer_entry_words(&e, 0x22), [0, 4]);
+        // An empty mask clears the bit of the layer everywhere.
+        for layer in 0..43 {
+            e.mem.set_u32(layer_entry(layer), 0xffff_ffff);
+            e.mem.set_u32(layer_entry(layer) + 4, 0xffff_ffff);
+        }
+        e.call(0x00c8_2870, &args![1u32, 0u32, 0u32]);
+        assert_eq!(layer_entry_words(&e, 1), [0, 0]);
+        assert_eq!(layer_entry_words(&e, 0), [0xffff_fffd, 0xffff_ffff]);
+        assert_eq!(layer_entry_words(&e, 42), [0xffff_fffd, 0xffff_ffff]);
     }
 }
