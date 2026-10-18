@@ -365,6 +365,11 @@ pub enum KernelObject {
         parameter: u32,
         id: u32,
         suspend_count: u32,
+        /// The thread's x87 control word while it does not run (its FPU
+        /// context): [`crate::x87::DEFAULT_CONTROL_WORD`] for a new thread,
+        /// as measured on the game's AI linear task threads.
+        /// [`run_as_thread`] swaps it in.
+        x87_control_word: u16,
     },
 }
 
@@ -769,11 +774,42 @@ fn create_thread(
         parameter,
         id,
         suspend_count: 1,
+        x87_control_word: crate::x87::DEFAULT_CONTROL_WORD,
     });
     if !id_out.is_null() {
         e.mem.set_u32(id_out.addr(), id);
     }
     handle
+}
+
+/// Runs `f` as the thread `handle` (made by `CreateThread`) as far as the FPU
+/// goes: the thread's x87 control word is loaded for `f` (into the thread
+/// block's word and the FPU register, `crt::set_x87_control_word`), and when
+/// `f` returns the word `f` left is kept in the thread's kernel object and the
+/// running thread's word is loaded again. This is the FPU half of a thread
+/// switch: work the game runs on another thread (the AI linear task threads
+/// run the Havok step at 53-bit precision while the main thread runs at
+/// 24-bit) runs with that thread's precision. The rest of the thread block is
+/// the main thread's (one block). Panics when `handle` is not a thread.
+pub fn run_as_thread<R>(e: &mut Engine, handle: u32, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let theirs = match e.kernel.objects.get(&handle) {
+        Some(KernelObject::Thread {
+            x87_control_word, ..
+        }) => *x87_control_word,
+        _ => panic!("run_as_thread: handle {handle:#x} is not a thread"),
+    };
+    let ours = crate::units::crt::x87_control_word(e);
+    crate::units::crt::set_x87_control_word(e, theirs);
+    let result = f(e);
+    let left = crate::units::crt::x87_control_word(e);
+    if let Some(KernelObject::Thread {
+        x87_control_word, ..
+    }) = e.kernel.objects.get_mut(&handle)
+    {
+        *x87_control_word = left;
+    }
+    crate::units::crt::set_x87_control_word(e, ours);
+    result
 }
 
 // Platform: replaces KERNEL32.DLL ResumeThread (import)
@@ -1208,7 +1244,8 @@ mod tests {
                 start: 0x00aa_64d0,
                 parameter: 0x4444,
                 id: MAIN_THREAD_ID + 1,
-                suspend_count: 1
+                suspend_count: 1,
+                x87_control_word: 0x027f,
             })
         );
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[t, -1i32 as u32]), 1);
@@ -1219,6 +1256,38 @@ mod tests {
         // A thread never runs, so it is never signalled.
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 10]), WAIT_TIMEOUT);
         assert_eq!(call(&mut e, CLOSE_HANDLE, &[t]), 1);
+    }
+
+    #[test]
+    fn a_thread_runs_with_its_own_control_word() {
+        let mut e = kernel_engine();
+        let t = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00aa_64d0, 0x4444, CREATE_SUSPENDED, 0],
+        );
+        // The main thread at 24-bit precision, the new thread at its default.
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        let one_third = |_: &mut Engine| crate::x87::x87_div(1.0, 3.0);
+        assert_eq!(one_third(&mut e), f64::from(1.0f32 / 3.0));
+        let (word, value) = run_as_thread(&mut e, t, |e| {
+            let word = crate::units::crt::x87_control_word(e);
+            let value = one_third(e);
+            // The thread changes its own word (round down).
+            crate::units::crt::ctrlfp(e, 0x0400, 0x0c00);
+            (word, value)
+        });
+        assert_eq!(word, 0x027f);
+        assert_eq!(value, 1.0 / 3.0);
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x007f);
+        assert_eq!(crate::x87::control_word(), 0x007f);
+        assert!(matches!(
+            e.kernel.object(t),
+            Some(KernelObject::Thread {
+                x87_control_word: 0x067f,
+                ..
+            })
+        ));
     }
 
     #[test]
