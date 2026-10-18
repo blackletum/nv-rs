@@ -47,9 +47,17 @@ pub fn fn_0044ed20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 0044e330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers a new thread-local storage index: `TlsAlloc` (KERNEL32 import slot `00fdf048`). The
+/// process lists' start-up initializer `00fa9890` reaches it. The engine map has no name for it.
+pub fn fn_0044e330(e: &mut Engine) -> u32 {
+    e.call(0x00fd_f048, &args![]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044e330, fn_0044e330() -> u32),
         entry!(
             0x0044e120,
             fn_0044e120(Ptr, u32, u32, u32, u32) -> u32
@@ -127,5 +135,12 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    #[test]
+    fn the_tls_index_comes_from_tls_alloc() {
+        let mut e = Engine::new();
+        e.register(0x00fd_f048, |_, _| 9u32.into_ret());
+        assert_eq!(e.call(0x0044_e330, &args![]).u32(), 9);
     }
 }

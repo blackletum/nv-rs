@@ -33,9 +33,30 @@ pub fn fn_00d2c8a0(e: &mut Engine) -> u32 {
     RETURNED_ADDRESS_010CE740
 }
 
+/// The object's virtual table (`010cc2fc`) and the constructor of its member at `+0x14`
+/// (`00cb0a70`, `thiscall`, one word).
+const VTABLE_00D2C7E0: u32 = 0x010c_c2fc;
+const MEMBER_CONSTRUCTOR_00CB0A70: u32 = 0x00cb_0a70;
+
+// Translated from 00d2c7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor (`thiscall`, `RET 4`; the engine map has no name for it; `00d2c8a0` builds one
+/// on its stack for a Havok type info's start-up initializer `00fbeb00`): stores the virtual
+/// table `010cc2fc` and constructs the member at `+0x14` with the stack word (`00cb0a70`).
+/// Answers `this`.
+// Translation incomplete: 00d2c7e0 - FS:[0] exception frame (handler 00f34868) not translated.
+pub fn fn_00d2c7e0(e: &mut Engine, this: Ptr, word: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_00D2C7E0);
+    e.call(MEMBER_CONSTRUCTOR_00CB0A70, &args![base + 0x14, word]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d2_c8a0, fn_00d2c8a0() -> u32)]
+    vec![
+        entry!(0x00d2c7e0, fn_00d2c7e0(Ptr, u32) -> Ptr),
+        entry!(0x00d2_c8a0, fn_00d2c8a0() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -72,5 +93,24 @@ mod static_init_callee_tests {
             calls_to(&mut e, SECURITY_CHECK_COOKIE),
             vec![vec![0xdead_beef]]
         );
+    }
+
+    #[test]
+    fn the_constructor_stores_its_table_and_builds_its_member() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x40);
+        e.register(MEMBER_CONSTRUCTOR_00CB0A70, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d2_c7e0, &args![0x1000u32, 0x77u32]).u32(),
+            0x1000
+        );
+        assert_eq!(e.mem.u32(0x1000), VTABLE_00D2C7E0);
+        let log = e.call_log.take().unwrap();
+        let member: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == MEMBER_CONSTRUCTOR_00CB0A70)
+            .collect();
+        assert_eq!(member[0].1, [0x1014, 0x77]);
     }
 }
