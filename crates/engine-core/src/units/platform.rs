@@ -399,6 +399,10 @@ pub struct Kernel {
     tls_allocated: Vec<bool>,
     /// The values `TlsSetValue` stored, by (thread id, index).
     tls_values: std::collections::BTreeMap<(u32, u32), u32>,
+    /// The process's current directory (`GetCurrentDirectoryA`), in the
+    /// game's ANSI form; `Engine::with_exe` sets it to the executable's
+    /// folder, where Steam starts the game.
+    pub current_directory: Vec<u8>,
 }
 
 impl Kernel {
@@ -958,6 +962,21 @@ fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
     1
 }
 
+// Platform: replaces KERNEL32.DLL GetCurrentDirectoryA (import)
+/// `GetCurrentDirectoryA(size, buffer)`: with room for the directory and its
+/// zero, copies them and returns the length without the zero; otherwise
+/// leaves the buffer and returns the size needed, zero included (as Windows
+/// does).
+fn get_current_directory_a(e: &mut Engine, size: u32, buffer: Ptr) -> u32 {
+    let directory = e.kernel.current_directory.clone();
+    let needed = directory.len() as u32 + 1;
+    if size < needed || buffer.is_null() {
+        return needed;
+    }
+    e.mem.set_cstr(buffer.addr(), &directory);
+    directory.len() as u32
+}
+
 /// `GetCurrentProcess`'s pseudo handle.
 pub const CURRENT_PROCESS: u32 = 0xffff_ffff;
 
@@ -1149,6 +1168,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, get_current_process() -> u32).1,
         ),
         (k, "GetSystemInfo", entry!(0, get_system_info(Ptr)).1),
+        (
+            k,
+            "GetCurrentDirectoryA",
+            entry!(0, get_current_directory_a(u32, Ptr) -> u32).1,
+        ),
     ]
 }
 
@@ -1303,6 +1327,19 @@ mod tests {
         assert_eq!(tls_alloc(&mut e), 0);
         assert_eq!(tls_get_value(&mut e, 0), 0);
         assert_eq!(tls_get_value(&mut e, b), 0x1234);
+    }
+
+    #[test]
+    fn the_current_directory_is_copied_when_it_fits() {
+        let mut e = Engine::new();
+        e.kernel.current_directory = b"C:\\Games\\FNV".to_vec();
+        let buffer = e.mem.alloc(0x20);
+        e.mem.set_u8(buffer, 0x55);
+        // Too small: the size needed, the buffer untouched.
+        assert_eq!(get_current_directory_a(&mut e, 5, Ptr::new(buffer)), 13);
+        assert_eq!(e.mem.u8(buffer), 0x55);
+        assert_eq!(get_current_directory_a(&mut e, 0x20, Ptr::new(buffer)), 12);
+        assert_eq!(e.mem.cstr(buffer), b"C:\\Games\\FNV");
     }
 
     #[test]

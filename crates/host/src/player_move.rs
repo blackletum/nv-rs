@@ -295,6 +295,12 @@ impl PlayerMovement {
             },
         )));
         e.call_stack.clear();
+        // `NV_MOVE_TRACE=FILE`: the calls a stopped run returned from, last
+        // first-to-last, appended to FILE (a diagnostic).
+        let trace_file = std::env::var_os("NV_MOVE_TRACE");
+        if trace_file.is_some() {
+            e.trace = Some(Default::default());
+        }
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
@@ -335,6 +341,22 @@ impl PlayerMovement {
         if let Err(why) = &out {
             if !why.starts_with("open function") {
                 *self.stops.entry((stage, why.clone())).or_default() += 1;
+            }
+        }
+        let trace = e.trace.take();
+        if let (Some(path), Some(trace), Err(why)) = (trace_file, trace, &out) {
+            let mut text = format!("== {stage}: {why}\n");
+            for (addr, args, eax) in trace {
+                let words: Vec<String> = args.iter().map(|w| format!("{w:08x}")).collect();
+                let _ = writeln!(text, "{addr:08x}({}) -> {eax:08x}", words.join(","));
+            }
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = file.write_all(text.as_bytes());
             }
         }
         // In a probe run a miss doesn't stop the run, so the stages after it

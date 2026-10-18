@@ -72,7 +72,15 @@ pub struct Engine {
     /// ([`OpenHandler`]). The host uses it to record which addresses a run
     /// of the game's code needs, and from where.
     pub on_open: Option<OpenHandler>,
+    /// When `Some`, every call that returns through [`Engine::call`] is
+    /// recorded as (address, argument words, `EAX`), in the order they
+    /// return, keeping the last [`TRACE_KEEP`]: a diagnostic of where a run
+    /// went wrong before it stopped (the host's `NV_MOVE_TRACE`).
+    pub trace: Option<std::collections::VecDeque<(u32, Vec<u32>, u32)>>,
 }
+
+/// How many returned calls [`Engine::trace`] keeps.
+pub const TRACE_KEEP: usize = 4000;
 
 impl Default for Engine {
     fn default() -> Self {
@@ -113,6 +121,7 @@ impl Engine {
             kernel: Default::default(),
             call_stack: Vec::new(),
             on_open: None,
+            trace: None,
         }
     }
 
@@ -123,6 +132,12 @@ impl Engine {
         crate::exe::map_data_sections(&mut e.mem, exe)?;
         let file = std::fs::read(exe).map_err(|err| format!("{}: {err}", exe.display()))?;
         e.register_imports(&crate::exe::imports(&file)?);
+        // The process starts in the executable's folder (where Steam starts
+        // the game): `GetCurrentDirectoryA` reports it.
+        if let Some(folder) = exe.parent() {
+            let folder = folder.to_string_lossy().replace('/', "\\");
+            e.kernel.current_directory = folder.into_bytes();
+        }
         Ok(e)
     }
 
@@ -221,6 +236,12 @@ impl Engine {
             Callable::Double(d) => (d.borrow_mut())(self, args),
         };
         self.call_stack.pop();
+        if let Some(trace) = &mut self.trace {
+            if trace.len() == TRACE_KEEP {
+                trace.pop_front();
+            }
+            trace.push_back((addr, args.to_vec(), ret.eax));
+        }
         ret
     }
 
