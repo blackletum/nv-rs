@@ -63,10 +63,16 @@ batch is merged or listed below; the next account continues from here.
   runs on our own Direct3D 9 layer on wgpu, with the game's shaders
   converted at load time. Settle the x87 question below first; Bevy stays
   the development viewer until the new path matches.
-- **x87 precision.** The engine models x87 in 53-bit precision. Direct3D 9
-  switches the FPU to 24-bit unless the device is created with
-  `D3DCREATE_FPU_PRESERVE`. Check the exe's CreateDevice flags and the game
-  thread's control word: it changes x87 results everywhere.
+- **x87 precision: answered.** The game creates its device without
+  `D3DCREATE_FPU_PRESERVE` (00e72e60 adds it only for renderer flag 0x40;
+  the exe passes 0x29). Measured: the main thread runs at 0x027F until
+  00e72e60, then 0x007F (24-bit) for the rest of the run; the AI linear task
+  threads (Havok step) stay at 0x027F. The engine keeps a control word per
+  thread, `crate::x87` rounds to its precision, and
+  `platform::direct3d_device_created` switches the main thread (the host
+  calls it until 00e72e60 is translated). Translations on the main thread's
+  path still compute at 53-bit until they use the x87 helpers
+  (docs/ENGINE_CRATE.md, "x87 precision").
 - **SSE flush-to-zero.** Havok's job worker thread (00d2cfb0) sets the
   MXCSR flush-to-zero bit, so SSE results on Havok threads flush
   denormals. The engine does not model MXCSR yet (00d2cfb0 is marked

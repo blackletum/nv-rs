@@ -812,6 +812,52 @@ pub fn run_as_thread<R>(e: &mut Engine, handle: u32, f: impl FnOnce(&mut Engine)
     result
 }
 
+// Direct3D 9 and the FPU. Direct3D is the platform layer's (ADR-0007); what its
+// device creation does to the calling thread's FPU is behaviour the game's
+// results depend on, so it is kept here.
+
+/// `D3DCREATE_FPU_PRESERVE`: the `IDirect3D9::CreateDevice` behaviour flag
+/// that leaves the calling thread's FPU state alone.
+pub const D3DCREATE_FPU_PRESERVE: u32 = 0x2;
+/// The x87 control word Direct3D 9 leaves on the thread that creates a device
+/// without `D3DCREATE_FPU_PRESERVE`: 24-bit precision, round to nearest, all
+/// exceptions masked (measured, see [`direct3d_device_created`]).
+pub const DIRECT3D_CONTROL_WORD: u16 = 0x007f;
+
+// Platform: replaces what IDirect3D9::CreateDevice (vtable +0x40) and
+// IDirect3D9Ex::CreateDeviceEx (vtable +0x50) do to the calling thread's FPU
+/// The FPU side of creating a Direct3D 9 device on the running thread with the
+/// behaviour flags `behavior_flags`: without `D3DCREATE_FPU_PRESERVE` the
+/// thread's x87 control word becomes [`DIRECT3D_CONTROL_WORD`] (24-bit
+/// precision) and stays so; with it nothing changes.
+///
+/// The game creates its device in `NiDX9Renderer::Initialize` (`00e72e60`,
+/// called by `NiDX9Renderer::Create` `00e76210` from the game's start-up
+/// `004daa4c`, on the main thread): `CreateDevice` through the `IDirect3D9`
+/// vtable at `00e73202` and `00e732e9` (`CreateDeviceEx` at `00e731c9` and
+/// `00e732c0` when `0126f0d0` is set), with the behaviour flags of the
+/// renderer's `+0x5cc`. `00e69510` puts the vertex-processing flag there, and
+/// `00e72e60` adds `D3DCREATE_FPU_PRESERVE` only when its renderer flags (its
+/// fourth argument, from `004dc220`: the global `01189478`, 0x29 in the exe,
+/// ORed with 4 on one start-up path) have 0x40, which they never do.
+/// Measured with nv-probe `fpu=1` (FalloutNV.exe 1.4.0.525, a walk in Doc
+/// Mitchell's house): the main thread enters `00e72e60` with `0x027F` and
+/// leaves it with `0x007F`, and keeps `0x007F` for the rest of the run
+/// (`Main::OnIdle` `0086e650`, the player's mover `009e9e50`, the character
+/// controller `00c73170`); the AI linear task threads, which run the Havok
+/// step, keep `0x027F`.
+///
+/// When `00e72e60` is translated, the platform's Direct3D stand-in for those
+/// two vtable slots calls this. Until then the host calls it, with the game's
+/// flags (no `D3DCREATE_FPU_PRESERVE`), on the main thread at the point it
+/// creates its own device, before the first frame: everything the game runs
+/// after its renderer start-up runs at 24-bit precision on that thread.
+pub fn direct3d_device_created(e: &mut Engine, behavior_flags: u32) {
+    if behavior_flags & D3DCREATE_FPU_PRESERVE == 0 {
+        crate::units::crt::set_x87_control_word(e, DIRECT3D_CONTROL_WORD);
+    }
+}
+
 // Platform: replaces KERNEL32.DLL ResumeThread (import)
 /// Lowers a thread's suspend count and returns the previous one. Bringing
 /// it to 0 would start the thread running, which stops the engine. The
@@ -1256,6 +1302,27 @@ mod tests {
         // A thread never runs, so it is never signalled.
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 10]), WAIT_TIMEOUT);
         assert_eq!(call(&mut e, CLOSE_HANDLE, &[t]), 1);
+    }
+
+    #[test]
+    fn creating_the_device_without_fpu_preserve_sets_24_bit_precision() {
+        let mut e = Engine::new();
+        // The game's flags keep the FPU state only with FPU_PRESERVE.
+        direct3d_device_created(&mut e, 0x40 | 0x4 | D3DCREATE_FPU_PRESERVE);
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x027f);
+        assert_eq!(
+            crate::x87::x87_add(1.0, 2f64.powi(-30)),
+            1.0 + 2f64.powi(-30)
+        );
+        direct3d_device_created(&mut e, 0x40 | 0x4);
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x007f);
+        assert_eq!(crate::x87::control_word(), 0x007f);
+        assert_eq!(crate::x87::x87_add(1.0, 2f64.powi(-30)), 1.0);
+        // A new engine is a new main thread again.
+        drop(e);
+        let mut e = Engine::new();
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x027f);
+        assert_eq!(crate::x87::control_word(), 0x027f);
     }
 
     #[test]
