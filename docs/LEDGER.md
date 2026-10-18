@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 27430 | 41.4% |
-| static init (table) | 20552 | 31.0% |
-| traced | 4162 | 6.3% |
+| translated | 27444 | 39.5% |
+| static init (table) | 21726 | 31.3% |
+| traced | 4327 | 6.2% |
 | platform | 244 | 0.4% |
-| library | 603 | 0.9% |
-| open | 13268 | 20.0% |
-| **all** | **66259** | |
+| library | 968 | 1.4% |
+| open | 14766 | 21.3% |
+| **all** | **69475** | |
 
-Translation totals count engine-crate markers, not complete behavior; a marker outside the engine crates counts as `traced`. **2340** engine functions
+Translation totals count engine-crate markers, not complete behavior; a marker outside the engine crates counts as `traced`. **2343** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -937,6 +937,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008d66b0` | `crates/engine-fallout/src/units/fallout_ai/gunwobble.rs:15` |
 | `00906160` | `crates/engine-fallout/src/units/fallout_ai/lipsyncbackgroundmanager.rs:17` |
 | `00906dc0` | `crates/engine-fallout/src/units/fallout_ai/run_009066d0.rs:8` |
+| `00906fe0` | `crates/engine-fallout/src/units/fallout_ai/lowprocess.rs:160` |
 | `00913a20` | `crates/engine-fallout/src/units/fallout_ai/middlehighprocess.rs:927` |
 | `00913fe0` | `crates/engine-fallout/src/units/fallout_ai/middlehighprocess.rs:1198` |
 | `00914610` | `crates/engine-fallout/src/units/fallout_ai/middlehighprocess.rs:1361` |
@@ -985,6 +986,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00935920` | `crates/engine-fallout/src/units/fallout_ai/mobileobject.rs:3541` |
 | `00935f60` | `crates/engine-fallout/src/units/fallout_ai/mobileobject.rs:3822` |
 | `00937030` | `crates/engine-fallout/src/units/fallout_ai/run_00936ef0.rs:116` |
+| `00937160` | `crates/engine-fallout/src/units/fallout_ai/modifierlist.rs:50` |
 | `0096a850` | `crates/engine-fallout/src/units/fallout_ai/run_0096a850.rs:8` |
 | `0097d3a0` | `crates/engine-fallout/src/units/fallout_ai/combatcontroller.rs:356` |
 | `0097d770` | `crates/engine-fallout/src/units/fallout_ai/combatcontroller.rs:479` |
@@ -2262,6 +2264,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec8660` | `crates/engine-fallout/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 | `00eccca9` | `crates/engine-core/src/units/crt.rs:1255` |
 | `00eccd99` | `crates/engine-core/src/units/crt.rs:1255` |
+| `00ece104` | `crates/engine-fallout/src/units/unplaced/run_00d87940.rs:17` |
 | `00ed159c` | `crates/engine-core/src/units/crt.rs:2210` |
 | `00ed282b` | `crates/engine-core/src/units/crt.rs:1696` |
 | `00edde5f` | `crates/engine-core/src/units/crt.rs:1255` |
@@ -2385,15 +2388,15 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00fde450` | `crates/engine-fallout/src/units/unplaced/atexit_irregular.rs:1655` |
 | `00fde4d0` | `crates/engine-fallout/src/units/unplaced/atexit_irregular.rs:1662` |
 
-Game code (functions whose subsystem or unit is neither platform nor library): **43968** functions, of which 30694 (69.8%) are translated, run from the static-initializer table, or traced.
+Game code (functions whose subsystem or unit is neither platform nor library): **45631** functions, of which 30859 (67.6%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 74997 distinct `.text` addresses; 1677 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 75002 distinct `.text` addresses; 326 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
 | Tier | Functions |
 | --- | ---: |
-| (none) | 48278 |
+| (none) | 51494 |
 | cg | 7317 |
 | fid | 377 |
 | str | 1716 |
@@ -2405,6 +2408,7 @@ How the subsystem was found:
 | --- | ---: |
 | atexit | 5020 |
 | calls | 1275 |
+| gap | 3216 |
 | init | 16315 |
 | name | 17499 |
 | none | 2353 |
@@ -2418,24 +2422,24 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 
 | Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| compiler: static init/exit | 21335 | 529 | 102 | 735 | 20552 | 7 | 0 | 41 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7792 | 0 | 872 | 0 | 0 | 1806 | 82.8% |
-| Havok SDK | 6591 | 1555 | 3499 | 6542 | 0 | 49 | 0 | 0 | 0 | 100.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 3450 | 0 | 453 | 0 | 0 | 946 | 80.5% |
-| fallout/interface | 2645 | 991 | 1247 | 1299 | 0 | 629 | 0 | 0 | 717 | 72.9% |
-| (unplaced) | 2353 | 470 | 0 | 533 | 0 | 474 | 4 | 0 | 1342 | 42.8% |
+| compiler: static init/exit | 22771 | 578 | 102 | 735 | 21726 | 18 | 0 | 292 | 0 | - |
+| fallout shared | 10479 | 2069 | 3149 | 7796 | 0 | 875 | 0 | 0 | 1808 | 82.7% |
+| Havok SDK | 7377 | 1573 | 3499 | 6543 | 0 | 176 | 0 | 0 | 658 | 91.1% |
+| fallout/ai | 4849 | 1475 | 1888 | 3453 | 0 | 453 | 0 | 0 | 943 | 80.6% |
+| fallout/interface | 2645 | 991 | 1247 | 1300 | 0 | 628 | 0 | 0 | 717 | 72.9% |
+| (unplaced) | 2430 | 475 | 0 | 533 | 0 | 480 | 4 | 0 | 1413 | 41.7% |
+| BSShader | 1987 | 679 | 350 | 7 | 0 | 174 | 0 | 0 | 1806 | 9.1% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 1211 | 0 | 160 | 0 | 0 | 417 | 76.7% |
-| NiMain | 1619 | 261 | 1134 | 369 | 0 | 196 | 0 | 0 | 1054 | 34.9% |
-| BSHavok | 1615 | 316 | 1134 | 1598 | 0 | 16 | 0 | 0 | 1 | 99.9% |
-| BSShader | 1548 | 608 | 350 | 7 | 0 | 169 | 0 | 0 | 1372 | 11.4% |
-| NiAnimation | 1279 | 171 | 903 | 312 | 0 | 90 | 0 | 0 | 877 | 31.4% |
+| NiMain | 1722 | 273 | 1134 | 371 | 0 | 198 | 0 | 0 | 1153 | 33.0% |
+| BSHavok | 1634 | 317 | 1134 | 1600 | 0 | 15 | 0 | 0 | 19 | 98.8% |
+| NiAnimation | 1413 | 184 | 903 | 312 | 0 | 97 | 0 | 0 | 1004 | 28.9% |
 | fallout/misc | 1045 | 171 | 353 | 766 | 0 | 71 | 0 | 0 | 208 | 80.1% |
 | BSMain | 991 | 192 | 478 | 361 | 0 | 82 | 0 | 0 | 548 | 44.7% |
-| NiXenonRenderer | 965 | 172 | 298 | 7 | 0 | 33 | 1 | 0 | 924 | 4.1% |
+| NiXenonRenderer | 980 | 175 | 298 | 7 | 0 | 34 | 1 | 0 | 938 | 4.2% |
+| LIBCMT | 797 | 128 | 503 | 18 | 0 | 77 | 42 | 660 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 717 | 0 | 12 | 0 | 0 | 3 | 99.6% |
 | fallout/magic | 705 | 162 | 378 | 73 | 0 | 127 | 0 | 0 | 505 | 28.4% |
-| LIBCMT | 682 | 124 | 503 | 18 | 0 | 74 | 42 | 548 | 0 | - |
-| NiParticle | 649 | 89 | 540 | 138 | 0 | 94 | 0 | 0 | 417 | 35.7% |
+| NiParticle | 704 | 92 | 540 | 138 | 0 | 94 | 0 | 0 | 472 | 33.0% |
 | fallout shared/havok | 478 | 60 | 110 | 261 | 0 | 73 | 0 | 0 | 144 | 69.9% |
 | FaceGen | 474 | 164 | 51 | 1 | 0 | 20 | 0 | 0 | 453 | 4.4% |
 | fallout shared/facegen | 433 | 63 | 91 | 27 | 0 | 77 | 0 | 0 | 329 | 24.0% |
@@ -2443,7 +2447,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSAudio | 304 | 75 | 141 | 244 | 0 | 9 | 0 | 0 | 51 | 83.2% |
 | fallout shared/magic | 296 | 43 | 83 | 167 | 0 | 52 | 0 | 0 | 77 | 74.0% |
 | BSSystem | 276 | 54 | 37 | 1 | 0 | 52 | 70 | 0 | 153 | - |
-| NiCollision | 215 | 104 | 115 | 4 | 0 | 6 | 0 | 0 | 205 | 4.7% |
+| NiCollision | 238 | 125 | 115 | 4 | 0 | 8 | 0 | 0 | 226 | 5.0% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 68 | 0 | 28 | 0 | 0 | 108 | 47.1% |
 | BSCore | 197 | 22 | 45 | 107 | 0 | 16 | 2 | 0 | 72 | 62.4% |
 | fallout/audio | 190 | 55 | 49 | 70 | 0 | 39 | 0 | 0 | 81 | 57.4% |
@@ -2451,11 +2455,11 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/region system | 159 | 26 | 74 | 45 | 0 | 25 | 0 | 0 | 89 | 44.0% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 51 | 0 | 25 | 0 | 0 | 73 | 51.0% |
 | fallout shared/speedtree | 115 | 33 | 57 | 38 | 0 | 15 | 0 | 0 | 62 | 46.1% |
-| NiSystem | 93 | 7 | 39 | 24 | 0 | 15 | 0 | 0 | 54 | 41.9% |
+| NiSystem | 96 | 7 | 39 | 25 | 0 | 15 | 0 | 0 | 56 | 41.7% |
 | BSSystemUtilities | 86 | 5 | 25 | 2 | 0 | 8 | 76 | 0 | 0 | - |
 | fallout/dialogue | 74 | 14 | 46 | 1 | 0 | 19 | 0 | 0 | 54 | 27.0% |
 | BSMovie | 64 | 9 | 23 | 1 | 0 | 10 | 42 | 0 | 11 | - |
-| libcpmt | 12 | 0 | 8 | 0 | 0 | 1 | 0 | 11 | 0 | - |
+| libcpmt | 14 | 0 | 8 | 0 | 0 | 1 | 0 | 13 | 0 | - |
 | d3dx9 | 11 | 0 | 8 | 0 | 0 | 0 | 4 | 0 | 7 | - |
 | fallout/debug | 10 | 0 | 7 | 0 | 0 | 3 | 0 | 0 | 7 | 30.0% |
 | fallout shared/settings | 9 | 0 | 5 | 1 | 0 | 1 | 0 | 0 | 7 | 22.2% |
