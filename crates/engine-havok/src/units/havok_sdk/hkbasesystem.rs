@@ -351,7 +351,13 @@ pub fn fn_00cbbcb0(e: &mut Engine) -> u32 {
 /// `hkNativeFileSystem::listDirectory` (Xbox PDB): calls the function pointer at `011b3dbc` with
 /// `(first, second)` and passes its `EAX` result through (the decompiler shows `void`, but the
 /// code returns straight after the call).
-pub fn hk_native_file_system_list_directory(e: &mut Engine, first: u32, second: u32) -> u32 {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hk_native_file_system_list_directory(
+    e: &mut Engine,
+    _this: u32,
+    first: u32,
+    second: u32,
+) -> u32 {
     let function = e.mem.u32(LIST_DIRECTORY_POINTER);
     e.call(function, &args![first, second]).u32()
 }
@@ -413,7 +419,8 @@ fn free_string_buffer(e: &mut Engine, buffer: u32) {
 /// returns the reader as is; a zero byte wraps it in a 0x24-byte buffered reader of 0x1000 bytes
 /// (`00d2bc30`), lets go of the stdio reader (`00c905b0`) and returns the buffered one. The
 /// string buffer is freed either way.
-pub fn hk_native_file_system_open_reader(e: &mut Engine, path: u32) -> u32 {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hk_native_file_system_open_reader(e: &mut Engine, _this: u32, path: u32) -> u32 {
     let buffer = e.mem.alloc(0x8c);
     let temporary = e.mem.alloc(4);
     fn_00cbbd80(e, buffer);
@@ -444,7 +451,8 @@ pub fn hk_native_file_system_open_reader(e: &mut Engine, path: u32) -> u32 {
 /// on it (`00d2bf70`), then a 0x1c-byte `hkBufferedStreamWriter` of 0x1000 bytes over it
 /// (`00d27460`), lets go of the stdio writer (`00c905b0`), frees the string buffer and returns
 /// the buffered writer.
-pub fn hk_native_file_system_open_writer(e: &mut Engine, path: u32) -> u32 {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hk_native_file_system_open_writer(e: &mut Engine, _this: u32, path: u32) -> u32 {
     let buffer = e.mem.alloc(0x8c);
     fn_00cbbd80(e, buffer);
     let block = allocate_sized(e, 0x10);
@@ -471,11 +479,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cb_bb10, fn_00cbbb10(u32, u32, u32) -> u32),
         entry!(0x00cb_bbd0, fn_00cbbbd0()),
         entry!(0x00cb_bcb0, fn_00cbbcb0() -> u32),
-        entry!(0x00cb_bd20, hk_native_file_system_list_directory(u32, u32) -> u32),
+        entry!(0x00cb_bd20, hk_native_file_system_list_directory(u32, u32, u32) -> u32),
         entry!(0x00cb_bd40, fn_00cbbd40(u32)),
         entry!(0x00cb_bd80, fn_00cbbd80(u32) -> u32),
-        entry!(0x00cb_bde0, hk_native_file_system_open_reader(u32) -> u32),
-        entry!(0x00cb_bee0, hk_native_file_system_open_writer(u32) -> u32),
+        entry!(0x00cb_bde0, hk_native_file_system_open_reader(u32, u32) -> u32),
+        entry!(0x00cb_bee0, hk_native_file_system_open_writer(u32, u32) -> u32),
     ]
 }
 
@@ -484,6 +492,9 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 
@@ -943,7 +954,9 @@ mod tests {
         let (mut e, log) = engine();
         e.mem.set_u32(LIST_DIRECTORY_POINTER, 0x0900_0d01);
         double(&mut e, &log, 0x0900_0d01, 0x55);
-        let got = e.call(0x00cb_bd20, &args![0x10u32, 0x20u32]).u32();
+        let got = e
+            .call(0x00cb_bd20, &args![VCALL_THIS, 0x10u32, 0x20u32])
+            .u32();
         assert_eq!(got, 0x55);
         assert_eq!(calls(&log, 0x0900_0d01), vec![vec![0x10, 0x20]]);
     }
@@ -1014,7 +1027,7 @@ mod tests {
             install_router(&mut e, &log, vec![small_block, wrapper_block]);
         let reader = install_stream(&mut e, &log, STDIO_READER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_READER_CONSTRUCT, 0x9999);
-        let got = e.call(0x00cb_bde0, &args![0xabcdu32]).u32();
+        let got = e.call(0x00cb_bde0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x9999);
         assert_eq!(
             calls(&log, SMALL_ALLOCATE),
@@ -1044,7 +1057,7 @@ mod tests {
         install_router(&mut e, &log, vec![small_block]);
         let reader = install_stream(&mut e, &log, STDIO_READER_CONSTRUCT, 1);
         double(&mut e, &log, BUFFERED_READER_CONSTRUCT, 0x9999);
-        let got = e.call(0x00cb_bde0, &args![0xabcdu32]).u32();
+        let got = e.call(0x00cb_bde0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, reader);
         assert!(calls(&log, BUFFERED_READER_CONSTRUCT).is_empty());
         assert!(calls(&log, REMOVE_REFERENCE).is_empty());
@@ -1059,7 +1072,7 @@ mod tests {
         let (_router, _heap, small) = install_router(&mut e, &log, vec![first, second]);
         let writer = install_stream(&mut e, &log, STDIO_WRITER_CONSTRUCT, 0);
         double(&mut e, &log, BUFFERED_WRITER_CONSTRUCT, 0x8888);
-        let got = e.call(0x00cb_bee0, &args![0xabcdu32]).u32();
+        let got = e.call(0x00cb_bee0, &args![VCALL_THIS, 0xabcdu32]).u32();
         assert_eq!(got, 0x8888);
         assert_eq!(
             calls(&log, SMALL_ALLOCATE),

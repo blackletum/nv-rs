@@ -494,12 +494,14 @@ pub fn hkp_multi_ray_convex_agent_process_collision(
 }
 
 // Translated from 00d37b90 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpSymmetricAgentLinearCast<hkpMultiRayConvexAgent>::getClosestPoints` (Xbox PDB), cdecl
-/// with `RET 0x10`, `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
+/// `hkpSymmetricAgentLinearCast<hkpMultiRayConvexAgent>::getClosestPoints` (Xbox PDB), a virtual
+/// method with `RET 0x10`, stack words `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
 /// `010ce7fc`, the float at `0104da48` (an `FLD`/`FSTP` copy) at +4 and `a3` at +8) and calls
 /// `getClosestPoints` (`00d37010`) with `(a1, a0, a2, collector)` (the bodies swapped).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points(
     e: &mut Engine,
+    _this: u32,
     a0: Ptr,
     a1: Ptr,
     a2: u32,
@@ -516,12 +518,14 @@ pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points
 }
 
 // Translated from 00d37bd0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpSymmetricAgentLinearCast<hkpMultiRayConvexAgent>::getPenetrations` (Xbox PDB), cdecl
-/// with `RET 0x10`, `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
+/// `hkpSymmetricAgentLinearCast<hkpMultiRayConvexAgent>::getPenetrations` (Xbox PDB), a virtual
+/// method with `RET 0x10`, stack words `(a0, a1, a2, a3)`: builds a collector object on the stack (vtable
 /// `010ce81c`, a byte 0 at +4 and `a3` at +8; the other three bytes of that word are never
 /// written) and calls `getPenetrations` (`00d37690`) with `(a1, a0, a2, collector)`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     a0: Ptr,
     a1: Ptr,
     a2: u32,
@@ -664,13 +668,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00d3_7b90,
             hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_closest_points(
-                Ptr, Ptr, u32, u32
+                u32, Ptr, Ptr, u32, u32
             )
         ),
         entry!(
             0x00d3_7bd0,
             hkp_symmetric_agent_linear_cast_multi_ray_convex_agent_get_penetrations(
-                Ptr, Ptr, u32, u32
+                u32, Ptr, Ptr, u32, u32
             )
         ),
         entry!(
@@ -691,6 +695,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const CAST: u32 = 0x0900_0010;
     const COLLECT: u32 = 0x0900_0020;
@@ -1209,7 +1216,13 @@ mod tests {
             r.set_script(&[Some(([0.0, 0.0, 1.0, 0.0], 0.5)), None]);
             let seen = wrapper_collector(&mut r, PENETRATION_COLLECTOR_VTABLE);
             // The multi-ray body is the second word, the shape it is cast at the first.
-            r.e.call(address, &args![target_body, ray_body, 5u32, 0xabcdu32]);
+            // The vtable entry takes `this` first; its static twin does not.
+            let mut words = Vec::new();
+            if address == 0x00d3_7bd0 {
+                words.push(VCALL_THIS);
+            }
+            words.extend([target_body, ray_body, 5u32, 0xabcdu32]);
+            r.e.call(address, &words);
             let seen = seen.borrow();
             assert_eq!(seen.len(), 1, "{address:#x}");
             assert_eq!(seen[0][1..3], [ray_body, target_body]);
@@ -1224,7 +1237,13 @@ mod tests {
             let (ray_body, target_body) = r.bodies(&TWO_RAYS, 0.5);
             r.set_script(&[Some(([0.0, 0.0, 1.0, 0.0], 0.5)), None]);
             let seen = wrapper_collector(&mut r, CLOSEST_COLLECTOR_VTABLE);
-            r.e.call(address, &args![target_body, ray_body, 5u32, 0xabcdu32]);
+            // The vtable entry takes `this` first; its static twin does not.
+            let mut words = Vec::new();
+            if address == 0x00d3_7b90 {
+                words.push(VCALL_THIS);
+            }
+            words.extend([target_body, ray_body, 5u32, 0xabcdu32]);
+            r.e.call(address, &words);
             let seen = seen.borrow();
             assert_eq!(seen.len(), 1, "{address:#x}");
             assert_eq!(

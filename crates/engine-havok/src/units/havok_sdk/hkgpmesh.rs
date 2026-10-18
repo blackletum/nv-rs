@@ -7899,7 +7899,14 @@ const SMALLEST_FLOAT: u32 = 0x0104_e148;
 /// GSK object at `+0x90` and asks it for the closest point (`00e4c730`, out vector at `+0x70`). The
 /// result is lane 3 of that vector, or the float at `0104e148` when the query found no
 /// closest point (a non-zero return).
-pub fn convex_overlap_impl_distance(e: &mut Engine, first: u32, second: u32, flag: u8) -> f32 {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn convex_overlap_impl_distance(
+    e: &mut Engine,
+    _this: u32,
+    first: u32,
+    second: u32,
+    flag: u8,
+) -> f32 {
     let count = e.mem.u32(OVERLAP_QUERY_COUNTER).wrapping_add(1);
     e.mem.set_u32(OVERLAP_QUERY_COUNTER, count);
     e.with_stack(0xb0, |e, frame| {
@@ -13724,7 +13731,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_9d60, mesh_clip_triangles(Ptr, u32, Ptr, u32, f32) -> u8),
         entry!(0x00e1_ab00, mesh_fix_t_junctions(Ptr, f32, u8)),
         entry!(0x00e1_aec0, mesh_split_parts(Ptr, u32, u32)),
-        entry!(0x00e2_2de0, convex_overlap_impl_distance(u32, u32, u8) -> f32),
+        entry!(0x00e2_2de0, convex_overlap_impl_distance(u32, u32, u32, u8) -> f32),
         entry!(0x00e2_3bb0, fn_00e23bb0(Ptr) -> bool),
         entry!(0x00e2_4200, fn_00e24200(Ptr, Ptr, i32, i32)),
         entry!(0x00e2_3df0, fn_00e23df0(Ptr, Ptr, u32, u32, u32) -> Ptr),
@@ -13761,6 +13768,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
 
@@ -19566,7 +19576,9 @@ mod tests {
                 ..Ret::default()
             }
         });
-        let got = e.call(0x00e2_2de0, &args![0x1111u32, 0x2222u32, 0u8]).f32();
+        let got = e
+            .call(0x00e2_2de0, &args![VCALL_THIS, 0x1111u32, 0x2222u32, 0u8])
+            .f32();
         assert_eq!(got, 3.5);
         assert_eq!(e.mem.u32(OVERLAP_QUERY_COUNTER), 1);
         assert_eq!(
@@ -19588,7 +19600,9 @@ mod tests {
         );
         // A non-zero flag clears the word at `+0x18`; a failed query gives the smallest float.
         found.set(1);
-        let got = e.call(0x00e2_2de0, &args![0x1111u32, 0x2222u32, 1u8]).f32();
+        let got = e
+            .call(0x00e2_2de0, &args![VCALL_THIS, 0x1111u32, 0x2222u32, 1u8])
+            .f32();
         assert_eq!(got, -1.0e30);
         assert_eq!(seen.borrow()[1][6], 0);
         assert_eq!(e.mem.u32(OVERLAP_QUERY_COUNTER), 2);

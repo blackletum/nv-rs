@@ -44,10 +44,12 @@ pub fn hkp_phantom_agent_cleanup(e: &mut Engine, this: Ptr, _unused: u32) {
 }
 
 // Translated from 00d42700 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::processCollision` (engine map): four stack words (a static function, no
-/// `this`); the body is empty.
+/// `hkpPhantomAgent::processCollision` (engine map): four stack words after `this` (a virtual
+/// method); the body is empty.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_process_collision(
     _e: &mut Engine,
+    _this: u32,
     _unused_1: u32,
     _unused_2: u32,
     _unused_3: u32,
@@ -56,11 +58,13 @@ pub fn hkp_phantom_agent_process_collision(
 }
 
 // Translated from 00d42710 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::getPenetrations` (engine map): four stack words (a static function, no
-/// `this`): `a`, `b`, a word that is not read, and the collector. Calls the collector's virtual
+/// `hkpPhantomAgent::getPenetrations` (engine map): four stack words after `this` (a virtual
+/// method): `a`, `b`, a word that is not read, and the collector. Calls the collector's virtual
 /// function at offset 4 with `(a, b)`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     a: u32,
     b: u32,
     _unused: u32,
@@ -70,10 +74,12 @@ pub fn hkp_phantom_agent_get_penetrations(
 }
 
 // Translated from 00d42750 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::getClosestPoints` (engine map): four stack words (a static function, no
-/// `this`); the body is empty.
+/// `hkpPhantomAgent::getClosestPoints` (engine map): four stack words after `this` (a virtual
+/// method); the body is empty.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_get_closest_points(
     _e: &mut Engine,
+    _this: u32,
     _unused_1: u32,
     _unused_2: u32,
     _unused_3: u32,
@@ -87,15 +93,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d426b0, hkp_phantom_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d42700,
-            hkp_phantom_agent_process_collision(u32, u32, u32, u32)
+            hkp_phantom_agent_process_collision(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42710,
-            hkp_phantom_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_phantom_agent_get_penetrations(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42750,
-            hkp_phantom_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_phantom_agent_get_closest_points(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42770,
@@ -107,6 +113,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Vec<(u32, Vec<u32>)>;
 
@@ -204,7 +213,10 @@ mod tests {
         e.mem.set_u32(vtable + 4, ADD_PAIR);
         e.register(ADD_PAIR, |_, _| Ret::default());
         e.call_log = Some(vec![]);
-        e.call(0x00d4_2710, &args![0x11u32, 0x22u32, 0x33u32, collector]);
+        e.call(
+            0x00d4_2710,
+            &args![VCALL_THIS, 0x11u32, 0x22u32, 0x33u32, collector],
+        );
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, ADD_PAIR),
@@ -217,8 +229,8 @@ mod tests {
     fn process_collision_and_get_closest_points_do_nothing() {
         let mut e = Engine::new();
         e.call_log = Some(vec![]);
-        e.call(0x00d4_2700, &args![1u32, 2u32, 3u32, 4u32]);
-        e.call(0x00d4_2750, &args![1u32, 2u32, 3u32, 4u32]);
+        e.call(0x00d4_2700, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
+        e.call(0x00d4_2750, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

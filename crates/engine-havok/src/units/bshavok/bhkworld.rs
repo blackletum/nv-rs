@@ -143,10 +143,11 @@ pub fn bhk_world_set_pick_count_override(e: &mut Engine, enabled: u8) {
 }
 
 // Translated from 00c66240 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkWorld::SethkObject` (Xbox PDB): forwards `this` to
-/// `bhkRefObject::SethkObject` (`00c87c50`).
-pub fn bhk_world_set_hk_object(e: &mut Engine, this: Ptr<BhkWorld>) {
-    e.call(0x00c8_7c50, &args![this]);
+/// `bhkWorld::SethkObject` (Xbox PDB): a virtual method (`this` in `ECX`, one stack word, the
+/// Havok object) that is a tail `JMP` to `bhkRefObject::SethkObject` (`00c87c50`), so the callee
+/// gets `this` and the same stack word.
+pub fn bhk_world_set_hk_object(e: &mut Engine, this: Ptr<BhkWorld>, hk_object: u32) {
+    e.call(0x00c8_7c50, &args![this, hk_object]);
 }
 
 // Translated from 00c66300 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3656,7 +3657,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c6_61d0, bhk_world_set_update_mode(u32)),
         entry!(0x00c6_6210, bhk_world_reset_step_accumulators()),
         entry!(0x00c6_6230, bhk_world_set_pick_count_override(u8)),
-        entry!(0x00c6_6240, bhk_world_set_hk_object(Ptr<BhkWorld>)),
+        entry!(0x00c6_6240, bhk_world_set_hk_object(Ptr<BhkWorld>, u32)),
         entry!(0x00c6_6300, bhk_world_increment_batch_add(Ptr)),
         entry!(0x00c6_6310, bhk_world_increment_batch_remove(Ptr)),
         entry!(
@@ -3924,10 +3925,10 @@ mod tests {
         let mut e = engine();
         let this: Ptr<BhkWorld> = e.new_object();
         e.register_double(0x00c8_7c50, move |_, a| {
-            assert_eq!(a, [this.addr()]);
+            assert_eq!(a, [this.addr(), 0x5555_0001]);
             Ret::default()
         });
-        e.call(0x00c6_6240, &args![this]);
+        e.call(0x00c6_6240, &args![this, 0x5555_0001u32]);
     }
 
     #[test]

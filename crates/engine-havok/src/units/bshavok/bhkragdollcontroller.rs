@@ -3869,9 +3869,11 @@ pub fn fn_00c75cc0(e: &mut Engine, this: Ptr) {
 
 // Translated from 00c75ce0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c75ce0 - the FS:[0] exception-unwinding frame is not modeled.
-/// Stdcall `(item, key, value)` on a map item holding an `NiPointer` at `+8`: see
-/// `replace_reference`. The item class is the one of the pose-array map (unconfirmed).
-pub fn fn_00c75ce0(e: &mut Engine, item: Ptr, key: u32, value: u32) {
+/// A map vtable slot with the stack words `(item, key, value)` on a map item holding an
+/// `NiPointer` at `+8`: see `replace_reference`. The item class is the one of the pose-array
+/// map (unconfirmed).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00c75ce0(e: &mut Engine, _this: u32, item: Ptr, key: u32, value: u32) {
     replace_reference(e, item.addr(), key, value);
 }
 
@@ -3892,8 +3894,10 @@ pub fn fn_00c75e00(e: &mut Engine, this: Ptr) {
 
 // Translated from 00c75e20 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c75e20 - the FS:[0] exception-unwinding frame is not modeled.
-/// Stdcall `(item, key, value)` like `00c75ce0`, for the share-data map's item.
-pub fn fn_00c75e20(e: &mut Engine, item: Ptr, key: u32, value: u32) {
+/// Map vtable slot like `00c75ce0` (`this` unread, stack words `(item, key, value)`), for the
+/// share-data map's item.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00c75e20(e: &mut Engine, _this: u32, item: Ptr, key: u32, value: u32) {
     replace_reference(e, item.addr(), key, value);
 }
 
@@ -3917,9 +3921,10 @@ pub fn fn_00c75f40(e: &mut Engine, count: u32) -> u32 {
 }
 
 // Translated from 00c75f60 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Stdcall `(item, key, value)`: stores the dword `key` at `+4` and the 16-bit `value` at `+8`
-/// (a map item of `NiAVObject*` to `short`, unconfirmed).
-pub fn fn_00c75f60(e: &mut Engine, item: Ptr, key: u32, value: u32) {
+/// A map vtable slot with the stack words `(item, key, value)`: stores the dword `key` at `+4`
+/// and the 16-bit `value` at `+8` (a map item of `NiAVObject*` to `short`, unconfirmed).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00c75f60(e: &mut Engine, _this: u32, item: Ptr, key: u32, value: u32) {
     e.mem.set_u32(item.addr() + 4, key);
     e.mem.set_u16(item.addr() + 8, value as u16);
 }
@@ -3939,9 +3944,11 @@ pub fn fn_00c75fa0(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 00c76010 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `NiTMap<NiAVObject*, short>::DeleteItem` (Ghidra name), stdcall `(item)`: clears the 16-bit
-/// value at `+8` and returns the item to `MemoryManager::Deallocate` (`00aa4060`).
-pub fn fn_00c76010(e: &mut Engine, item: Ptr) {
+/// `NiTMap<NiAVObject*, short>::DeleteItem` (Ghidra name), a map vtable slot with the
+/// stack word `(item)`: clears the 16-bit value at `+8` and returns the item to
+/// `MemoryManager::Deallocate` (`00aa4060`).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00c76010(e: &mut Engine, _this: u32, item: Ptr) {
     e.mem.set_u16(item.addr() + 8, 0);
     e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, item]);
 }
@@ -4824,11 +4831,12 @@ pub fn fn_00c7be90(e: &mut Engine) -> u32 {
 }
 
 // Translated from 00c7beb0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `NiTMap<char const*, NiPointer<bhkPoseArray>>::DeleteItem` (Xbox PDB), stdcall `(item)`:
-/// releases the reference held at `+8` (decrement at `+4`; at zero slot 4 of the object),
-/// clears it, then the inlined destructor releases it again (nothing left) and the item goes
-/// to `MemoryManager::Deallocate`.
-pub fn fn_00c7beb0(e: &mut Engine, item: u32) {
+/// `NiTMap<char const*, NiPointer<bhkPoseArray>>::DeleteItem` (Xbox PDB), a map vtable slot with
+/// the stack word `(item)`: releases the reference held at `+8` (decrement at `+4`; at zero slot
+/// 4 of the object), clears it, then the inlined destructor releases it again (nothing left)
+/// and the item goes to `MemoryManager::Deallocate`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00c7beb0(e: &mut Engine, _this: u32, item: u32) {
     let held = e.mem.u32(item + 8);
     if held != 0 {
         release_reference(e, held);
@@ -5998,16 +6006,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bhk_ragdoll_controller_reset_pose(u32, u32, u32, u32)
         ),
         entry!(0x00c75cc0, fn_00c75cc0(Ptr)),
-        entry!(0x00c75ce0, fn_00c75ce0(Ptr, u32, u32)),
+        entry!(0x00c75ce0, fn_00c75ce0(u32, Ptr, u32, u32)),
         entry!(0x00c75d90, fn_00c75d90(Ptr)),
         entry!(0x00c75e00, fn_00c75e00(Ptr)),
-        entry!(0x00c75e20, fn_00c75e20(Ptr, u32, u32)),
+        entry!(0x00c75e20, fn_00c75e20(u32, Ptr, u32, u32)),
         entry!(0x00c75ed0, fn_00c75ed0(Ptr)),
         entry!(0x00c75f40, fn_00c75f40(u32) -> u32),
-        entry!(0x00c75f60, fn_00c75f60(Ptr, u32, u32)),
+        entry!(0x00c75f60, fn_00c75f60(u32, Ptr, u32, u32)),
         entry!(0x00c75f80, fn_00c75f80(Ptr)),
         entry!(0x00c75fa0, fn_00c75fa0(Ptr)),
-        entry!(0x00c76010, fn_00c76010(Ptr)),
+        entry!(0x00c76010, fn_00c76010(u32, Ptr)),
         entry!(0x00c76030, fn_00c76030(Ptr, u32) -> Ptr),
         entry!(0x00c76070, fn_00c76070(Ptr, u32) -> Ptr),
         entry!(0x00c760b0, fn_00c760b0(Ptr, u32) -> Ptr),
@@ -6078,7 +6086,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bhk_ragdoll_controller_get_rb_for_bones(Ptr, Ptr)
         ),
         entry!(0x00c7be90, fn_00c7be90() -> u32),
-        entry!(0x00c7beb0, fn_00c7beb0(u32)),
+        entry!(0x00c7beb0, fn_00c7beb0(u32, u32)),
         entry!(0x00c7bf10, fn_00c7bf10(Ptr)),
         entry!(0x00c7bf50, fn_00c7bf50(Ptr)),
         entry!(0x00c7bf90, fn_00c7bf90(Ptr)),
@@ -6135,6 +6143,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
 
@@ -9100,7 +9111,7 @@ mod tests {
             let log = CallLog::default();
             let (item, old, new) = reference_setup(&mut e, &log, 0);
             e.mem.set_u32(item + 8, old);
-            e.call(address, &args![item, 0x42u32, new]);
+            e.call(address, &args![VCALL_THIS, item, 0x42u32, new]);
             assert_eq!((e.mem.u32(item + 4), e.mem.u32(item + 8)), (0x42, new));
             assert_eq!(
                 calls_to(&log, INTERLOCKED_DECREMENT),
@@ -9117,7 +9128,7 @@ mod tests {
         let log = CallLog::default();
         let (item, _, new) = reference_setup(&mut e, &log, 5);
         e.mem.set_u32(item + 8, new);
-        e.call(0x00c7_5ce0, &args![item, 7u32, new]);
+        e.call(0x00c7_5ce0, &args![VCALL_THIS, item, 7u32, new]);
         assert_eq!(calls_to(&log, INTERLOCKED_DECREMENT), vec![vec![new + 4]]);
         assert!(calls_to(&log, INTERLOCKED_INCREMENT).is_empty());
         assert!(calls_to(&log, 0x0900_0004).is_empty());
@@ -9130,7 +9141,7 @@ mod tests {
         let log = CallLog::default();
         let (item, old, _) = reference_setup(&mut e, &log, 1);
         e.mem.set_u32(item + 8, old);
-        e.call(0x00c7_5ce0, &args![item, 1u32, 0u32]);
+        e.call(0x00c7_5ce0, &args![VCALL_THIS, item, 1u32, 0u32]);
         assert_eq!(e.mem.u32(item + 8), 0);
         assert_eq!(calls_to(&log, INTERLOCKED_DECREMENT), vec![vec![old + 4]]);
         assert!(calls_to(&log, INTERLOCKED_INCREMENT).is_empty());
@@ -9149,9 +9160,12 @@ mod tests {
             vec![vec![MEMORY_MANAGER, 20]]
         );
         let item = e.mem.alloc(0x10);
-        e.call(0x00c7_5f60, &args![item, 0xaabbu32, 0x1_2345u32]);
+        e.call(
+            0x00c7_5f60,
+            &args![VCALL_THIS, item, 0xaabbu32, 0x1_2345u32],
+        );
         assert_eq!((e.mem.u32(item + 4), e.mem.u16(item + 8)), (0xaabb, 0x2345));
-        e.call(0x00c7_6010, &args![item]);
+        e.call(0x00c7_6010, &args![VCALL_THIS, item]);
         assert_eq!(e.mem.u16(item + 8), 0);
         assert_eq!(
             calls_to(&log, MEMORY_DEALLOCATE),
@@ -10140,7 +10154,7 @@ mod tests {
         let held = object_with_vtable(&mut e, &[(4, 0x0900_0004)]);
         let item = e.mem.alloc(0x10);
         e.mem.set_u32(item + 8, held);
-        e.call(0x00c7beb0, &args![item]);
+        e.call(0x00c7beb0, &args![VCALL_THIS, item]);
         assert_eq!(calls_to(&log, INTERLOCKED_DECREMENT), vec![vec![held + 4]]);
         assert_eq!(calls_to(&log, 0x0900_0004), vec![vec![held]]);
         assert_eq!(
@@ -10149,7 +10163,7 @@ mod tests {
         );
         assert_eq!(e.mem.u32(item + 8), 0);
         log.borrow_mut().clear();
-        e.call(0x00c7beb0, &args![item]);
+        e.call(0x00c7beb0, &args![VCALL_THIS, item]);
         assert!(calls_to(&log, INTERLOCKED_DECREMENT).is_empty());
         assert_eq!(calls_to(&log, MEMORY_DEALLOCATE).len(), 1);
     }

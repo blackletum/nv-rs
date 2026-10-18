@@ -107,7 +107,8 @@ fn replace_registry(e: &mut Engine, global: u32, registry: u32) {
 /// `type_info` in the type info registry (global `01269b18`, slot `0xc`) and, when the class's
 /// `getNumInterfaces` (`00d46de0`) is above 0 (signed), `(type_info word +0xc, class)` in the
 /// vtable class registry (global `01269b10`, slot `0xc`).
-pub fn hk_builtin_type_registry_add_type(e: &mut Engine, type_info: u32, class: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hk_builtin_type_registry_add_type(e: &mut Engine, _this: u32, type_info: u32, class: u32) {
     let class_names = e.mem.u32(CLASS_NAME_REGISTRY);
     let name = e.call(CLASS_GET_NAME, &args![class]).u32();
     e.vcall(class_names, 0x1c, &args![class, name]);
@@ -540,7 +541,10 @@ pub fn hk_dynamic_class_name_registry_merge_ov2(e: &mut Engine, this: Ptr, other
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00d4_77c0, hk_builtin_type_registry_add_type(u32, u32)),
+        entry!(
+            0x00d4_77c0,
+            hk_builtin_type_registry_add_type(u32, u32, u32)
+        ),
         entry!(0x00d4_7860, hk_default_builtin_type_registry_init()),
         entry!(0x00d4_78c0, construct_00d478c0(Ptr) -> Ptr),
         entry!(
@@ -590,6 +594,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod translated_tests {
     use super::*;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// Doubles used behind the registries' virtual slots.
     const DOUBLE_A: u32 = 0x0900_0a01;
@@ -685,14 +692,14 @@ mod translated_tests {
         answer(&mut e, CLASS_GET_NUM_INTERFACES, 2);
         let type_info = e.mem.alloc(0x20);
         e.mem.set_u32(type_info + 0xc, 0x5555);
-        e.call(0x00d4_77c0, &args![type_info, 0x6000u32]);
+        e.call(0x00d4_77c0, &args![VCALL_THIS, type_info, 0x6000u32]);
         assert_eq!(calls_to(&e, DOUBLE_A), vec![vec![names, 0x6000, 0x7000]]);
         assert_eq!(calls_to(&e, DOUBLE_B), vec![vec![type_infos, type_info]]);
         assert_eq!(calls_to(&e, DOUBLE_C), vec![vec![vtables, 0x5555, 0x6000]]);
         // No interfaces, or a negative count (signed compare): no vtable registration.
         for count in [0, 0xffff_ffff] {
             answer(&mut e, CLASS_GET_NUM_INTERFACES, count);
-            e.call(0x00d4_77c0, &args![type_info, 0x6000u32]);
+            e.call(0x00d4_77c0, &args![VCALL_THIS, type_info, 0x6000u32]);
             assert_eq!(calls_to(&e, DOUBLE_C).len(), 1);
         }
     }

@@ -188,8 +188,10 @@ pub fn hkp_box_box_agent_static_get_closest_points(
 // Translated from 00d406a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBoxBoxAgent::getClosestPoints` (engine map): passes its four words on to
 /// `staticGetClosestPoints`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_box_box_agent_get_closest_points(
     e: &mut Engine,
+    _this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
@@ -238,8 +240,10 @@ pub fn hkp_box_box_agent_static_get_penetrations(
 // Translated from 00d408c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBoxBoxAgent::getPenetrations` (engine map): passes its four words on to
 /// `staticGetPenetrations`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_box_box_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
@@ -262,7 +266,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d4_06a0,
-            hkp_box_box_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_box_box_agent_get_closest_points(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d4_06c0,
@@ -270,7 +274,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d4_08c0,
-            hkp_box_box_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_box_box_agent_get_penetrations(u32, u32, u32, u32, u32)
         ),
     ]
 }
@@ -281,6 +285,9 @@ mod movement_tests {
     use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 
@@ -476,7 +483,10 @@ mod movement_tests {
         let (mut e, log, stream) = setup();
         let (body_a, body_b, input, collector) = scene(&mut e, &log);
         log_callees(&mut e, &log, &[CALCULATE_CLOSEST_POINT]);
-        e.call(0x00d4_06a0, &args![body_a, body_b, input, collector]);
+        e.call(
+            0x00d4_06a0,
+            &args![VCALL_THIS, body_a, body_b, input, collector],
+        );
         assert!(calls_to(&log, COLLECTOR_SLOT).is_empty());
         assert_eq!(calls_to(&log, CALCULATE_CLOSEST_POINT).len(), 1);
         assert_eq!(labels(&e, stream), vec![PROFILE_BEGIN, PROFILE_END]);
@@ -495,7 +505,10 @@ mod movement_tests {
             *sink.borrow_mut() = snapshot(e, a[0]);
             Ret::default()
         });
-        e.call(0x00d4_08c0, &args![body_a, body_b, input, collector]);
+        e.call(
+            0x00d4_08c0,
+            &args![VCALL_THIS, body_a, body_b, input, collector],
+        );
         let words = record.borrow();
         check_query(&words, body_a, body_b);
         assert_eq!(words[2..5], [0, 0, 0]);
