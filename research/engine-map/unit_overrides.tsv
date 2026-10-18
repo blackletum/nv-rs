@@ -4,6 +4,7 @@
 # function belongs to an existing unit's class (an RTTI vtable slot of that class).
 # Holds addresses, units, subsystems and evidence only (ADR-0002).
 address	unit	subsystem	replaces	evidence
+0059bb30	(unplaced)/run_0059bb30	(unplaced)	d3d9/texture.cpp	the map files it under d3d9/texture.cpp by a folded Xbox name (D3DTexture_LockRect); the PC body is a getter (MOV EAX,[ECX+0x24]) that identical-code folding shares among unrelated callers (LowProcess 00907510, actor_p3, the cell loading), so it gets its own unplaced run unit
 00aa1b30	NiSystem/nifile.cpp	NiSystem		slot 4 of RTTI vtable NiFile; the named NiFile methods are in this unit
 00af2f40	BSSystemUtilities/bssavedatasystemutility.cpp	BSSystemUtilities		slot of RTTI vtable BSSaveDataSystemUtility; its named methods are in this unit
 00af2f60	BSSystemUtilities/bssavedatasystemutility.cpp	BSSystemUtilities		slot of RTTI vtable BSSaveDataSystemUtility; its named methods are in this unit
