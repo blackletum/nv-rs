@@ -395,6 +395,10 @@ pub struct Kernel {
     /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
     /// `BSFile`'s address.
     files: std::collections::BTreeMap<u32, MemoryFile>,
+    /// Which thread-local storage indexes `TlsAlloc` handed out.
+    tls_allocated: Vec<bool>,
+    /// The values `TlsSetValue` stored, by (thread id, index).
+    tls_values: std::collections::BTreeMap<(u32, u32), u32>,
 }
 
 impl Kernel {
@@ -887,6 +891,113 @@ fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
     }
 }
 
+/// Thread-local storage indexes Windows provides (`TLS_MINIMUM_AVAILABLE`
+/// 64 plus the 1024 expansion slots), and `TlsAlloc`'s failure value.
+const TLS_INDEXES: usize = 1088;
+const TLS_OUT_OF_INDEXES: u32 = 0xffff_ffff;
+
+// Platform: replaces KERNEL32.DLL TlsAlloc (import)
+/// The lowest free thread-local storage index (its value reads 0 on every
+/// thread until set), or `TLS_OUT_OF_INDEXES` when all are taken.
+fn tls_alloc(e: &mut Engine) -> u32 {
+    let used = &mut e.kernel.tls_allocated;
+    if used.is_empty() {
+        used.resize(TLS_INDEXES, false);
+    }
+    match used.iter().position(|u| !u) {
+        Some(i) => {
+            used[i] = true;
+            i as u32
+        }
+        None => TLS_OUT_OF_INDEXES,
+    }
+}
+
+fn tls_in_use(e: &Engine, index: u32) -> bool {
+    e.kernel
+        .tls_allocated
+        .get(index as usize)
+        .copied()
+        .unwrap_or(false)
+}
+
+// Platform: replaces KERNEL32.DLL TlsFree (import)
+/// Frees an index and forgets its value on every thread; 0 for an index
+/// that isn't allocated.
+fn tls_free(e: &mut Engine, index: u32) -> i32 {
+    if !tls_in_use(e, index) {
+        return 0;
+    }
+    e.kernel.tls_allocated[index as usize] = false;
+    e.kernel.tls_values.retain(|&(_, i), _| i != index);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL TlsGetValue (import)
+/// The calling thread's value at `index` (0 if never set). The calling
+/// thread is `GetCurrentThreadId`'s.
+fn tls_get_value(e: &mut Engine, index: u32) -> u32 {
+    let thread = get_current_thread_id(e);
+    e.kernel
+        .tls_values
+        .get(&(thread, index))
+        .copied()
+        .unwrap_or(0)
+}
+
+// Platform: replaces KERNEL32.DLL TlsSetValue (import)
+/// Stores the calling thread's value at `index`; 0 for an index past the
+/// last one Windows provides. As on Windows, the index isn't checked against
+/// the ones `TlsAlloc` handed out.
+fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
+    if index as usize >= TLS_INDEXES {
+        return 0;
+    }
+    let thread = get_current_thread_id(e);
+    e.kernel.tls_values.insert((thread, index), value);
+    1
+}
+
+/// `GetCurrentProcess`'s pseudo handle.
+pub const CURRENT_PROCESS: u32 = 0xffff_ffff;
+
+// Platform: replaces KERNEL32.DLL GetCurrentProcess (import)
+fn get_current_process(_e: &mut Engine) -> u32 {
+    CURRENT_PROCESS
+}
+
+// Platform: replaces KERNEL32.DLL GetSystemInfo (import)
+/// Fills the 0x24-byte `SYSTEM_INFO` as 32-bit Windows does for this
+/// process: x86 (architecture 0), 4 KiB pages, application addresses
+/// 0x10000-0x7ffeffff, one mask bit per processor, the machine's number of
+/// processors (as Windows reports the real machine; the game's Havok caps it,
+/// `hkBaseSystem` at 4, the job thread pool at 5), processor type 586
+/// (`PROCESSOR_INTEL_PENTIUM`), 64 KiB allocation granularity, level 6.
+fn get_system_info(e: &mut Engine, out: Ptr) {
+    let processors = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(32) as u32;
+    let p = out.addr();
+    e.mem.set_u32(p, 0); // wProcessorArchitecture, wReserved
+    e.mem.set_u32(p + 0x04, PAGE_BYTES);
+    e.mem.set_u32(p + 0x08, 0x0001_0000);
+    e.mem.set_u32(p + 0x0c, 0x7ffe_ffff);
+    e.mem.set_u32(
+        p + 0x10,
+        if processors == 32 {
+            u32::MAX
+        } else {
+            (1 << processors) - 1
+        },
+    );
+    e.mem.set_u32(p + 0x14, processors);
+    e.mem.set_u32(p + 0x18, 586);
+    e.mem.set_u32(p + 0x1c, ALLOCATION_GRANULARITY);
+    e.mem.set_u16(p + 0x20, 6);
+    e.mem.set_u16(p + 0x22, 0);
+}
+
 // Platform: replaces KERNEL32.DLL SetThreadPriority (import)
 /// Accepts any priority for a thread handle or the current thread (the
 /// threads do not run, so it has no effect); 0 for another handle.
@@ -1024,6 +1135,20 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "SetThreadPriority",
             entry!(0, set_thread_priority(u32, i32) -> i32).1,
         ),
+        (k, "TlsAlloc", entry!(0, tls_alloc() -> u32).1),
+        (k, "TlsFree", entry!(0, tls_free(u32) -> i32).1),
+        (k, "TlsGetValue", entry!(0, tls_get_value(u32) -> u32).1),
+        (
+            k,
+            "TlsSetValue",
+            entry!(0, tls_set_value(u32, u32) -> i32).1,
+        ),
+        (
+            k,
+            "GetCurrentProcess",
+            entry!(0, get_current_process() -> u32).1,
+        ),
+        (k, "GetSystemInfo", entry!(0, get_system_info(Ptr)).1),
     ]
 }
 
@@ -1160,6 +1285,38 @@ mod tests {
 
     fn call(e: &mut Engine, slot: u32, a: &[u32]) -> u32 {
         e.call(slot, a).u32()
+    }
+
+    #[test]
+    fn thread_local_storage_allocates_stores_and_frees() {
+        let mut e = Engine::new();
+        let a = tls_alloc(&mut e);
+        let b = tls_alloc(&mut e);
+        assert_eq!((a, b), (0, 1));
+        assert_eq!(tls_get_value(&mut e, b), 0, "unset reads 0");
+        assert_eq!(tls_set_value(&mut e, b, 0x1234), 1);
+        assert_eq!(tls_get_value(&mut e, b), 0x1234);
+        assert_eq!(tls_set_value(&mut e, 2000, 1), 0, "past the last index");
+        assert_eq!(tls_free(&mut e, a), 1);
+        assert_eq!(tls_free(&mut e, a), 0, "already free");
+        // The freed index is handed out again, its value gone.
+        assert_eq!(tls_alloc(&mut e), 0);
+        assert_eq!(tls_get_value(&mut e, 0), 0);
+        assert_eq!(tls_get_value(&mut e, b), 0x1234);
+    }
+
+    #[test]
+    fn system_info_reports_x86_pages_and_processors() {
+        let mut e = Engine::new();
+        e.mem.map(0x1000, 0x1000);
+        get_system_info(&mut e, Ptr::new(0x1000));
+        assert_eq!(e.mem.u32(0x1004), 0x1000);
+        let n = e.mem.u32(0x1014);
+        assert!(n >= 1);
+        assert_eq!(e.mem.u32(0x1010).count_ones(), n);
+        assert_eq!(e.mem.u32(0x1018), 586);
+        assert_eq!(e.mem.u32(0x101c), 0x1_0000);
+        assert_eq!(get_current_process(&mut e), 0xffff_ffff);
     }
 
     #[test]
