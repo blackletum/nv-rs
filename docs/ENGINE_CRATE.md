@@ -259,9 +259,15 @@ The `host` crate starts the engine for the running game. The viewer calls
 `FalloutNV.exe` next to `Data` (read-only), refuses every build but
 1.4.0.525 with the file and the reason, maps the data sections and runs the
 allocator start-up the probes run (`00401000`, `00aa2230`, `00aa21d0`,
-holder at `011f6118`, `00aa2020`); the rest of `WinMain`'s start-up is not
-reproduced. The startup line reads `Game code: <exe> (1.4.0.525), <n>
-translated functions, allocator started.` The `Host` is a Bevy non-send
+holder at `011f6118`, `00aa2020`: the body of `00866690`, which the memory
+manager's constructor runs in the game); after the static initializers it
+runs `NiInit` (`00aa20b0`, as `main` does at `0086a9f8`, `host::start_ni`)
+once that is translated, through the movement's miss recorder (stage
+`niinit`), so a stop is recorded and start-up goes on. `NiInit` keeps the
+holder already made, and `00aa2020` runs twice in the game too (`00866690`
+and `NiInit`'s `00aa3050`), so nothing is done twice that the game does once.
+The rest of `WinMain`'s start-up is not reproduced. The startup line ends
+with `NiInit: ran` or `NiInit: not run (why)`. The `Host` is a Bevy non-send
 resource (main thread only; the engine is not `Send`).
 
 Nothing runs through it yet (script track step S4): the game's scripts

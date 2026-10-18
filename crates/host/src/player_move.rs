@@ -278,7 +278,7 @@ type Reached = Rc<RefCell<Vec<(u32, u32)>>>;
 impl PlayerMovement {
     /// Runs `f` on the engine with the miss recorder in place; a stop comes
     /// back as its first line. The misses are counted under `stage`.
-    fn guarded<R>(
+    pub(crate) fn guarded<R>(
         &mut self,
         e: &mut Engine,
         stage: &'static str,

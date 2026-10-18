@@ -39,6 +39,10 @@ pub struct Host {
     /// The player's movement through the game's code, and what it
     /// reached that isn't translated ([`player_move`]).
     pub movement: player_move::PlayerMovement,
+    /// `NiInit` (`00aa20b0`) at start-up: `None` when it ran to the end, else why
+    /// not (not translated yet, or where it stopped; its misses are in
+    /// [`Host::movement`] under the stage `niinit`).
+    pub ni_init: Option<String>,
 }
 
 impl Host {
@@ -62,13 +66,16 @@ impl Host {
         }
         let mut engine = Engine::with_exe(&exe)?;
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
+        let mut movement = player_move::PlayerMovement::default();
+        let ni_init = start_ni(&mut engine, &mut movement);
         start_game_objects(&mut engine);
         Ok(Host {
             engine,
             exe,
             static_init,
             quests: quest_vm::QuestVm::default(),
-            movement: player_move::PlayerMovement::default(),
+            movement,
+            ni_init,
         })
     }
 
@@ -77,15 +84,41 @@ impl Host {
         format!(
             "Game code: {} (1.4.0.525), {} translated functions; static initializers: \
              {} run from the table, {} by address, {} by platform code, {} skipped \
-             (not translated yet).",
+             (not translated yet); NiInit: {}.",
             self.exe.display(),
             self.engine.translated_count(),
             self.static_init.rows,
             self.static_init.translated,
             self.static_init.platform,
-            self.static_init.skipped()
+            self.static_init.skipped(),
+            match &self.ni_init {
+                None => "ran".to_string(),
+                Some(why) => format!("not run ({why})"),
+            }
         )
     }
+}
+
+/// `NiInit` (`00aa20b0`), which `main` calls with 0 at `0086a9f8`, after the
+/// static initializers and before `InitTES`: the Gamebryo libraries' start-up
+/// (the allocator holder kept, `00aa3050`, NiMain's pre-init hook, every
+/// registered library's init). Run through the movement's miss recorder
+/// (stage `niinit`) so a stop is recorded and start-up goes on; `None` when it
+/// ran to the end. Nothing of it is done twice by [`start_allocator`]: with
+/// the holder at `011f6118` already made (by `00866690` in the game, by
+/// [`start_allocator`] here) `NiInit` keeps it, and `00aa2020`, which both
+/// call, runs twice in the game too (`00866690` and `NiInit`'s `00aa3050`).
+pub fn start_ni(e: &mut Engine, movement: &mut player_move::PlayerMovement) -> Option<String> {
+    const NI_INIT: u32 = 0x00aa_20b0;
+    if !e.is_translated(NI_INIT) {
+        return Some("00aa20b0 not translated yet".into());
+    }
+    movement
+        .guarded(e, "niinit", |e| {
+            e.call(NI_INIT, &[0]);
+            Ok(())
+        })
+        .err()
 }
 
 /// The objects of the game's start-up (`WinMain`) that making forms needs,
@@ -119,17 +152,41 @@ pub const STAND_INS: [engine::static_init::StandIn; 1] = [(0x00fb_66a0, start_al
 /// calls its `Initialize` (slot +0x1c). (`00866690` ends with a call to a
 /// library singleton's slot +4 that is not reproduced.)
 pub fn start_allocator(e: &mut Engine) {
+    // `00866690`: `operator new(8)` for the holder, `operator new(4)` for the
+    // allocator and its constructor `00aa2230`, the holder's constructor
+    // `00aa21d0`, the store at `011f6118`, then `00aa2020`. (Its null checks
+    // after each `operator new` never fail on the engine's heap.)
     let holder = e.call(0x0040_1000, &[8]).u32();
     let allocator = e.call(0x0040_1000, &[4]).u32();
     let allocator = e.call(0x00aa_2230, &[allocator]).u32();
     let holder = e.call(0x00aa_21d0, &[holder, allocator]).u32();
     e.mem.set_u32(0x011f_6118, holder);
     e.call(0x00aa_2020, &[]);
+    // Not reproduced: `00866690`'s last call, slot +4 of the singleton
+    // `00af2640` answers with (0, 0, 0), and the rest of `00aa3880` (the
+    // memory manager itself is platform).
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `NiInit` runs when translated, through the miss recorder: a stop is
+    /// kept (with its misses under `niinit`) and start-up goes on.
+    #[test]
+    fn ni_init_runs_through_the_recorder_or_says_why_not() {
+        let mut e = Engine::new();
+        let mut movement = player_move::PlayerMovement::default();
+        e.register(0x00aa_20b0, |e, a| {
+            assert_eq!(a, [0]);
+            e.call(0x00ab_cdef, &[])
+        });
+        let why = start_ni(&mut e, &mut movement).expect("stopped");
+        assert!(why.starts_with("open function 00abcdef"), "{why}");
+        assert_eq!(movement.misses[&0x00ab_cdef].stage, "niinit");
+        e.register(0x00aa_20b0, |_, _| engine::Ret::default());
+        assert_eq!(start_ni(&mut e, &mut movement), None);
+    }
 
     #[test]
     fn an_installation_without_the_executable_is_refused_by_path() {
