@@ -177,6 +177,10 @@ OPTIONS:
     --movement-missing FILE write the untranslated functions the game's
                             movement code reached, with counts, to FILE
                             (every 5 s and at exit)
+    --physics MODE          how loose objects move: old (the default:
+                            crates/physics) or engine (the game's own Havok
+                            world, crates/engine, stepped by the game's frame
+                            code; crates/physics for a frame it can't run)
 
 CONTROLS:
     mouse                          look around (walking; flying: hold
@@ -321,6 +325,8 @@ pub struct Args {
     pub movement_log: Option<PathBuf>,
     /// `--movement-missing`.
     pub movement_missing: Option<PathBuf>,
+    /// `--physics`: how loose objects move.
+    pub physics: PhysicsMode,
 }
 
 /// How the player moves (`--movement`).
@@ -334,6 +340,17 @@ pub enum MovementMode {
     Old,
     /// `crates/physics` moves the player; the game's code runs beside it.
     Compare,
+}
+
+/// How loose objects move (`--physics`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhysicsMode {
+    /// `crates/physics`.
+    #[default]
+    Old,
+    /// The game's own Havok world (`host::player_move::PlayerMovement::step_world`),
+    /// `crates/physics` for a frame it can't run.
+    Engine,
 }
 
 /// Where to stand, in the game's terms: feet position in game units, and
@@ -399,6 +416,7 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
     let mut movement_probe = false;
     let mut movement_log = None;
     let mut movement_missing = None;
+    let mut physics = PhysicsMode::default();
     let mut answer_boxes = false;
     let mut box_answers = Vec::new();
     let mut background = false;
@@ -505,6 +523,13 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
                             "--movement expects engine, old or compare, got '{other}'"
                         ))
                     }
+                }
+            }
+            "--physics" => {
+                physics = match value("--physics")?.as_str() {
+                    "engine" => PhysicsMode::Engine,
+                    "old" => PhysicsMode::Old,
+                    other => return Err(format!("--physics expects engine or old, got '{other}'")),
                 }
             }
             "--movement-probe" => movement_probe = true,
@@ -661,6 +686,7 @@ pub fn parse(args: &[String]) -> Result<Option<Args>, String> {
             movement_probe,
             movement_log,
             movement_missing,
+            physics,
             pipboy,
             pipboy_keys,
             pad,

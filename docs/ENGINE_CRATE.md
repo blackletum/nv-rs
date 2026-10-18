@@ -154,8 +154,9 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    - Imported Windows functions (`call dword ptr [0x00fdf0e4]`) are called
      by the address of their import slot: `e.call(0x00fdf0e4, ..)`.
      `units/platform.rs` provides the ones with a Rust stand-in
-     (interlocked operations, critical sections, clocks); report others
-     you need.
+     (interlocked operations, critical sections, clocks, kernel objects,
+     virtual memory, thread-local storage, `GetSystemInfo`,
+     `GetCurrentProcess`); report others you need.
    - A value the code passes in x87 `ST0` (compiler helpers such as
      `_ftol2`, `00ec62c0`) is a leading `f64` argument (two words).
    - A local the game keeps on its stack and passes by address (a scope
@@ -393,7 +394,8 @@ order, each stage once (the cell's once per cell): `InitHavokSystem`
 `TESDataHandler::LoadForm`, `InitItem`; its references' base forms first;
 `TESObjectCELL::LoadTempDataFromFile` `00550500`, `Load3D` `00545cf0`, which
 makes the cell's `bhkWorld` in `00552dc0`, and each reference's `Load3D`
-`0056b2d0`); then `SetParentCell`, `PlayerCharacter::Load3D` (`0094e1d0`)
+`0056b2d0` and `InitHavok` (vtable +0x1C4, `005768b0`: its collision into the
+cell's world through `bhkWorld::AddObjects`)); then `SetParentCell`, `PlayerCharacter::Load3D` (`0094e1d0`)
 and `MobileObject::InitHavok` (`00930c70`, the controller). Each frame the
 mover's bits are set with `PlayerMover::ForceMoveMode` (`009ea3e0`) and its
 `Update` runs; the player's position (vtable +0x1F4) and the controller's
@@ -403,8 +405,23 @@ Bridged, and said so in the module: the file reading (as for quests); the
 keys (the control handler `0093e860` reads DirectInput; the viewer gives the
 same move bits); a resync of the position after a frame the viewer moved
 itself; each form's `InitItem` right after its load (the game runs them all
-after loading); `InitTES`'s `CastPermanentMagic` left out; jumping not
-connected (a jump frame goes to `crates/physics`).
+after loading); each reference's `InitHavok` right after its `Load3D` (the
+game calls it when the reference's queued 3D task is unpacked,
+`TaskUnpackFunc` `0087b990`); `InitTES`'s `CastPermanentMagic` left out;
+jumping not connected (a jump frame goes to `crates/physics`).
+
+The loose objects can move by the game's whole Havok world too
+(`--physics engine`; the default `old` keeps `crates/physics`):
+`Host::step_world` runs, in the AI stage where the viewer stepped its own
+bodies, `bhkWorld::SetDeltaTime` (`00c66760`, as `Main::OnIdle_UpdateTimer`
+calls it) and, as `TES::UpdateCellAnimations` (`00453550`) does for an
+interior, the frame's seconds added to `011c3c08` and
+`TESObjectCELL::UpdateManagedNodes` (`00551890`): the world's step
+(`bhkWorld::Update`, `hkpWorld::stepDeltaTime` until the frame's marker) and
+the scene-graph update that copies each moving body's transform to its node.
+The viewer then draws each placed object where its root node has moved; a
+frame that stops (recorded under the stage `world`) goes back to
+`crates/physics`, and a stopped step isn't tried again in that cell.
 
 When a run reaches an untranslated address, `Engine::on_open` records it
 with the nearest caller entered by address (`Engine::call_stack`), the run

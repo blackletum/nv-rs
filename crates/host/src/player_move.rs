@@ -116,6 +116,34 @@ const MOVER_UPDATE: u32 = 0x14;
 const FORCE_MOVE_MODE: u32 = 0x009e_a3e0;
 /// A record header's size, and a group's.
 const HEADER_SIZE: usize = 0x18;
+/// `TESObjectREFR` vtable slots: `InitHavok` (+0x1C4, Xbox PDB name; PC
+/// `005768b0`: adds the 3D's collision to the cell's `bhkWorld` through
+/// `bhkWorld::AddObjects`, world vtable +0xD0) and `Get3D` (+0x1D0).
+const REFERENCE_INIT_HAVOK: u32 = 0x1c4;
+const GET_3D: u32 = 0x1d0;
+/// `bhkWorld::SetDeltaTime(seconds, mode 4, force)` (`00c66760`, as
+/// `Main::OnIdle_UpdateTimer` `0086f260` calls it each frame).
+const SET_DELTA_TIME: u32 = 0x00c6_6760;
+/// `TESObjectCELL::UpdateManagedNodes(time, 0)` (`00551890`): the cell's
+/// world step (vtable +0xC4, `bhkWorld::Update`) and the managed references'
+/// scene-graph update that brings the bodies' transforms to their nodes.
+const UPDATE_MANAGED_NODES: u32 = 0x0055_1890;
+/// The time `TES::UpdateCellAnimations` (`00453550`) adds each frame's
+/// seconds to and passes to `UpdateManagedNodes` (float, `011c3c08`).
+const CELL_ANIMATION_TIME: u32 = 0x011c_3c08;
+/// `NiAVObject` world rotation (`NiMatrix3`, rows) and translation, PC
+/// offsets (`bhkCollisionObject::hktoNiTransform` `00c65a80` reads them).
+const WORLD_ROTATION: u32 = 0x68;
+const WORLD_TRANSLATION: u32 = 0x8c;
+
+/// Where the game's world step put a reference's 3D: its root node's world
+/// rotation (rows) and translation, game units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyPose {
+    pub reference: FormId,
+    pub rotation: [[f32; 3]; 3],
+    pub translation: [f32; 3],
+}
 
 /// The mover's move bits (`PlayerMover::MoveMode`, as `0093e860` sets them).
 pub mod move_bits {
@@ -162,6 +190,8 @@ pub struct Miss {
     /// The stage that reached it first (`havok`, `player`, `cell`,
     /// `controller`, `frame`).
     pub stage: &'static str,
+    /// Its place in the order the addresses were first reached (0 first).
+    pub first: usize,
 }
 
 /// A stop that isn't an untranslated function (memory nobody made, a
@@ -207,6 +237,14 @@ pub struct PlayerMovement {
     forms: HashMap<FormId, u32>,
     /// The last frame's result came from the game's code (no resync needed).
     in_step: bool,
+    /// The references of the made cell whose 3D loaded, by form id.
+    cell_refs: Vec<(FormId, u32)>,
+    /// Frames the game's world step ran, and frames it didn't
+    /// ([`PlayerMovement::step_world`]).
+    pub world_frames: u64,
+    pub world_fallback_frames: u64,
+    /// The world step stopped once; it isn't tried again in this cell.
+    world_failed: Option<String>,
 }
 
 impl Default for PlayerMovement {
@@ -225,6 +263,10 @@ impl Default for PlayerMovement {
             failed_files: HashMap::new(),
             forms: HashMap::new(),
             in_step: false,
+            cell_refs: Vec::new(),
+            world_frames: 0,
+            world_fallback_frames: 0,
+            world_failed: None,
         }
     }
 }
@@ -264,8 +306,10 @@ impl PlayerMovement {
         let unwound: Vec<u32> = e.call_stack.iter().rev().take(6).copied().collect();
         e.call_stack.clear();
         for &(addr, caller) in reached.borrow().iter() {
+            let first = self.misses.len();
             let miss = self.misses.entry(addr).or_insert_with(|| Miss {
                 stage,
+                first,
                 ..Miss::default()
             });
             miss.count += 1;
@@ -331,6 +375,8 @@ impl PlayerMovement {
         };
         if self.cell.as_ref().map(|(id, _)| *id) != Some(cell) {
             // A new cell: the player's controller is made again in it.
+            self.cell_refs.clear();
+            self.world_failed = None;
             let stage = if self.havok.done().is_some() {
                 match self.make_cell(e, order, cell) {
                     Ok(c) => Stage::Done(c),
@@ -568,7 +614,6 @@ impl PlayerMovement {
             e.call(CELL_LOAD_3D, &[cell]);
             Ok(())
         })?;
-        let mut loaded = 0;
         for reference in refs {
             let made =
                 self.guarded(e, "cell", |e| Ok(e.call(LOOKUP_FORM, &[reference.0]).u32()))?;
@@ -582,10 +627,17 @@ impl PlayerMovement {
                 })
                 .is_ok()
             {
-                loaded += 1;
+                self.cell_refs.push((reference, made));
+                // Bridge: the game adds a reference's collision to the
+                // world when its queued 3D task is unpacked on the main
+                // thread (`TaskUnpackFunc` `0087b990`, the reference's vtable
+                // +0x1C4 at `0087cbf3`); here right after its load.
+                let _ = self.guarded(e, "cell", |e| {
+                    e.vcall(made, REFERENCE_INIT_HAVOK, &[]);
+                    Ok(())
+                });
             }
         }
-        let _ = loaded;
         Ok(cell)
     }
 
@@ -641,6 +693,70 @@ impl PlayerMovement {
         }
     }
 
+    /// The frame's Havok world through the game's code (`--physics engine`):
+    /// the frame timer's `bhkWorld::SetDeltaTime` (as `0086f260` calls it),
+    /// then, as `TES::UpdateCellAnimations` (`00453550`) does for an
+    /// interior, the frame's seconds added to its time (`011c3c08`) and
+    /// `TESObjectCELL::UpdateManagedNodes` (`00551890`) on the cell: the
+    /// world's step (`bhkWorld::Update`, batched adds, `hkpWorld::stepDeltaTime`
+    /// until the frame's marker) and the scene-graph update that copies each
+    /// moving body's transform to its node (`bhkCollisionObject::UpdateWorldData`).
+    /// Returns every loaded reference's root node where it is now, or `None`
+    /// when the world isn't made or the step stopped (the misses are
+    /// recorded under `world`; a stopped step isn't tried again in the cell)
+    /// and the viewer steps its own bodies.
+    ///
+    /// Bridged: the rest of `0086f260` and `00453550` (the wind, the sky,
+    /// `LockHavokUpdateMT`, which is a critical section only with more than
+    /// one thread) doesn't run; the cell is the one the stages made.
+    pub fn step_world(&mut self, e: &mut Engine, seconds: f32) -> Option<Vec<BodyPose>> {
+        let cell = match (&self.havok, &self.cell, &self.world_failed) {
+            (Stage::Done(()), Some((_, Stage::Done(cell))), None) => *cell,
+            _ => {
+                self.world_fallback_frames += 1;
+                return None;
+            }
+        };
+        let refs = self.cell_refs.clone();
+        let out = self.guarded(e, "world", |e| {
+            e.call(SET_DELTA_TIME, &[seconds.to_bits(), 0, 0]);
+            let time = e.mem.f32(CELL_ANIMATION_TIME) + seconds;
+            e.mem.set_f32(CELL_ANIMATION_TIME, time);
+            e.call(UPDATE_MANAGED_NODES, &[cell, time.to_bits(), 0]);
+            let mut poses = Vec::with_capacity(refs.len());
+            for &(reference, made) in &refs {
+                let root = e.vcall(made, GET_3D, &[]).u32();
+                if root == 0 {
+                    continue;
+                }
+                let r = |i: u32| e.mem.f32(root + WORLD_ROTATION + 4 * i);
+                let rotation = [[r(0), r(1), r(2)], [r(3), r(4), r(5)], [r(6), r(7), r(8)]];
+                let translation = [0, 4, 8].map(|o| e.mem.f32(root + WORLD_TRANSLATION + o));
+                poses.push(BodyPose {
+                    reference,
+                    rotation,
+                    translation,
+                });
+            }
+            Ok(poses)
+        });
+        match out {
+            Ok(poses) if !self.probe => {
+                self.world_frames += 1;
+                Some(poses)
+            }
+            Ok(_) => {
+                self.world_fallback_frames += 1;
+                None
+            }
+            Err(why) => {
+                self.world_fallback_frames += 1;
+                self.world_failed = Some(why);
+                None
+            }
+        }
+    }
+
     /// Whether the stages are made, as a line.
     pub fn summary(&self) -> String {
         fn word<T>(s: &Stage<T>) -> String {
@@ -654,7 +770,7 @@ impl PlayerMovement {
             Some((id, s)) => format!("{id}: {}", word(s)),
             None => "none".into(),
         };
-        format!(
+        let mut line = format!(
             "Game's movement: {} frames moved by the game's code, {} by crates/physics; \
              havok {}; player {}; cell {cell}; controller {}; {} untranslated addresses reached.",
             self.engine_frames,
@@ -663,7 +779,20 @@ impl PlayerMovement {
             word(&self.player),
             word(&self.controller),
             self.misses.len()
-        )
+        );
+        if self.world_frames + self.world_fallback_frames > 0 {
+            let _ = write!(
+                line,
+                " Game's physics: {} world steps by the game's code, {} by crates/physics{}.",
+                self.world_frames,
+                self.world_fallback_frames,
+                match &self.world_failed {
+                    Some(why) => format!(" (stopped: {why})"),
+                    None => String::new(),
+                }
+            );
+        }
+        line
     }
 
     /// The other stops (memory nobody made, a refusal of the bridge), most
@@ -679,12 +808,12 @@ impl PlayerMovement {
     }
 
     /// The untranslated addresses reached, most reached first: address,
-    /// count, stage, callers (`caller×count`), and the ledger's unit and
-    /// name when `names` has them.
+    /// count, stage, callers (`caller×count`), the order they were first
+    /// reached in, and the ledger's unit and name when `names` has them.
     pub fn missing_tsv(&self, names: &dyn Fn(u32) -> Option<(String, String)>) -> String {
         let mut rows: Vec<(&u32, &Miss)> = self.misses.iter().collect();
         rows.sort_by(|a, b| b.1.count.cmp(&a.1.count).then(a.0.cmp(b.0)));
-        let mut out = String::from("address\thits\tstage\tcallers\tunit\tname\n");
+        let mut out = String::from("address\thits\tstage\tcallers\tfirst\tunit\tname\n");
         for (addr, miss) in rows {
             let callers = miss
                 .callers
@@ -695,8 +824,8 @@ impl PlayerMovement {
             let (unit, name) = names(*addr).unwrap_or_default();
             let _ = writeln!(
                 out,
-                "{addr:08x}\t{}\t{}\t{callers}\t{unit}\t{name}",
-                miss.count, miss.stage
+                "{addr:08x}\t{}\t{}\t{callers}\t{}\t{unit}\t{name}",
+                miss.count, miss.stage, miss.first
             );
         }
         out
@@ -713,6 +842,12 @@ impl crate::Host {
         input: &MoveInput,
     ) -> Option<MoveOutput> {
         self.movement.step(&mut self.engine, order, cell, input)
+    }
+
+    /// The frame's Havok world step through the game's code
+    /// ([`PlayerMovement::step_world`]); `None`: the caller steps its own.
+    pub fn step_world(&mut self, seconds: f32) -> Option<Vec<BodyPose>> {
+        self.movement.step_world(&mut self.engine, seconds)
     }
 
     /// The static initializers start-up skipped (`static_init` in
@@ -801,8 +936,8 @@ mod tests {
         assert!(m.stops.is_empty());
         let tsv = m.missing_tsv(&|_| None);
         let lines: Vec<&str> = tsv.lines().collect();
-        assert_eq!(lines[1], "00abcdef\t3\tframe\t00aa0000x3\t\t");
-        assert_eq!(lines[2], "00ab0001\t1\tcell\t00000000x1\t\t");
+        assert_eq!(lines[1], "00abcdef\t3\tframe\t00aa0000x3\t0\t\t");
+        assert_eq!(lines[2], "00ab0001\t1\tcell\t00000000x1\t1\t\t");
         assert!(e.on_open.is_none() && e.call_stack.is_empty());
     }
 
@@ -822,6 +957,72 @@ mod tests {
         });
         assert_eq!(out, Ok(0));
         assert_eq!(m.misses.len(), 2);
+    }
+
+    /// Without the havok and cell stages the world step doesn't run and the
+    /// frame is counted as the viewer's.
+    #[test]
+    fn the_world_step_waits_for_its_stages() {
+        let mut e = Engine::new();
+        let mut m = PlayerMovement::default();
+        assert_eq!(m.step_world(&mut e, 0.016), None);
+        assert_eq!((m.world_frames, m.world_fallback_frames), (0, 1));
+        assert!(m
+            .summary()
+            .contains("0 world steps by the game's code, 1 by crates/physics"));
+    }
+
+    /// The world step runs the frame timer and the cell's managed-node
+    /// update with the frame's time added, and reads each reference's root
+    /// node; a stop is recorded under `world` and not tried again.
+    #[test]
+    fn the_world_step_runs_the_cells_update_and_reads_the_nodes() {
+        let mut e = Engine::new();
+        e.mem.map(CELL_ANIMATION_TIME & !0xfff, 0x1000);
+        e.mem.set_f32(CELL_ANIMATION_TIME, 1.0);
+        e.register(SET_DELTA_TIME, |e, a| {
+            e.mem.set_u32(0x0000_2000, a[0]);
+            Ret::default()
+        });
+        e.register(UPDATE_MANAGED_NODES, |e, a| {
+            e.mem.set_u32(0x0000_2004, a[1]);
+            Ret::default()
+        });
+        e.mem.map(0x2000, 0x1000);
+        // A reference whose Get3D (+0x1D0) answers a root node at 0x2400.
+        let vtable = 0x2100;
+        e.mem.set_u32(0x2200, vtable);
+        e.mem.set_u32(vtable + GET_3D, 0x00ab_0000);
+        e.register(0x00ab_0000, |_, _| engine::abi::RetVal::into_ret(0x2400u32));
+        for i in 0..9 {
+            e.mem.set_f32(
+                0x2400 + WORLD_ROTATION + 4 * i,
+                if i % 4 == 0 { 1.0 } else { 0.0 },
+            );
+        }
+        e.mem.set_f32(0x2400 + WORLD_TRANSLATION, 5.0);
+        let mut m = PlayerMovement {
+            havok: Stage::Done(()),
+            cell: Some((FormId(0x1234), Stage::Done(0x3000))),
+            cell_refs: vec![(FormId(0x99), 0x2200)],
+            ..PlayerMovement::default()
+        };
+        let poses = m.step_world(&mut e, 0.5).expect("ran");
+        assert_eq!(e.mem.f32(0x2000), 0.5);
+        assert_eq!(e.mem.f32(0x2004), 1.5);
+        assert_eq!(e.mem.f32(CELL_ANIMATION_TIME), 1.5);
+        assert_eq!(poses.len(), 1);
+        assert_eq!(poses[0].reference, FormId(0x99));
+        assert_eq!(poses[0].translation, [5.0, 0.0, 0.0]);
+        assert_eq!(poses[0].rotation[1], [0.0, 1.0, 0.0]);
+        assert_eq!(m.world_frames, 1);
+        // A stop: recorded, and the step isn't tried again.
+        e.register(UPDATE_MANAGED_NODES, |e, _| e.call(0x00ab_cdef, &[]));
+        assert_eq!(m.step_world(&mut e, 0.5), None);
+        assert_eq!(m.misses[&0x00ab_cdef].stage, "world");
+        assert_eq!(m.step_world(&mut e, 0.5), None);
+        assert_eq!(m.misses[&0x00ab_cdef].count, 1);
+        assert_eq!(m.world_fallback_frames, 2);
     }
 
     /// A stop that isn't a missing function (memory nobody made) is kept

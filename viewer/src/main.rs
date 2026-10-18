@@ -431,6 +431,7 @@ fn main() {
         .insert_resource(hud::ShowHud(args.hud))
         .insert_resource(ai::FrozenAi(args.freeze_ai))
         .insert_resource(movement)
+        .insert_resource(clutter::EngineWorld::new(args.physics))
         .insert_resource(Background(args.background))
         .insert_resource(background::UserWindow(if args.background {
             user_window
