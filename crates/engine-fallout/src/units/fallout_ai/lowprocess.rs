@@ -26,6 +26,22 @@ const PROCESS_GET_DATE: u32 = 0x0059_bb30;
 /// `ModifierList` (Xbox PDB `pDamageModifiers`) at its argument.
 const MODIFIER_LIST_COPY: u32 = 0x0093_7160;
 
+/// The vtable `010886e4` (`_scalar_deleting_destructor_`'s table, the `LowProcess` class)
+/// that the destructor body `00906fe0` stores at `+0`.
+const LOW_PROCESS_VTABLE: u32 = 0x0108_86e4;
+/// `BaseProcess::ClearCurrentPackage` (Xbox PDB, `008d03a0`; `thiscall`, plain `RET`).
+const CLEAR_CURRENT_PACKAGE: u32 = 0x008d_03a0;
+/// `009070a0` (`thiscall`, plain `RET`, unit `lowprocess.cpp`, unnamed): a 439-byte function
+/// the destructor body runs on `this` right after `ClearCurrentPackage`.
+const LOW_PROCESS_RELEASE: u32 = 0x0090_70a0;
+/// `00937030` (`thiscall`, plain `RET`): the destructor of the `ModifierList` at `+0x94`.
+const MODIFIER_LIST_DESTRUCT: u32 = 0x0093_7030;
+/// `0046ffb0` (`thiscall`, plain `RET`): the base list destructor, run on the four lists at
+/// `+0x7c`, `+0x74`, `+0x6c` and `+0x5c`.
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+/// The base destructor `008d0640` (`thiscall`, plain `RET`), last in the body.
+const BASE_PROCESS_DESTRUCT: u32 = 0x008d_0640;
+
 /// `CurrentPackage` (Xbox PDB): the embedded `ActorPackage` at `+0x04`.
 const PACKAGE: u32 = 0x04;
 /// `iDateLastProcessed` (Xbox PDB), `+0x24`.
@@ -140,9 +156,35 @@ pub fn fn_00907510(e: &mut Engine, this: Ptr<LowProcess>, source: Ptr<LowProcess
     }
 }
 
+// Translated from 00906fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00906fe0 - the C++ exception unwinding states (FS:[0] frame, handler 00f16c52) are not translated
+/// Unnamed in the engine map (unit `lowprocess.cpp`; the destructor body that
+/// `LowProcess::_scalar_deleting_destructor_` `00906fb0` runs; `thiscall`, plain `RET`).
+/// Stores the vtable `010886e4` at `+0`, then runs `BaseProcess::ClearCurrentPackage`
+/// (`008d03a0`) and `009070a0` on `this`, the `ModifierList` destructor `00937030` on
+/// `+0x94`, the list destructor `0046ffb0` on `+0x7c`, `+0x74`, `+0x6c` and `+0x5c`, and
+/// last the base destructor `008d0640` on `this`. The disassembly passes `this` in `ECX` to
+/// every call (the decompiler shows `ClearCurrentPackage` with a cookie value instead).
+pub fn fn_00906fe0(e: &mut Engine, this: Ptr<LowProcess>) {
+    let base = this.addr();
+    e.mem.set_u32(base, LOW_PROCESS_VTABLE);
+    e.call(CLEAR_CURRENT_PACKAGE, &args![base]);
+    e.call(LOW_PROCESS_RELEASE, &args![base]);
+    // pDamageModifiers (Xbox PDB `ModifierList`) +0x94.
+    e.call(
+        MODIFIER_LIST_DESTRUCT,
+        &args![base.wrapping_add(DAMAGE_MODIFIERS)],
+    );
+    for offset in [0x7c_u32, 0x74, 0x6c, 0x5c] {
+        e.call(LIST_DESTRUCT, &args![base.wrapping_add(offset)]);
+    }
+    e.call(BASE_PROCESS_DESTRUCT, &args![base]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0090_6fe0, fn_00906fe0(Ptr<LowProcess>)),
         entry!(0x0090_6fb0, low_process_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0090_7510, fn_00907510(Ptr<LowProcess>, Ptr<LowProcess>)),
         entry!(0x0091_37b0, fn_009137b0(Ptr, u32) -> Ptr),
@@ -300,5 +342,48 @@ mod low_process_tests {
         assert_eq!(e.mem.u32(to + 0xa4), 0x7fe0_0001);
         assert_eq!(e.mem.u32(to + 0xa8), 0xffe0_0002);
         assert_eq!(e.mem.u32(to + 0xac), 0x7fc0_0003);
+    }
+}
+
+#[cfg(test)]
+mod destructor_body_tests {
+    use super::*;
+
+    type Log = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    #[test]
+    fn stores_the_vtable_and_runs_the_destructors_in_order() {
+        let mut e = Engine::new();
+        let log: Log = Log::default();
+        for address in [
+            CLEAR_CURRENT_PACKAGE,
+            LOW_PROCESS_RELEASE,
+            MODIFIER_LIST_DESTRUCT,
+            LIST_DESTRUCT,
+            BASE_PROCESS_DESTRUCT,
+        ] {
+            let log = log.clone();
+            e.register_double(address, move |_, a| {
+                log.borrow_mut().push((address, a.to_vec()));
+                Ret::default()
+            });
+        }
+        let this = e.mem.alloc(0xb4);
+        e.mem.set_u32(this, 0x1234_5678);
+        e.call(0x0090_6fe0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0108_86e4);
+        assert_eq!(
+            *log.borrow(),
+            [
+                (CLEAR_CURRENT_PACKAGE, vec![this]),
+                (LOW_PROCESS_RELEASE, vec![this]),
+                (MODIFIER_LIST_DESTRUCT, vec![this + 0x94]),
+                (LIST_DESTRUCT, vec![this + 0x7c]),
+                (LIST_DESTRUCT, vec![this + 0x74]),
+                (LIST_DESTRUCT, vec![this + 0x6c]),
+                (LIST_DESTRUCT, vec![this + 0x5c]),
+                (BASE_PROCESS_DESTRUCT, vec![this]),
+            ]
+        );
     }
 }
