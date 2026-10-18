@@ -208,9 +208,13 @@ pub fn bhk_tri_sampled_height_field_bv_tree_shape_copy_members(
 }
 
 // Translated from 00cb0020 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map: clears the byte at `flag` (one stack word; `ECX` unused).
-pub fn fn_00cb0020(e: &mut Engine, flag: Ptr) {
+/// Unnamed in the engine map; a virtual function only (vtables `010c82d8` and others, among
+/// them `hkSystemMemoryBlockServer`'s slot +4), so `thiscall` with `ECX` unused: clears the
+/// byte at `flag` (one stack word, `RET 4`) and answers `flag` (`EAX`), the `hkBool` it
+/// returns through that pointer.
+pub fn fn_00cb0020(e: &mut Engine, _this: Ptr, flag: Ptr) -> Ptr {
     e.mem.set_u8(flag.addr(), 0);
+    flag
 }
 
 // Translated from 00cb0030 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -605,7 +609,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cafff0,
             bhk_tri_sampled_height_field_bv_tree_shape_copy_members(Ptr, u32, u32)
         ),
-        entry!(0x00cb0020, fn_00cb0020(Ptr)),
+        entry!(0x00cb0020, fn_00cb0020(Ptr, Ptr) -> Ptr),
         entry!(
             0x00cb0030,
             bhk_tri_sampled_height_field_bv_tree_shape_copy_cinfo(Ptr, u32)
@@ -752,8 +756,10 @@ mod tests {
         let mut e = Engine::new();
         let byte = e.mem.alloc(4);
         e.mem.set_u8(byte, 5);
-        e.call(0x00cb_0020, &args![byte]);
+        // Through the vtable, as the large block allocator calls it: `this` first.
+        let answer = e.call(0x00cb_0020, &args![0x1234u32, byte]).u32();
         assert_eq!(e.mem.u8(byte), 0);
+        assert_eq!(answer, byte);
     }
 
     #[test]
