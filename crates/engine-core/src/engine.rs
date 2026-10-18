@@ -160,20 +160,33 @@ impl Engine {
         n
     }
 
-    /// Address of the main thread's TLS block: what the game reaches as
+    /// Address of the running thread's TLS block: what the game reaches as
     /// `*(*(FS:[0x2c]) + _tls_index * 4)`, so a field the game reads at
-    /// `+0x2b4` of it is at `e.tls() + 0x2b4`. One thread: the game's
-    /// threads are `platform`. Allocated (0x1000 bytes, zeroed, then the
-    /// exe's `.tls` template when mapped) on first use.
+    /// `+0x2b4` of it is at `e.tls() + 0x2b4`. Each game thread has its own
+    /// (the thread host, `crate::thread_host`, swaps them when it switches
+    /// threads). Allocated on first use ([`Engine::new_tls_block`]).
     pub fn tls(&mut self) -> u32 {
         if self.tls == 0 {
-            self.tls = self.mem.alloc(0x1000);
-            if self.mem.is_mapped(0x0127_2000) {
-                let template = self.mem.bytes(0x0127_2000, 0x2c5);
-                self.mem.write(self.tls, &template);
-            }
+            self.tls = self.new_tls_block();
         }
         self.tls
+    }
+
+    /// A new TLS block: 0x1000 bytes, zeroed, then the exe's `.tls` template
+    /// when it is mapped, as Windows makes one for each thread.
+    pub fn new_tls_block(&mut self) -> u32 {
+        let block = self.mem.alloc(0x1000);
+        if self.mem.is_mapped(0x0127_2000) {
+            let template = self.mem.bytes(0x0127_2000, 0x2c5);
+            self.mem.write(block, &template);
+        }
+        block
+    }
+
+    /// The running thread's TLS block as it is (0 before first use), and
+    /// the replacement of it: the thread host's switch.
+    pub(crate) fn swap_tls(&mut self, block: u32) -> u32 {
+        std::mem::replace(&mut self.tls, block)
     }
 
     /// Number of registered functions.

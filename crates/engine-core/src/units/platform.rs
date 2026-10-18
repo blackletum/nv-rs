@@ -288,15 +288,19 @@ fn initialize_critical_section_and_spin_count(_e: &mut Engine, _section: Ptr, _s
     1
 }
 
-// Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the main
-// thread's id. Code that compares thread ids sees the main thread.
-pub const MAIN_THREAD_ID: u32 = 1;
-fn get_current_thread_id(_e: &mut Engine) -> u32 {
-    MAIN_THREAD_ID
+// Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the running
+// game thread's id (`crate::thread_host`; the main thread's is 1).
+pub const MAIN_THREAD_ID: u32 = crate::thread_host::MAIN_THREAD_ID;
+fn get_current_thread_id(e: &mut Engine) -> u32 {
+    crate::thread_host::current_id(e)
 }
 
 // Platform: replaces KERNEL32.DLL Sleep (import)
-fn sleep(_e: &mut Engine, _ms: u32) {}
+/// A switch point: the running thread gives the others a turn (the time
+/// asked for is not waited; the clock moves only with the frame).
+fn sleep(e: &mut Engine, _ms: u32) {
+    crate::thread_host::host().sleep(e, signalled);
+}
 
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
@@ -318,11 +322,11 @@ fn query_performance_counter(e: &mut Engine, out: Ptr) -> i32 {
 
 // Kernel objects and virtual memory. Handles are small integers (4, 8, ...,
 // never reused) into the table `Engine::kernel`; events and semaphores keep
-// their state as Windows does. One thread runs the game, so a wait that
-// would block forever (nothing else can signal the object) and a thread
-// that would start running stop the engine with a message naming the
-// import and handle, as a call to an untranslated function does: how game
-// threads run is the lead's decision (docs/ENGINE_PORT_PLAN.md).
+// their state as Windows does. Game threads run cooperatively, one at a time,
+// on the main thread's turn (`crate::thread_host`): a wait on an object that
+// is not signalled is a switch point, and a wait that nothing can satisfy
+// (no thread can go on) stops the engine with a message naming the import and
+// handle, as a call to an untranslated function does.
 
 /// `WaitForSingleObject` timeout and results.
 const INFINITE: u32 = 0xffff_ffff;
@@ -358,8 +362,8 @@ pub enum KernelObject {
         count: i32,
         maximum: i32,
     },
-    /// A thread made by `CreateThread`. It never runs (see above); it
-    /// exists so its handle can be resumed, prioritized and closed.
+    /// A thread made by `CreateThread`; it runs through the thread host
+    /// (`crate::thread_host`), which keeps its run state.
     Thread {
         start: u32,
         parameter: u32,
@@ -388,7 +392,8 @@ pub struct Region {
 pub struct Kernel {
     objects: std::collections::BTreeMap<u32, KernelObject>,
     last_handle: u32,
-    threads_created: u32,
+    /// The game threads and their scheduling (`crate::thread_host`).
+    pub threads: crate::thread_host::Threads,
     /// The reservations by base address (public for the scrap heap's tests in
     /// `engine-bs`).
     pub regions: std::collections::BTreeMap<u32, Region>,
@@ -603,13 +608,81 @@ fn unnamed(call: &str, name: Ptr) {
     }
 }
 
-/// Stops the engine: a wait or a thread start the single game thread
-/// cannot carry out.
-fn stop_one_thread(what: String) -> ! {
+/// Stops the engine: a wait nothing can satisfy.
+fn stop_blocked(what: String) -> ! {
     panic!(
-        "{what}: one thread runs the game, nothing else can run or signal it \
-         (KERNEL32.DLL import, platform; docs/ENGINE_PORT_PLAN.md)"
+        "{what}: no game thread can go on to signal it \
+         (KERNEL32.DLL import, platform; thread host)"
     )
+}
+
+/// Whether an object would let a waiter go on now, without taking it: a
+/// signalled event, a semaphore with a count, an ended thread.
+pub fn signalled(e: &Engine, handle: u32) -> bool {
+    match e.kernel.objects.get(&handle) {
+        Some(KernelObject::Event { signalled, .. }) => *signalled,
+        Some(KernelObject::Semaphore { count, .. }) => *count > 0,
+        Some(KernelObject::Thread { .. }) => {
+            crate::thread_host::thread_ended(e, handle).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// Takes an object a waiter goes on with: resets an auto-reset event, counts a
+/// semaphore down; an ended thread stays signalled. `None` for a handle that
+/// is not open.
+fn take(e: &mut Engine, handle: u32) -> Option<bool> {
+    let taken = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Event {
+            manual_reset,
+            signalled,
+        }) => {
+            let was = *signalled;
+            if was && !*manual_reset {
+                *signalled = false;
+            }
+            was
+        }
+        Some(KernelObject::Semaphore { count, .. }) => {
+            let was = *count > 0;
+            if was {
+                *count -= 1;
+            }
+            was
+        }
+        Some(KernelObject::Thread { .. }) => {
+            crate::thread_host::thread_ended(e, handle).unwrap_or(false)
+        }
+        None if handle == CURRENT_THREAD => false,
+        None => return None,
+    };
+    if taken {
+        crate::thread_host::signal(e);
+    }
+    Some(taken)
+}
+
+/// What a waiter waits on, for a stop's message.
+fn describe(e: &Engine, handle: u32) -> String {
+    match e.kernel.objects.get(&handle) {
+        Some(KernelObject::Event { manual_reset, .. }) => format!(
+            "{} event not signalled",
+            if *manual_reset {
+                "manual-reset"
+            } else {
+                "auto-reset"
+            }
+        ),
+        Some(KernelObject::Semaphore { maximum, .. }) => {
+            format!("semaphore count 0 (maximum {maximum})")
+        }
+        Some(KernelObject::Thread { start, .. }) => {
+            format!("thread (start {start:08x}) still running")
+        }
+        _ if handle == CURRENT_THREAD => "the current thread".to_string(),
+        _ => "closed handle".to_string(),
+    }
 }
 
 // Platform: replaces KERNEL32.DLL CreateEventA (import)
@@ -634,6 +707,9 @@ fn set_event_state(e: &mut Engine, handle: u32, state: bool) -> i32 {
     match e.kernel.objects.get_mut(&handle) {
         Some(KernelObject::Event { signalled, .. }) => {
             *signalled = state;
+            if state {
+                crate::thread_host::signal(e);
+            }
             1
         }
         _ => 0,
@@ -688,6 +764,7 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
         }
         _ => return 0,
     };
+    crate::thread_host::signal(e);
     if !previous.is_null() {
         e.mem.set_i32(previous.addr(), old);
     }
@@ -697,51 +774,85 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
 // Platform: replaces KERNEL32.DLL WaitForSingleObject (import)
 /// `WaitForSingleObject(handle, timeout)`: a signalled object is taken at
 /// once (`WAIT_OBJECT_0`), resetting an auto-reset event or counting a
-/// semaphore down. An object that is not signalled stays so (no other
-/// thread runs): with a finite timeout the wait times out at once
-/// (`WAIT_TIMEOUT`; the clock is not advanced), with `INFINITE` it would
-/// block forever and stops the engine. Threads never run, so a thread
-/// handle is never signalled. An unknown handle gives `WAIT_FAILED`.
+/// semaphore down; an ended thread's handle is signalled. Otherwise the wait
+/// is a switch point (`crate::thread_host`): the other game threads run until
+/// the object is signalled or none can go on. Still not signalled, a finite
+/// wait times out (`WAIT_TIMEOUT`; the clock is not advanced) and an
+/// `INFINITE` one would block forever and stops the engine. An unknown handle
+/// gives `WAIT_FAILED`.
 fn wait_for_single_object(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
-    let blocked = match e.kernel.objects.get_mut(&handle) {
-        Some(KernelObject::Event {
-            manual_reset,
-            signalled,
-        }) => {
-            if *signalled {
-                if !*manual_reset {
-                    *signalled = false;
-                }
-                return WAIT_OBJECT_0;
-            }
-            format!(
-                "{} event not signalled",
-                if *manual_reset {
-                    "manual-reset"
-                } else {
-                    "auto-reset"
-                }
-            )
+    loop {
+        match take(e, handle) {
+            None => return WAIT_FAILED,
+            Some(true) => return WAIT_OBJECT_0,
+            Some(false) => {}
         }
-        Some(KernelObject::Semaphore { count, maximum }) => {
-            if *count > 0 {
-                *count -= 1;
-                return WAIT_OBJECT_0;
-            }
-            format!("semaphore count 0 (maximum {maximum})")
+        let finite = timeout != INFINITE;
+        if crate::thread_host::host().block(e, &[handle], false, finite, signalled) {
+            continue;
         }
-        Some(KernelObject::Thread { start, .. }) => {
-            format!("thread (start {start:08x}) that never runs")
+        if finite {
+            return WAIT_TIMEOUT;
         }
-        None if handle == CURRENT_THREAD => "the current thread".to_string(),
-        None => return WAIT_FAILED,
-    };
-    if timeout != INFINITE {
-        return WAIT_TIMEOUT;
+        let what = describe(e, handle);
+        stop_blocked(format!(
+            "WaitForSingleObject(handle {handle:#x}, INFINITE) would block forever on a {what}"
+        ));
     }
-    stop_one_thread(format!(
-        "WaitForSingleObject(handle {handle:#x}, INFINITE) would block forever on a {blocked}"
-    ))
+}
+
+// Platform: replaces KERNEL32.DLL WaitForMultipleObjects (import)
+/// `WaitForMultipleObjects(count, handles, wait all, timeout)`: with `wait
+/// all`, when every object is signalled they are all taken and
+/// `WAIT_OBJECT_0` returned; otherwise the first signalled one (by index) is
+/// taken and `WAIT_OBJECT_0 + index` returned. Not ready, it is a switch
+/// point as in `WaitForSingleObject`, then times out or stops. A count of 0
+/// or above 64, or a closed handle, gives `WAIT_FAILED`.
+fn wait_for_multiple_objects(
+    e: &mut Engine,
+    count: u32,
+    handles: Ptr,
+    all: i32,
+    timeout: u32,
+) -> u32 {
+    if count == 0 || count > 64 {
+        return WAIT_FAILED;
+    }
+    let list: Vec<u32> = (0..count)
+        .map(|i| e.mem.u32(handles.addr() + 4 * i))
+        .collect();
+    if list
+        .iter()
+        .any(|&h| !e.kernel.objects.contains_key(&h) && h != CURRENT_THREAD)
+    {
+        return WAIT_FAILED;
+    }
+    let all = all != 0;
+    loop {
+        if all {
+            if list.iter().all(|&h| signalled(e, h)) {
+                for &h in &list {
+                    take(e, h);
+                }
+                return WAIT_OBJECT_0;
+            }
+        } else if let Some(i) = list.iter().position(|&h| signalled(e, h)) {
+            take(e, list[i]);
+            return WAIT_OBJECT_0 + i as u32;
+        }
+        let finite = timeout != INFINITE;
+        if crate::thread_host::host().block(e, &list, all, finite, signalled) {
+            continue;
+        }
+        if finite {
+            return WAIT_TIMEOUT;
+        }
+        let what: Vec<String> = list.iter().map(|&h| describe(e, h)).collect();
+        stop_blocked(format!(
+            "WaitForMultipleObjects({count}, all {all}, INFINITE) would block forever on {}",
+            what.join(", ")
+        ));
+    }
 }
 
 // Platform: replaces KERNEL32.DLL CloseHandle (import)
@@ -757,9 +868,10 @@ fn get_current_thread(_e: &mut Engine) -> u32 {
 
 // Platform: replaces KERNEL32.DLL CreateThread (import)
 /// `CreateThread(security, stack size, start, parameter, flags, id out)`:
-/// a suspended thread is recorded (handle returned, a new thread id stored
-/// through the last argument if not null). A thread that would start
-/// running at once (no `CREATE_SUSPENDED`) stops the engine.
+/// the thread is recorded with the thread host (`crate::thread_host`; handle
+/// returned, its id stored through the last argument if not null). It runs
+/// `start(parameter)` at the next switch point once its suspend count is 0
+/// (at once runnable without `CREATE_SUSPENDED`).
 fn create_thread(
     e: &mut Engine,
     _security: u32,
@@ -769,21 +881,18 @@ fn create_thread(
     flags: u32,
     id_out: Ptr,
 ) -> u32 {
-    if flags & CREATE_SUSPENDED == 0 {
-        stop_one_thread(format!(
-            "CreateThread(start {start:08x}, parameter {parameter:08x}, flags {flags:#x}) \
-             would start the thread running"
-        ));
-    }
-    e.kernel.threads_created += 1;
-    let id = MAIN_THREAD_ID + e.kernel.threads_created;
+    let suspended = flags & CREATE_SUSPENDED != 0;
     let handle = e.kernel.insert(KernelObject::Thread {
         start,
         parameter,
-        id,
-        suspend_count: 1,
+        id: 0,
+        suspend_count: u32::from(suspended),
         x87_control_word: crate::x87::DEFAULT_CONTROL_WORD,
     });
+    let id = crate::thread_host::create(e, handle, start, parameter, suspended);
+    if let Some(KernelObject::Thread { id: slot, .. }) = e.kernel.objects.get_mut(&handle) {
+        *slot = id;
+    }
     if !id_out.is_null() {
         e.mem.set_u32(id_out.addr(), id);
     }
@@ -866,33 +975,46 @@ pub fn direct3d_device_created(e: &mut Engine, behavior_flags: u32) {
     }
 }
 
-// Platform: replaces KERNEL32.DLL ResumeThread (import)
-/// Lowers a thread's suspend count and returns the previous one. Bringing
-/// it to 0 would start the thread running, which stops the engine. The
-/// current thread runs (previous count 0); an unknown handle gives -1.
-fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
+/// Changes a thread's suspend count by `delta` (both the handle's record and
+/// the thread host's); the previous count, or -1 for a handle that is not a
+/// thread. The current thread's pseudo handle reports 0.
+fn change_suspend_count(e: &mut Engine, handle: u32, delta: i32) -> u32 {
     if handle == CURRENT_THREAD {
         return 0;
     }
-    match e.kernel.objects.get_mut(&handle) {
-        Some(KernelObject::Thread {
-            start,
-            parameter,
-            suspend_count,
-            ..
-        }) => {
+    let previous = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Thread { suspend_count, .. }) => {
             let previous = *suspend_count;
-            if previous == 1 {
-                stop_one_thread(format!(
-                    "ResumeThread(handle {handle:#x}) would start the thread running \
-                     (start {start:08x}, parameter {parameter:08x})"
-                ));
-            }
-            *suspend_count = previous.saturating_sub(1);
+            *suspend_count = previous.saturating_add_signed(delta);
             previous
         }
-        _ => 0xffff_ffff,
+        _ => return 0xffff_ffff,
+    };
+    if let Some(t) = crate::thread_host::by_handle(e, handle) {
+        t.suspend_count = previous.saturating_add_signed(delta);
     }
+    previous
+}
+
+// Platform: replaces KERNEL32.DLL ResumeThread (import)
+/// Lowers a thread's suspend count (not below 0) and returns the previous
+/// one; at 0 the thread runs at the next switch point.
+fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
+    change_suspend_count(e, handle, -1)
+}
+
+// Platform: replaces KERNEL32.DLL SuspendThread (import)
+/// Raises a thread's suspend count and returns the previous one. (A thread
+/// suspends another only between switch points here, so it never stops one
+/// in the middle of its work.)
+fn suspend_thread(e: &mut Engine, handle: u32) -> u32 {
+    change_suspend_count(e, handle, 1)
+}
+
+// Platform: replaces KERNEL32.DLL ExitThread (import)
+/// Ends the running game thread with `code` (its handle becomes signalled).
+fn exit_thread(e: &mut Engine, code: u32) {
+    crate::thread_host::host().exit(e, code);
 }
 
 /// Thread-local storage indexes Windows provides (`TLS_MINIMUM_AVAILABLE`
@@ -1149,6 +1271,13 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, create_thread(u32, u32, u32, u32, u32, Ptr) -> u32).1,
         ),
         (k, "ResumeThread", entry!(0, resume_thread(u32) -> u32).1),
+        (k, "SuspendThread", entry!(0, suspend_thread(u32) -> u32).1),
+        (k, "ExitThread", entry!(0, exit_thread(u32)).1),
+        (
+            k,
+            "WaitForMultipleObjects",
+            entry!(0, wait_for_multiple_objects(u32, Ptr, i32, u32) -> u32).1,
+        ),
         (
             k,
             "SetThreadPriority",
@@ -1272,6 +1401,9 @@ mod tests {
     const GET_CURRENT_THREAD: u32 = 0x00fd_f120;
     const CREATE_THREAD: u32 = 0x00fd_f124;
     const RESUME_THREAD: u32 = 0x00fd_f158;
+    // Stand-in slots for the tests (any free address works: registration is by name).
+    const SLEEP: u32 = 0x00ab_f000;
+    const WAIT_FOR_MULTIPLE_OBJECTS: u32 = 0x00ab_f004;
     const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
     const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
     const RESET_EVENT: u32 = 0x00fd_f1cc;
@@ -1294,6 +1426,8 @@ mod tests {
             (RELEASE_SEMAPHORE, "ReleaseSemaphore"),
             (WAIT_FOR_SINGLE_OBJECT, "WaitForSingleObject"),
             (RESET_EVENT, "ResetEvent"),
+            (SLEEP, "Sleep"),
+            (WAIT_FOR_MULTIPLE_OBJECTS, "WaitForMultipleObjects"),
         ];
         let imports: Vec<crate::exe::Import> = slots
             .iter()
@@ -1493,7 +1627,7 @@ mod tests {
         assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[0x99, 0]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[CURRENT_THREAD]), 0);
         assert_eq!(call(&mut e, RESUME_THREAD, &[0x99]), 0xffff_ffff);
-        // A thread never runs, so it is never signalled.
+        // A suspended thread does not run, so it is not signalled.
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 10]), WAIT_TIMEOUT);
         assert_eq!(call(&mut e, CLOSE_HANDLE, &[t]), 1);
     }
@@ -1551,27 +1685,201 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[should_panic(expected = "ResumeThread(handle 0x4) would start the thread running \
-                               (start 00aa64d0, parameter 00004444)")]
-    fn resuming_a_thread_to_run_stops() {
+    /// A game thread's start function, standing in for a `ThreadProc`: logs
+    /// `parameter` and its thread id to the word log at 0x2000, then waits on
+    /// the event in `0x2f00` and logs again (`parameter + 1`).
+    fn waiting_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        log(e, a[0]);
+        let ev = e.mem.u32(0x2f00);
+        assert_eq!(wait_for_single_object(e, ev, INFINITE), WAIT_OBJECT_0);
+        log(e, a[0] + 1);
+        Ret {
+            eax: 0x77,
+            ..Ret::default()
+        }
+    }
+
+    fn log(e: &mut Engine, word: u32) {
+        let n = e.mem.u32(0x2ff0);
+        e.mem.set_u32(0x2000 + 4 * n, word);
+        let id = get_current_thread_id(e);
+        e.mem.set_u32(0x2000 + 4 * n + 0x800, id);
+        e.mem.set_u32(0x2ff0, n + 1);
+    }
+
+    fn logged(e: &Engine) -> Vec<(u32, u32)> {
+        let n = e.mem.u32(0x2ff0);
+        (0..n)
+            .map(|i| (e.mem.u32(0x2000 + 4 * i), e.mem.u32(0x2800 + 4 * i)))
+            .collect()
+    }
+
+    fn thread_engine() -> Engine {
         let mut e = kernel_engine();
-        let t = call(
-            &mut e,
-            CREATE_THREAD,
-            &[0, 0, 0x00aa_64d0, 0x4444, CREATE_SUSPENDED, 0],
-        );
-        call(&mut e, RESUME_THREAD, &[t]);
+        e.mem.map(0x2000, 0x1000);
+        e.register(0x00ab_0000, waiting_thread);
+        e
     }
 
     #[test]
-    #[should_panic(
-        expected = "CreateThread(start 00aa64d0, parameter 00004444, flags 0x0) \
-                               would start the thread running"
-    )]
-    fn creating_a_running_thread_stops() {
-        let mut e = kernel_engine();
-        call(&mut e, CREATE_THREAD, &[0, 0, 0x00aa_64d0, 0x4444, 0, 0]);
+    fn a_created_thread_runs_at_the_next_switch_point_and_waits_its_turn() {
+        let mut e = thread_engine();
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0000, 10, 0, 0]);
+        // Created running, but it runs only at a switch point.
+        assert!(logged(&e).is_empty());
+        // The main thread's wait with a timeout is a switch point: the thread
+        // runs up to its own wait, and the main thread's wait times out.
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(logged(&e), [(10, 2)]);
+        // SetEvent wakes it at the next switch point: waiting on its handle.
+        assert_eq!(call(&mut e, SET_EVENT, &[ev]), 1);
+        assert_eq!(logged(&e).len(), 1);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(logged(&e), [(10, 2), (11, 2)]);
+        // The main thread is itself again.
+        assert_eq!(get_current_thread_id(&mut e), MAIN_THREAD_ID);
+        assert!(matches!(
+            crate::thread_host::by_handle(&mut e, t).unwrap().state,
+            crate::thread_host::RunState::Finished { code: 0x77 }
+        ));
+    }
+
+    /// A game thread's start function that records its control word (0x2100)
+    /// and its 1/3 (0x2108, `x87_div`), sets round down on itself, waits on
+    /// the event in `0x2f00`, then records its word again (0x2104).
+    fn precision_thread(e: &mut Engine, _: &[u32]) -> Ret {
+        let word = crate::units::crt::x87_control_word(e);
+        e.mem.set_u32(0x2100, u32::from(word));
+        let third = crate::x87::x87_div(1.0, 3.0);
+        e.mem.set_u64(0x2108, third.to_bits());
+        crate::units::crt::ctrlfp(e, 0x0400, 0x0c00);
+        let ev = e.mem.u32(0x2f00);
+        assert_eq!(wait_for_single_object(e, ev, INFINITE), WAIT_OBJECT_0);
+        e.mem.set_u32(0x2104, u32::from(crate::x87::control_word()));
+        Ret::default()
+    }
+
+    /// The thread host's game threads keep their own x87 precision: the AI
+    /// linear task threads at 0x027F (53-bit) while the main thread is at
+    /// 0x007F once the device exists, each word loaded again when it runs.
+    #[test]
+    fn a_stepped_game_thread_keeps_its_own_precision() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0100, precision_thread);
+        direct3d_device_created(&mut e, 0);
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0100, 0, 0, 0]);
+        let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]), WAIT_TIMEOUT);
+        assert_eq!(e.mem.u32(0x2100), 0x027f);
+        assert_eq!(f64::from_bits(e.mem.u64(0x2108)), 1.0 / 3.0);
+        // Back on the main thread: 24-bit.
+        assert_eq!(crate::x87::control_word(), 0x007f);
+        assert_eq!(crate::x87::x87_div(1.0, 3.0), f64::from(1.0f32 / 3.0));
+        call(&mut e, SET_EVENT, &[ev]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        // The thread's own change (round down) came back with it.
+        assert_eq!(e.mem.u32(0x2104), 0x067f);
+        assert_eq!(crate::units::crt::x87_control_word(&mut e), 0x007f);
+    }
+
+    #[test]
+    fn two_threads_take_turns_in_creation_order() {
+        let mut e = thread_engine();
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        e.mem.set_u32(0x2f00, ev);
+        let a = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0000, 10, 0, 0]);
+        let b = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00ab_0000, 20, CREATE_SUSPENDED, 0],
+        );
+        assert_eq!(call(&mut e, RESUME_THREAD, &[b]), 1);
+        call(&mut e, SLEEP, &[0]);
+        assert_eq!(logged(&e), [(10, 2), (20, 3)]);
+        // A manual-reset event lets both go on, in creation order.
+        call(&mut e, SET_EVENT, &[ev]);
+        e.mem.set_u32(0x2e00, a);
+        e.mem.set_u32(0x2e04, b);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_MULTIPLE_OBJECTS, &[2, 0x2e00, 1, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(logged(&e), [(10, 2), (20, 3), (11, 2), (21, 3)]);
+    }
+
+    #[test]
+    fn each_thread_has_its_own_tls_block_and_slot_values() {
+        let mut e = thread_engine();
+        let index = tls_alloc(&mut e);
+        tls_set_value(&mut e, index, 0x1111);
+        let main_block = e.tls();
+        e.register(0x00ab_0100, |e, _| {
+            let block = e.tls();
+            Ret {
+                eax: block,
+                edx: tls_get_value(e, 0),
+                ..Ret::default()
+            }
+        });
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0100, 0, 0, 0]);
+        call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]);
+        let crate::thread_host::RunState::Finished { code } =
+            crate::thread_host::by_handle(&mut e, t).unwrap().state
+        else {
+            panic!("not finished")
+        };
+        assert_ne!(code, main_block, "its own block");
+        assert_eq!(e.tls(), main_block);
+        assert_eq!(tls_get_value(&mut e, index), 0x1111);
+    }
+
+    #[test]
+    fn a_stopped_thread_stops_the_run_that_switched_to_it() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0200, |e, _| e.call(0x00ab_cdef, &[]));
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0200, 0, 0, 0]);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]);
+        }))
+        .unwrap_err();
+        let text = stop.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(text.starts_with("open function 00abcdef"), "{text}");
+        assert!(text.contains("in game thread 2, start 00ab0200"), "{text}");
+        // Its handle is signalled now (it ended).
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 0]), WAIT_OBJECT_0);
+        assert!(e.call_stack.is_empty() || e.call_stack.iter().all(|&a| a != 0x00ab_0200));
+    }
+
+    #[test]
+    fn exit_thread_ends_the_thread_with_its_code() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0300, |e, _| {
+            exit_thread(e, 5);
+            unreachable!("ExitThread returned")
+        });
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0300, 0, 0, 0]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert!(matches!(
+            crate::thread_host::by_handle(&mut e, t).unwrap().state,
+            crate::thread_host::RunState::Finished { code: 5 }
+        ));
     }
 
     #[test]

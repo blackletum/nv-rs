@@ -65,6 +65,7 @@ pub mod mem;
 pub mod ptr;
 pub mod static_exit;
 pub mod static_init;
+pub mod thread_host;
 pub mod types;
 pub mod units;
 pub mod x87;
