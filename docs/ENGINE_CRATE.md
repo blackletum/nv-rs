@@ -438,10 +438,17 @@ of them (indicative only; it never moves the player). Opt-in headless run:
 NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_player_move -- --ignored --nocapture
 ```
 
-State on 2026-10-15: no frame runs on the game's code yet; the first stops
-are Havok's memory system (`hkMemorySystem::FrameInfo::FrameInfo`,
-`00cbbfa0`, from `bhkWorld::InitSystem`) and `005f78e0` in the player's
-constructor (the list: the Build 43 report).
+`NV_MOVE_TRACE=FILE` appends, for each stage that stops, the last 4000 calls
+it returned from (address, argument words, `EAX`; `Engine::trace`): the
+quickest way to see which callee answered wrong before a fault.
+
+State on 2026-10-18: no frame runs on the game's code yet. Havok's base
+system starts (`hkBaseSystem` through `00cbbb10`, its 15 singletons); the
+havok stage stops at `bhkCollisionFilter::InitFlags` (`00c828f0`), and after
+it `NiStream::RegisterLoader` needs the loader map that `NiInit` (`00aa20b0`,
+which `main` calls and the host does not yet) makes through
+`NiStream::_SDMInit`. The player stage stops in the constructor's process
+swap (`00907510`, `00906fb0`).
 
 ### Static initializers
 
