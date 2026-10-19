@@ -85,7 +85,7 @@ playable build:
 | | System | Status |
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
-| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: Havok about 98% translated (the last functions Ghidra never listed are being finished), physics about 94%; wiring the game's own physics into play is under way |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: Havok 99.8% translated (19 functions left, mostly seven large solver and world functions), physics about 94%; wiring the game's own physics into play is under way |
 | 🔨 | **Animation and faces** | Started: about 15% translated |
 | ⬜ | **Audio:** sounds, music and the radio | About two-thirds translated |
 | 🔨 | **Graphics:** lighting, weather and effects matching the original | Started: trees (SpeedTree) translated; the game's own renderer is being translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); about a quarter done |
