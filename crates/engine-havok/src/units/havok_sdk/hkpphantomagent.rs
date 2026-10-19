@@ -87,9 +87,41 @@ pub fn hkp_phantom_agent_get_closest_points(
 ) {
 }
 
+// Translated from 00d42730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `_unused_2`, `collector`;
+/// the roles are descriptions, not confirmed): entry `+4` of the 0x14-byte agent record
+/// `00d42960` registers (the static `getPenetrations` of the phantom pair). Hands the first two
+/// words to the object `collector` through its virtual function at vtable offset 4
+/// (`thiscall`, two stack words) and answers what it answers.
+pub fn fn_00d42730(
+    e: &mut Engine,
+    body_a: u32,
+    body_b: u32,
+    _unused_2: u32,
+    collector: Ptr,
+) -> u32 {
+    e.vcall(collector.addr(), 4, &args![body_a, body_b]).u32()
+}
+
+// Translated from 00d42760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl; entry `+8` of the 0x14-byte agent record `00d42960`
+/// registers, the static `getClosestPoints` slot): a bare `RET`, no instruction reads a stack
+/// word. Declared with the four words the sibling statics of that slot take (`00d42730` here,
+/// `hkpBoxBoxAgent::staticGetClosestPoints` elsewhere), none of them read. It does nothing.
+pub fn fn_00d42760(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) {
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d42730, fn_00d42730(u32, u32, u32, Ptr) -> u32),
+        entry!(0x00d42760, fn_00d42760(u32, u32, u32, u32)),
         entry!(0x00d426b0, hkp_phantom_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d42700,
@@ -113,6 +145,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fn_00d42730_hands_the_first_two_words_to_the_collectors_slot_one() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let collector = e.mem.alloc(8);
+        e.mem.set_u32(collector, 0x0900_0000);
+        e.register(0x0900_0100, |_, a| Ret {
+            eax: a[0].wrapping_add(a[1]).wrapping_add(a[2]),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00d4_2730, &args![10u32, 20u32, 30u32, collector])
+            .u32();
+        assert_eq!(answer, collector + 30);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0100)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0100, vec![collector, 10, 20])]);
+    }
+
+    #[test]
+    fn fn_00d42760_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_2760, &args![1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
 
     /// The `this` word of the virtual calls: these functions never read `ECX`.
     const VCALL_THIS: u32 = 0x7777_0000;

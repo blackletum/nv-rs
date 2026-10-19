@@ -642,9 +642,46 @@ pub fn hkp_multi_ray_convex_agent_scalar_deleting_destructor(
     this
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d37740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `owner`): a create
+/// function of the multi-ray / convex pair (code at `00d3781d` stores its address in an agent
+/// record). Allocates the 0x20-byte agent (`allocate_agent_block`) and runs the constructor
+/// `00d376b0` on it with the four words in this order. Answers what the constructor answers,
+/// the agent.
+pub fn fn_00d37740(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: u32, owner: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x20);
+    fn_00d376b0(e, Ptr::new(agent), body_a, body_b.addr(), input, owner).addr()
+}
+
+// Translated from 00d37780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `owner`): the create
+/// function of the flipped multi-ray / convex agent (code at `00d377e3` stores its address in an
+/// agent record). Allocates the 0x20-byte agent (`allocate_agent_block`), runs the constructor
+/// `00d376b0` with the two bodies exchanged (`body_b`, `body_a`, `input`, `owner`) and stores
+/// the vtable `010cee10`. Answers the agent.
+pub fn fn_00d37780(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: u32, owner: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x20);
+    fn_00d376b0(e, Ptr::new(agent), body_b, body_a.addr(), input, owner);
+    e.mem.set_u32(agent, 0x010c_ee10);
+    agent
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d37740, fn_00d37740(Ptr, Ptr, u32, u32) -> u32),
+        entry!(0x00d37780, fn_00d37780(Ptr, Ptr, u32, u32) -> u32),
         entry!(0x00d3_6fc0, hkp_multi_ray_convex_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d3_7010,
@@ -697,6 +734,70 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn install_allocator(e: &mut Engine, block: u32) -> std::rc::Rc<std::cell::RefCell<Vec<u32>>> {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    /// A body whose shape's word at `+0x14` (the ray count) is `rays`.
+    fn body_with_rays(e: &mut Engine, rays: u32) -> u32 {
+        let shape = e.mem.alloc(0x40);
+        e.mem.set_u32(shape + 0x14, rays);
+        let body = e.mem.alloc(0x10);
+        e.mem.set_u32(body, shape);
+        body
+    }
+
+    #[test]
+    fn fn_00d37740_allocates_the_agent_and_runs_the_constructor_with_the_bodies_in_order() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let a = body_with_rays(&mut e, 1);
+        let b = body_with_rays(&mut e, 3);
+        let agent = e.call(0x00d3_7740, &args![a, b, 0u32, 0x88u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x20]);
+        assert_eq!(e.mem.u16(agent + 4), 0x20);
+        assert_eq!(e.mem.u32(agent), AGENT_VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        // The constructor sizes the id array by the first body's ray count.
+        assert_eq!(e.mem.u32(agent + 0x10), 1);
+    }
+
+    #[test]
+    fn fn_00d37780_exchanges_the_bodies_and_stores_the_flipped_vtable() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let a = body_with_rays(&mut e, 1);
+        let b = body_with_rays(&mut e, 3);
+        let agent = e.call(0x00d3_7780, &args![a, b, 0u32, 0x88u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x20]);
+        assert_eq!(e.mem.u32(agent), 0x010c_ee10);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent + 0x10), 3);
+    }
 
     /// The `this` word of the virtual calls: these functions never read `ECX`.
     const VCALL_THIS: u32 = 0x7777_0000;

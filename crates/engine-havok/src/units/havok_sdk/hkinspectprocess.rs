@@ -800,9 +800,52 @@ fn consume_object_command(e: &mut Engine, at: u32) {
     });
 }
 
+// Translated from 00ddb5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, five words `first`, `second`, `flag`, `fourth`, `target`;
+/// descriptions, not confirmed; code in two registration functions stores its address, at
+/// `00ddb6ae` and `00ddb656`): a forwarder. With a non-zero low byte of `flag` it runs `00ddb310`
+/// on `target` (`thiscall`, three stack words `(first, second, fourth)`); with zero it runs
+/// `00ddb550` on `target` (`thiscall`, one stack word, `first`). Answers what the callee
+/// answers.
+pub fn fn_00ddb5d0(
+    e: &mut Engine,
+    first: u32,
+    second: u32,
+    flag: u8,
+    fourth: u32,
+    target: Ptr,
+) -> u32 {
+    if flag != 0 {
+        e.call(0x00dd_b310, &args![target, first, second, fourth])
+            .u32()
+    } else {
+        e.call(0x00dd_b550, &args![target, first]).u32()
+    }
+}
+
+// Translated from 00ddb710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `argument`; the code in `registerProcess` at
+/// `00ddb756` stores its address): the create function of a server process. Allocates 0x30 bytes
+/// from the memory router's allocator (virtual slot 4), stores the size in the 16-bit word at
+/// `+4` and runs `00ddb600` on the block (`thiscall`, one stack word, `argument`). Answers that
+/// object plus 8, or 0 when `00ddb600` answers null.
+pub fn fn_00ddb710(e: &mut Engine, argument: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![0x30u32]).u32();
+    e.mem.set_u16(block.wrapping_add(4), 0x30);
+    let object = e.call(0x00dd_b600, &args![block, argument]).u32();
+    if object == 0 {
+        return 0;
+    }
+    object.wrapping_add(8)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ddb5d0, fn_00ddb5d0(u32, u32, u8, u32, Ptr) -> u32),
+        entry!(0x00ddb710, fn_00ddb710(u32) -> u32),
         entry!(0x00ddb310, hk_inspect_process_add_top_level_object(Ptr, u32, u32, u32) -> u32),
         entry!(0x00ddb3a0, hk_inspect_process_init(Ptr)),
         entry!(0x00ddb450, find_member_item(u32, u32, u32, u32, u32) -> u32),
@@ -822,6 +865,97 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
+
+    fn calls_of_00ddb5d0(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00ddb5d0_with_the_flag_runs_00ddb310_with_three_words() {
+        let mut e = Engine::new();
+        e.register(0x00dd_b310, |_, _| Ret {
+            eax: 0x31,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00dd_b5d0, &args![1u32, 2u32, 0x101u32, 4u32, 0x5000u32])
+            .u32();
+        assert_eq!(answer, 0x31);
+        assert_eq!(
+            calls_of_00ddb5d0(&e, 0x00dd_b310),
+            vec![vec![0x5000, 1, 2, 4]]
+        );
+    }
+
+    #[test]
+    fn fn_00ddb5d0_without_the_flag_runs_00ddb550_with_one_word() {
+        let mut e = Engine::new();
+        e.register(0x00dd_b550, |_, _| Ret {
+            eax: 0x55,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        // Only the low byte of the third word is the flag.
+        let answer = e
+            .call(0x00dd_b5d0, &args![1u32, 2u32, 0x100u32, 4u32, 0x5000u32])
+            .u32();
+        assert_eq!(answer, 0x55);
+        assert_eq!(calls_of_00ddb5d0(&e, 0x00dd_b550), vec![vec![0x5000, 1]]);
+    }
+
+    /// A router whose allocator hands out `block` (mapped) from slot 4.
+    fn router_for_00ddb710(e: &mut Engine, block: u32) {
+        e.map(block, 0x100);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            assert_eq!(a[1], 0x30);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn fn_00ddb710_answers_the_object_plus_eight() {
+        let mut e = Engine::new();
+        router_for_00ddb710(&mut e, 0x0800_0000);
+        e.register(0x00dd_b600, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00dd_b710, &args![0x77u32]).u32();
+        assert_eq!(answer, 0x0800_0008);
+        assert_eq!(e.mem.u16(0x0800_0004), 0x30);
+        assert_eq!(
+            calls_of_00ddb5d0(&e, 0x00dd_b600),
+            vec![vec![0x0800_0000, 0x77]]
+        );
+    }
+
+    #[test]
+    fn fn_00ddb710_answers_zero_when_the_constructor_answers_null() {
+        let mut e = Engine::new();
+        router_for_00ddb710(&mut e, 0x0800_0000);
+        e.register(0x00dd_b600, |_, _| Ret::default());
+        assert_eq!(e.call(0x00dd_b710, &args![0x77u32]).u32(), 0);
+    }
 
     const ARCHIVE: u32 = 0x4400_6000;
     const ALLOCATOR_VTABLE: u32 = 0x4400_6100;
