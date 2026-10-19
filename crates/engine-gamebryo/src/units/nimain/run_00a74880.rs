@@ -116,9 +116,8 @@ fn probe_cpu(e: &mut Engine, mut cpuid: impl FnMut(u32) -> Option<[u32; 4]>) {
 }
 
 // Translated from 00a74a10 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00a74a10 - the exe's SEH frame (three `__except` handlers around
-// its `CPUID` instructions) is modelled by `CPUID` answering `None`; the registered entry
-// runs the host's `CPUID` (or `None` where the host has none)
+// Translation incomplete: 00a74a10 - SEH frame (three __except handlers) modelled by CPUID answering None
+// (the registered entry runs the host CPUID, or None where the host has none)
 /// Unnamed in the engine map (range inside the NiMain subsystem; no arguments): sets the
 /// byte `011f4a54` to 1 and probes the CPU with `CPUID` to choose the mode word at
 /// `011f4a50`: 6 when the extended leaf answers with bit 31 set (twice), otherwise from
