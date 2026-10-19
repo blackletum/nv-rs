@@ -70,8 +70,9 @@ lead and the wiring branch: keep one when merging.
 agents/scratch/aNN):** a01 (83 of 102 Havok gap functions, stand-in tested), a03
 (the game's Havok glue, ~40 of 120), a07 (NiCollision, ~37 of 120, continue at
 00e9e860), a09 (functions only the old viewer crates had), a06 (the nv-pure
-24-bit oracle option); a02 and a04 may have committed their last step (check
-their branches); the wiring agent's branch. Resume each with "your worktree has
+24-bit oracle option), a02 (NiInit's four registered start-up functions and
+callees, stand-in tested), a04 (the last 16 functions of the game's Havok glue);
+and on the wiring branch, the world step moved onto AI thread 2 (untested). Resume each with "your worktree has
 partial work: review, finish, test once, commit".
 
 **Machinery changes:**
