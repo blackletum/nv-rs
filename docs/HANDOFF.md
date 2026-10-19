@@ -57,8 +57,9 @@ the batches collected after #221 (see below).
 
 **Play build (Build 43, branch `claude/build43-movement`, worktree wt-build43,
 not pushed):** no frame runs on the game's code yet. The host runs the game's
-own `NiInit`; start-up stops at the first game thread (the IO thread) until the
-thread host exists, and `NiInit` also needs four registered start-up functions
+own `NiInit`. The thread host is built and tested on the branch (36674e94);
+moving the Havok step onto AI thread 2 is written but uncommitted and untested
+(see build43-status.md). Start-up needs `NiInit` also needs four registered start-up functions
 (00a2d8a0, 00c1aa00, 00e98ff0, 00e91dc0) and their callees. The status file is
 private phase0/build43-status.md; the missing list phase0/physics-missing.tsv;
 the plan phase0/physics-wiring-plan.md. A replay test of the real game's
