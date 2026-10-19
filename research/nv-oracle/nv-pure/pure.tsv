@@ -447,6 +447,7 @@ address	cc	params	ret	unit	callees	consts
 00cbfd80	cdecl	f32	f32	crates/engine-havok/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
 00cbfe20	cdecl	f32	i32	crates/engine-havok/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
 00cbfef0	cdecl	f32	i32	crates/engine-havok/src/units/havok_sdk/hkmathtypes.rs		i23,i255,i127,i31
+00cbff80	cdecl	f32,f32	f32	crates/engine-havok/src/units/havok_sdk/hkmathtypes.rs		i1,i65,d3e80000000000000,d3fbeff0880000000,d3fb7f11c80000000,d3ff921fb60000000,d400921fb60000000
 00cc04c0	cdecl		u32	crates/engine-havok/src/units/havok_sdk/hkostream.rs		
 00cc0770	cdecl		u32	crates/engine-havok/src/units/havok_sdk/hkostream.rs		
 00cc1280	cdecl		u32	crates/engine-fallout/src/units/unplaced/run_00cc1190.rs		
