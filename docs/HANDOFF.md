@@ -7,7 +7,91 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-16 evening (current; give this to the next account first)
+### Claude lead, 2026-10-18 evening (current; give this to the next account first)
+
+Stopped at 93 % weekly usage (95-96 % rule). Maintainer priority: **finish
+Havok, then only the next play build (the game's own physics and movement in
+the game), nothing else.**
+
+**Merged this session:** #218, #219, #220, #221 (all of the then-listed Havok,
+SpeedTree complete, start-up and shut-down leftovers, the renderer scaffolded
+under ADR-0007, the engine split into crates). The PR carrying this note adds
+the batches collected after #221 (see below).
+
+**Decisions (maintainer, this session):**
+- **No bytes copied from the exe in the repo.** The Steam exe's `.text` is
+  encrypted, so code-section tables are not read from the player's exe either:
+  compiler switch tables are translated as `match` arms (done for 23 functions).
+- **The engine is split** into `engine-core`, `engine-gamebryo`, `engine-bs`,
+  `engine-havok`, `engine-speedtree`, `engine-fallout` behind the `engine`
+  facade (docs/ENGINE_CRATE.md, "The engine crates"). Same registered addresses
+  and tests; a Havok test build takes 3 minutes instead of 12.
+- **Threads:** the approved thread host runs each game thread's `ThreadProc`
+  (BSThread start function 00aa64d0) as a coroutine on the main thread (an OS
+  thread used strictly as a coroutine is allowed), with per-thread TLS and x87
+  control word, waits that yield, fixed switch points. Real threads can replace
+  it later.
+
+**Findings that change numbers:**
+- **Ghidra never created 3,216 functions** the exe runs (reached only from
+  vtables, data or tail jumps). The ledger now reads
+  `research/engine-map/ghidra_gaps.tsv`: 69,475 functions. Havok was about 91 %
+  done, not 100 %, when found; most of its gap functions are now translated
+  (six batches) but not all (below). The README line "all of Havok is
+  translated" on main is wrong until this PR's README change lands.
+- **The ledger counted markers in the old viewer crates** (`crates/physics`,
+  `crates/world`) as translated: 170 functions. Fixed: only engine crates count;
+  those are `traced` now.
+- **x87 precision, measured in the real game (a06):** main thread 0x027F until
+  `CreateDevice` (00e72e60), then 0x007F (24-bit) for the rest of the run
+  (player mover, character controller); the Havok step (`bhkWorld::Update`,
+  `hkpWorld::stepDeltaTime`) runs every frame on AI linear task thread 2
+  (008c7f50) at 0x027F; MXCSR 0x1F80 everywhere. The per-thread control word
+  model is in (engine-core, switched at device creation, tests against the CPU);
+  translations do not use it yet (the movement path's x87 maths must go through
+  the helpers).
+- **Unreferenced code (static pass):** of 1,233 blocks the gap sweep set aside,
+  984 look dead (almost all Havok SDK), 34 are referenced (33 only from C++
+  exception cleanup), the rest belong to known functions. The runtime coverage
+  pass crashed the game early and is not done (private phase0/gap-check.tsv).
+
+**Play build (Build 43, branch `claude/build43-movement`, worktree wt-build43,
+not pushed):** no frame runs on the game's code yet. The host runs the game's
+own `NiInit`; start-up stops at the first game thread (the IO thread) until the
+thread host exists, and `NiInit` also needs four registered start-up functions
+(00a2d8a0, 00c1aa00, 00e98ff0, 00e91dc0) and their callees. The status file is
+private phase0/build43-status.md; the missing list phase0/physics-missing.tsv;
+the plan phase0/physics-wiring-plan.md. A replay test of the real game's
+captured movement is ready for when frames run. 00aa1920 exists on both the
+lead and the wiring branch: keep one when merging.
+
+**Left uncommitted in agent worktrees (each has a STATUS.md in
+agents/scratch/aNN):** a01 (83 of 102 Havok gap functions, stand-in tested), a03
+(the game's Havok glue, ~40 of 120), a07 (NiCollision, ~37 of 120, continue at
+00e9e860), a09 (functions only the old viewer crates had), a06 (the nv-pure
+24-bit oracle option); a02 and a04 may have committed their last step (check
+their branches); the wiring agent's branch. Resume each with "your worktree has
+partial work: review, finish, test once, commit".
+
+**Machinery changes:**
+- Never chain `cd` in shell commands (the maintainer approves each by hand):
+  absolute paths, `git -C`, `cargo --manifest-path`. Task templates say so.
+- `heavy.sh` forwards to `heavy2.sh`: one big slot (engine-fallout, full
+  suite, gate, viewer, host) plus two small slots (other part crates), with
+  free-memory checks read from /proc/meminfo (spawning PowerShell every 10 s
+  from each waiter, plus ~230 orphaned shell loops, made every process start
+  take minutes on 2026-10-18).
+- Agents check their code in a stand-in crate first, then make one real run;
+  focused tests use `-p <crate> --lib`.
+- The private gate's oracle leaves out 00cb17f0, 00e53090, 00e53130 (they
+  loop forever in the exe on huge fuzzed counts) until nv-call has a per-vector
+  time limit: PR #200 adds it.
+- **PR #200 (contributor):** changes requested on 10-17 (an engine read of
+  unmapped memory when the exe returned a value must count as a failure; my
+  mutation test passed through it). Waiting on the contributor; I offered to
+  make the change myself.
+
+### Claude lead, 2026-10-16 evening (previous)
 
 The session stopped at the weekly limit (95-96 % rule). Every finished
 batch is merged or listed below; the next account continues from here.
