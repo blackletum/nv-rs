@@ -13006,7 +13006,7 @@ mod quaternion_limit_tests {
     fn arc_cosine_returns_exact_limits_instead_of_nan() {
         let mut e = engine();
         let acos = |e: &mut Engine, x: f32| e.call(0x00c7_4a70, &args![x]).f32();
-        assert!((acos(&mut e, 0.5) - 1.0471976).abs() < 1e-6);
+        assert!((acos(&mut e, 0.5) - std::f32::consts::FRAC_PI_3).abs() < 1e-6);
         assert_eq!(acos(&mut e, 1.5), 0.0);
         assert_eq!(acos(&mut e, 1.0), 0.0);
         assert_eq!(acos(&mut e, -1.0), std::f32::consts::PI);
