@@ -13555,6 +13555,19 @@ pub fn mesh_fill_holes(e: &mut Engine, this: Ptr, config: Ptr) {
         array_free_storage(e, allocator, directions, 16);
     });
 }
+// Translated from 00e247a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `this` in `ECX`, no stack words. Clears the byte at +0, points the
+/// word at +4 at the storage that begins at `this + 0x10`, zeroes the word at +8 and sets the
+/// word at +0xc to `0x80000004` (a count of 0 and a capacity of 4 over storage the object itself
+/// holds: the top bit marks it as not owned). Returns `this`. Ghidra made no function here; the address is pushed at 00e280fd.
+pub fn fn_00e247a0(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u8(this, 0);
+    e.mem.set_u32(this + 4, this + 0x10);
+    e.mem.set_u32(this + 8, 0);
+    e.mem.set_u32(this + 0xc, 0x8000_0004);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -13760,6 +13773,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_de00, mesh_cut_and_cap(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00e1_f360, mesh_cut_and_cap_ov2(Ptr, Ptr, Ptr, Ptr, f32, f32) -> Ptr),
         entry!(0x00e1_f4e0, mesh_fill_holes(Ptr, Ptr)),
+        entry!(0x00e2_47a0, fn_00e247a0(u32) -> u32),
     ]
 }
 
@@ -21561,5 +21575,25 @@ mod tests {
         e.call(0x00e1_f4e0, &args![mesh, config]);
         assert_eq!(triangle_list(&e, mesh).len(), 3);
         assert_eq!(reports.borrow().len(), 9);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00e247a0_sets_up_an_array_over_its_own_storage() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x55; 0x40]);
+        assert_eq!(e.call(0x00e2_47a0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u8(this), 0);
+        assert_eq!(e.mem.u32(this + 4), this + 0x10);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x8000_0004);
+        // Everything else is left alone.
+        assert_eq!(e.mem.u8(this + 1), 0x55);
+        assert_eq!(e.mem.u32(this + 0x10), 0x5555_5555);
     }
 }

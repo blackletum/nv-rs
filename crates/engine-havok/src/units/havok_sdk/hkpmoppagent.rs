@@ -299,6 +299,33 @@ pub fn hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(
     }
 }
 
+// Translated from 00d2f240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (an agent creation function of this unit, cdecl, four stack words,
+/// nothing popped): `body_a`, `body_b`, `_unused_2` and `manager`. Compares the signed word at
+/// +0x24 of the object at +0x14 of the shape of each collidable (the word at +0 of the body).
+/// Allocates 0x40 bytes through the memory router's allocator (`00c85750`; virtual function at +4
+/// of the object at router + 0x10), stores the size as a 16-bit word at +4 and runs the constructor
+/// `00d2f220` on it with `manager`. When the first value is below the second it returns what the
+/// constructor answers; otherwise it also stores the vtable word `010ce96c` at +0 and returns the
+/// block. Ghidra made no function here; the address is an immediate operand at 00d2dcf7.
+pub fn fn_00d2f240(e: &mut Engine, body_a: u32, body_b: u32, _unused_2: u32, manager: u32) -> u32 {
+    let shape_a = e.mem.u32(body_a);
+    let first = e.mem.u32(shape_a + 0x14);
+    let shape_b = e.mem.u32(body_b);
+    let second = e.mem.u32(shape_b + 0x14);
+    let first_below = e.mem.i32(first + 0x24) < e.mem.i32(second + 0x24);
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x40u32]).u32();
+    e.mem.set_u16(block + 4, 0x40);
+    let built = e.call(0x00d2_f220, &args![block, manager]).u32();
+    if first_below {
+        return built;
+    }
+    e.mem.set_u32(block, 0x010c_e96c);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -321,6 +348,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d3_1610,
             hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(u32, u32, u32, u32, Ptr)
         ),
+        entry!(0x00d2_f240, fn_00d2f240(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -716,5 +744,103 @@ mod a06_tests {
         assert_eq!(e.mem.u16(output + 0x3044), 0x1111);
         // 2 AND 1 is not 2.
         assert_eq!(e.mem.u16(output + 0x3042), 0x2222);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// A collidable whose shape's object at +0x14 holds `key` at +0x24.
+    fn body_with_key(e: &mut Engine, key: i32) -> u32 {
+        let body = e.mem.alloc(0x10);
+        let shape = e.mem.alloc(0x40);
+        let code = e.mem.alloc(0x40);
+        e.mem.set_u32(body, shape);
+        e.mem.set_u32(shape + 0x14, code);
+        e.mem.set_i32(code + 0x24, key);
+        body
+    }
+
+    /// The constructor sees the block and the manager; with the first key below the second its answer
+    /// comes back and the vtable word is not touched.
+    #[test]
+    fn fn_00d2f240_keeps_the_constructors_answer_when_the_first_key_is_lower() {
+        let (mut e, sizes) = allocator_engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00d2_f220, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), e.mem.u16(a[0] + 4)));
+            e.mem.set_u32(a[0], 0x1111);
+            Ret {
+                eax: 0xabcd,
+                ..Ret::default()
+            }
+        });
+        let first = body_with_key(&mut e, -5);
+        let second = body_with_key(&mut e, 3);
+        let result = e
+            .call(0x00d2_f240, &args![first, second, 0u32, 0x7777u32])
+            .u32();
+        assert_eq!(result, 0xabcd);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0[1], 0x7777);
+        assert_eq!(seen[0].1, 0x40);
+        assert_eq!(e.mem.u32(seen[0].0[0]), 0x1111);
+    }
+
+    /// An equal or higher first key stores the second vtable word and returns the block.
+    #[test]
+    fn fn_00d2f240_swaps_the_vtable_when_the_first_key_is_not_lower() {
+        for (a, b) in [(3, 3), (4, 3), (0, -1)] {
+            let (mut e, _) = allocator_engine();
+            e.register_double(0x00d2_f220, |e, a| {
+                e.mem.set_u32(a[0], 0x1111);
+                Ret {
+                    eax: 0xabcd,
+                    ..Ret::default()
+                }
+            });
+            let first = body_with_key(&mut e, a);
+            let second = body_with_key(&mut e, b);
+            let result = e
+                .call(0x00d2_f240, &args![first, second, 0u32, 0x7777u32])
+                .u32();
+            assert_ne!(result, 0xabcd);
+            assert_eq!(e.mem.u32(result), 0x010c_e96c);
+        }
     }
 }

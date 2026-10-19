@@ -1889,6 +1889,21 @@ fn run_new_agent(e: &mut Engine, this: Ptr, out: u32, buffer: u32, agent: u32) {
     }
 }
 
+// Translated from 00d02220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a "less than" comparison for a sort, cdecl, three stack words
+/// (nothing popped): `out`, `a` and `b`. Writes at `out` the byte 1 when the word at +0xd4 of the
+/// object that the word at +0 of the object at `a + 0x48` points to is below (unsigned) the same
+/// word for `b`, else 0. Returns `out`. Ghidra made no function here; the address is pushed at 00d0332e.
+pub fn fn_00d02220(e: &mut Engine, out: u32, a: u32, b: u32) -> u32 {
+    let a_block = e.mem.u32(a + 0x48);
+    let a_object = e.mem.u32(a_block);
+    let b_block = e.mem.u32(b + 0x48);
+    let b_object = e.mem.u32(b_block);
+    let less = e.mem.u32(a_object + 0xd4) < e.mem.u32(b_object + 0xd4);
+    e.mem.set_u8(out, u8::from(less));
+    out
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1966,6 +1981,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d03c20,
             collide_entities_needing_psi_collision_detection_narrow_phase_toi_only(Ptr, u32, u32)
         ),
+        entry!(0x00d0_2220, fn_00d02220(u32, u32, u32) -> u32),
     ]
 }
 
@@ -4567,5 +4583,42 @@ mod step_tests {
         release_block(&mut r.e, flags, 0x10 | DONT_DEALLOCATE_FLAG, 1);
         let log: Log = r.e.call_log.take().unwrap();
         assert!(calls_to(&log, FREE_ARRAY).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// An object whose key sits at +0xd4 of the object behind two levels of pointers at +0x48.
+    fn keyed_object(e: &mut Engine, key: u32) -> u32 {
+        let holder = e.mem.alloc(0x60);
+        let block = e.mem.alloc(0x10);
+        let object = e.mem.alloc(0xe0);
+        e.mem.set_u32(holder + 0x48, block);
+        e.mem.set_u32(block, object);
+        e.mem.set_u32(object + 0xd4, key);
+        holder
+    }
+
+    /// The byte at `out` is 1 only when the first key is below the second, unsigned.
+    #[test]
+    fn fn_00d02220_writes_whether_the_first_key_is_below_the_second() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        for (a, b, expected) in [
+            (1, 2, 1),
+            (2, 1, 0),
+            (2, 2, 0),
+            (0xffff_ffff, 1, 0),
+            (1, 0xffff_ffff, 1),
+        ] {
+            let first = keyed_object(&mut e, a);
+            let second = keyed_object(&mut e, b);
+            e.mem.set_u8(out, 0x55);
+            assert_eq!(e.call(0x00d0_2220, &args![out, first, second]).u32(), out);
+            assert_eq!(e.mem.u8(out), expected, "{a:#x} against {b:#x}");
+            assert_eq!(e.mem.u8(out + 1), 0);
+        }
     }
 }
