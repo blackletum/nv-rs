@@ -191,8 +191,9 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
      `x87_add`/`x87_sub`/`x87_mul`/`x87_div`, and `FSQRT` through
      `x87_sqrt`, one call per instruction in the exe's order and operand
      order, with the operands as the instruction sees them (`x87_load32`
-     for an `FLD dword`, `x87_m32` for a `float` memory operand, the plain
-     `f64` for a `double` one, `f64::from(i)` for `FILD`/`FIADD`), and
+     for an `FLD dword`, `x87_load64` for an `FLD qword`, `x87_m32` for a
+     `float` memory operand, the plain `f64` for a `double` one,
+     `f64::from(i)` for `FILD`/`FIADD`), and
      `x87_store32` at each `FSTP dword`. They round to the running thread's
      precision, so the same translation is right on either thread. Where a
      translation keeps plain `f64` arithmetic, `x87_round` rounds a value to

@@ -219,6 +219,16 @@ fn round_to_single(s: f64, error_sign: i32, rounding: u16) -> f64 {
     }
 }
 
+/// Below this magnitude the residual of a product, quotient or square root
+/// (about 2^-53 of it) could underflow the f64 and lose its sign.
+const TINY: f64 = 1e-270;
+
+/// 2^200: residuals near the bottom of the range are computed on operands
+/// scaled up by it (exact: a power of two, far from overflow there).
+fn scale_up() -> f64 {
+    f64::from_bits((1023 + 200) << 52)
+}
+
 /// [`x87_add`]'s rounding of `s = a + b` under 24-bit precision.
 fn single_sum(a: f64, b: f64, s: f64, rounding: u16) -> f64 {
     if s == 0.0 {
@@ -277,7 +287,16 @@ pub fn x87_mul(a: f64, b: f64) -> f64 {
         // A zero product of nonzero operands underflowed the f64 (outside
         // the model); every other zero is exact.
         Some(rounding) if s != 0.0 && s.is_finite() => {
-            round_to_single(s, sign_of(a.mul_add(b, -s)), rounding)
+            // `a * b - s`, exactly. Near the bottom of the f64 range the
+            // residual would underflow and lose its sign: then the smaller
+            // operand and `s` are scaled up by 2^200 first (exactly).
+            let (small, big) = if a.abs() < b.abs() { (a, b) } else { (b, a) };
+            let error = if s.abs() < TINY {
+                (small * scale_up()).mul_add(big, -(s * scale_up()))
+            } else {
+                small.mul_add(big, -s)
+            };
+            round_to_single(s, sign_of(error), rounding)
         }
         _ => s,
     }
@@ -294,7 +313,13 @@ pub fn x87_div(a: f64, b: f64) -> f64 {
         Some(rounding) if s != 0.0 && s.is_finite() => {
             // The remainder `a - s * b`, exactly; the error of the quotient
             // has its sign times the divisor's.
-            let remainder = (-s).mul_add(b, a);
+            // (`a` and `s` scaled up near the bottom of the range, as in
+            // `x87_mul`.)
+            let remainder = if a.abs() < TINY {
+                (-(s * scale_up())).mul_add(b, a * scale_up())
+            } else {
+                (-s).mul_add(b, a)
+            };
             round_to_single(s, sign_of(remainder) * sign_of(b), rounding)
         }
         _ => s,
@@ -311,8 +336,15 @@ pub fn x87_sqrt(value: f64) -> f64 {
     let s = value.sqrt();
     match single_precision() {
         Some(rounding) if s != 0.0 && s.is_finite() => {
-            // `value - s * s`, exactly: the root's error has its sign.
-            round_to_single(s, sign_of((-s).mul_add(s, value)), rounding)
+            // `value - s * s`, exactly: the root's error has its sign (both
+            // scaled up near the bottom of the range, as in `x87_mul`).
+            let error = if value < TINY {
+                let up = s * scale_up();
+                (-up).mul_add(up, value * scale_up() * scale_up())
+            } else {
+                (-s).mul_add(s, value)
+            };
+            round_to_single(s, sign_of(error), rounding)
         }
         _ => s,
     }
@@ -356,6 +388,18 @@ pub fn x87_m32(bits: u32) -> f64 {
 /// the bit pattern `bits` (a signalling NaN quieted, everything else exact).
 pub fn x87_load32(bits: u32) -> f64 {
     f64::from(f32::from_bits(x87_quiet_bits(bits)))
+}
+
+/// `FLD qword`: the value the x87 stack holds after loading the double with the
+/// bit pattern `bits` (a signalling NaN quieted, everything else exact). A
+/// `double` memory operand of an arithmetic instruction is the plain
+/// `f64::from_bits(bits)` instead (still signalling).
+pub fn x87_load64(bits: u64) -> f64 {
+    if is_nan_bits(bits) {
+        f64::from_bits(bits | F64_QUIET)
+    } else {
+        f64::from_bits(bits)
+    }
 }
 
 /// `FSTP dword`: the stack value rounded to a float, as its bits (a NaN keeps
@@ -518,6 +562,301 @@ mod tests {
             let small = x87_mul(1e-30, 1e-30);
             assert!(small > 0.0 && small.to_bits() & ((1 << 29) - 1) == 0);
             assert_eq!(x87_sqrt(2.0), f64::from(2f32.sqrt()));
+        });
+    }
+
+    /// Results recorded on the CPU (AMD Ryzen AI 9 HX 370) with nv-call and the
+    /// one-instruction stubs of `nv-pure x87`: (control word, instruction,
+    /// first operand, second operand, ST0 rounded to a double, which is exact
+    /// for all of these). Instructions: `add`/`sub`/`mul`/`div` are `FLD qword
+    /// a; F<op> qword b`; `addm` is `FLD qword a; FADD dword b`; `adds`/`muls`
+    /// are `FLD dword a; F<op> dword b` (operands as float bits); `sqrt` is
+    /// `FLD qword a; FSQRT`; `round` is `FLD qword a; FLD1; FMULP`.
+    const CPU: &[(u16, &str, u64, u64, u64)] = &[
+        // Ties at 24 bits go to even; a double sum that is exactly a tie but
+        // whose exact value is not (2^-70 below the f64's last bit) is decided
+        // by that sticky part, in either direction and across a binade.
+        (
+            0x007f,
+            "add",
+            0x3ff0000000000000,
+            0x3e70000000000000,
+            0x3ff0000000000000,
+        ),
+        (
+            0x007f,
+            "add",
+            0x3ff0000020000000,
+            0x3e70000000000000,
+            0x3ff0000040000000,
+        ),
+        (
+            0x007f,
+            "add",
+            0x3ff0000000000000,
+            0x3e70000000000040,
+            0x3ff0000020000000,
+        ),
+        (
+            0x007f,
+            "add",
+            0x3ff0000000000000,
+            0xbe70000000000040,
+            0x3fefffffe0000000,
+        ),
+        (
+            0x007f,
+            "sub",
+            0x3ff0000000000000,
+            0x3c70000000000000,
+            0x3ff0000000000000,
+        ),
+        // Beyond the float range: no overflow, no float denormals.
+        (
+            0x007f,
+            "mul",
+            0x4629b7f0e94f6c0b,
+            0x4629b7f0e94f6c0b,
+            0x4c64ab89c0000000,
+        ),
+        (0x007f, "muls", 0x7149f2ca, 0x7149f2ca, 0x4c63e9e4e0000000),
+        (0x007f, "muls", 0x7f7fffff, 0x40000000, 0x47ffffffe0000000),
+        (0x007f, "muls", 0x00000001, 0x00000001, 0x2d50000000000000),
+        // Float denormals as operands: full 24-bit results.
+        (0x007f, "muls", 0x00000003, 0x3eaaaaab, 0x36a0000000000000),
+        (0x007f, "muls", 0x00000001, 0x3f000000, 0x3690000000000000),
+        (
+            0x007f,
+            "mul",
+            0x36a0000000000000,
+            0x3fd5555555555555,
+            0x3685555560000000,
+        ),
+        // NaNs and infinities are not affected by precision control.
+        (
+            0x007f,
+            "addm",
+            0x3ff0000000000000,
+            0x7f800001,
+            0x7ff8000020000000,
+        ),
+        (0x007f, "adds", 0x7f800001, 0x3f800000, 0x7ff8000020000000),
+        (
+            0x007f,
+            "add",
+            0x7ff0000000000000,
+            0xfff0000000000000,
+            0xfff8000000000000,
+        ),
+        (
+            0x007f,
+            "div",
+            0x0000000000000000,
+            0x0000000000000000,
+            0xfff8000000000000,
+        ),
+        (
+            0x007f,
+            "div",
+            0x3ff0000000000000,
+            0x0000000000000000,
+            0x7ff0000000000000,
+        ),
+        (
+            0x007f,
+            "div",
+            0xbff0000000000000,
+            0x0000000000000000,
+            0xfff0000000000000,
+        ),
+        (
+            0x007f,
+            "mul",
+            0x7ff0000000000000,
+            0x4000000000000000,
+            0x7ff0000000000000,
+        ),
+        (
+            0x007f,
+            "add",
+            0xfff0000000000000,
+            0x4629b7f0e94f6c0b,
+            0xfff0000000000000,
+        ),
+        (
+            0x007f,
+            "mul",
+            0x7ffc000012345678,
+            0x4000000000000000,
+            0x7ffc000012345678,
+        ),
+        // Double operands, rounded once from the exact value.
+        (
+            0x007f,
+            "add",
+            0x3fb999999999999a,
+            0x3fc999999999999a,
+            0x3fd3333340000000,
+        ),
+        (
+            0x007f,
+            "mul",
+            0x3fd5555555555555,
+            0x4008000000000000,
+            0x3ff0000000000000,
+        ),
+        (
+            0x007f,
+            "div",
+            0x3ff0000000000000,
+            0x4008000000000000,
+            0x3fd5555560000000,
+        ),
+        // The rounding modes at 24 bits.
+        (
+            0x047f,
+            "div",
+            0x3ff0000000000000,
+            0x4008000000000000,
+            0x3fd5555540000000,
+        ),
+        (
+            0x087f,
+            "div",
+            0x3ff0000000000000,
+            0x4008000000000000,
+            0x3fd5555560000000,
+        ),
+        (
+            0x0c7f,
+            "div",
+            0xbff0000000000000,
+            0x4008000000000000,
+            0xbfd5555540000000,
+        ),
+        (
+            0x047f,
+            "add",
+            0x3ff0000000000000,
+            0x3e10000000000000,
+            0x3ff0000000000000,
+        ),
+        (
+            0x087f,
+            "add",
+            0x3ff0000000000000,
+            0x3e10000000000000,
+            0x3ff0000020000000,
+        ),
+        (
+            0x047f,
+            "add",
+            0x3ff0000000000000,
+            0xbe10000000000000,
+            0x3fefffffe0000000,
+        ),
+        (
+            0x0c7f,
+            "add",
+            0xbff0000000000000,
+            0xbe10000000000000,
+            0xbff0000000000000,
+        ),
+        // An exact zero sum is -0 only when rounding down.
+        (
+            0x047f,
+            "sub",
+            0x3ff0000000000000,
+            0x3ff0000000000000,
+            0x8000000000000000,
+        ),
+        (
+            0x047f,
+            "add",
+            0x0000000000000000,
+            0x8000000000000000,
+            0x8000000000000000,
+        ),
+        (
+            0x007f,
+            "sub",
+            0x3ff0000000000000,
+            0x3ff0000000000000,
+            0x0000000000000000,
+        ),
+        (0x007f, "sqrt", 0x4000000000000000, 0, 0x3ff6a09e60000000),
+        (0x047f, "sqrt", 0x4000000000000000, 0, 0x3ff6a09e60000000),
+        (0x087f, "sqrt", 0x4000000000000000, 0, 0x3ff6a09e80000000),
+        (0x007f, "sqrt", 0xbff0000000000000, 0, 0xfff8000000000000),
+        (0x007f, "sqrt", 0x8000000000000000, 0, 0x8000000000000000),
+        (0x007f, "sqrt", 0x7ff0000000000001, 0, 0x7ff8000000000001),
+        (0x007f, "round", 0x3ff0000010000000, 0, 0x3ff0000000000000),
+        (0x007f, "round", 0x4c169a3dbe2a8d31, 0, 0x4c169a3dc0000000),
+        (0x007f, "round", 0x3fb999999999999a, 0, 0x3fb99999a0000000),
+        // 53-bit precision: f64 arithmetic.
+        (
+            0x027f,
+            "add",
+            0x3ff0000000000000,
+            0x3e10000000000000,
+            0x3ff0000000400000,
+        ),
+        (0x027f, "muls", 0x00000003, 0x3eaaaaab, 0x36a0000008000000),
+        (
+            0x027f,
+            "mul",
+            0x4629b7f0e94f6c0b,
+            0x4629b7f0e94f6c0b,
+            0x4c64ab89bf0e4781,
+        ),
+        // Found by the random vectors: the quotient's residual underflows
+        // the f64 unless it is computed on scaled operands.
+        (
+            0x087f,
+            "div",
+            0x0010000000000000,
+            0x3fd5555555555555,
+            0x0028000020000000,
+        ),
+    ];
+
+    #[test]
+    fn rounding_matches_the_cpu() {
+        for &(word, op, a, b, want) in CPU {
+            let f = f64::from_bits;
+            let got = with_word(word, || match op {
+                "add" => x87_add(x87_load64(a), f(b)),
+                "sub" => x87_sub(x87_load64(a), f(b)),
+                "mul" => x87_mul(x87_load64(a), f(b)),
+                "div" => x87_div(x87_load64(a), f(b)),
+                "addm" => x87_add(x87_load64(a), x87_m32(b as u32)),
+                "adds" => x87_add(x87_load32(a as u32), x87_m32(b as u32)),
+                "muls" => x87_mul(x87_load32(a as u32), x87_m32(b as u32)),
+                "sqrt" => x87_sqrt(x87_load64(a)),
+                "round" => x87_round(x87_load64(a)),
+                _ => unreachable!(),
+            });
+            assert_eq!(
+                got.to_bits(),
+                want,
+                "{word:#06x} {op} {a:#x} {b:#x}: {got:?} != {:?}",
+                f(want)
+            );
+        }
+    }
+
+    #[test]
+    fn a_float_store_after_24_bit_arithmetic_rounds_to_the_float_denormal() {
+        // 3 * 2^-149 times 1/3 is 2^-149 * (1 + 2^-25) exactly: 2^-149 at
+        // 24 bits, and that float denormal on the store.
+        with_word(0x007f, || {
+            let p = x87_mul(x87_load32(3), x87_m32(0x3eaa_aaab));
+            assert_eq!(x87_store32(p), 1);
+            // 1e30f * 1e30f stays finite at 24 bits; the float store
+            // overflows to infinity.
+            let big = x87_mul(x87_load32(0x7149_f2ca), x87_m32(0x7149_f2ca));
+            assert!(big.is_finite());
+            assert_eq!(x87_store32(big), 0x7f80_0000);
         });
     }
 
