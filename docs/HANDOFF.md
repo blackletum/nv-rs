@@ -66,6 +66,13 @@ the plan phase0/physics-wiring-plan.md. A replay test of the real game's
 captured movement is ready for when frames run. 00aa1920 exists on both the
 lead and the wiring branch: keep one when merging.
 
+**Collected at the very end (in this PR):** a01 83 Havok gap functions, a09 42
+functions only the old viewer crates had, a04 the last 16 of the game's Havok
+glue, a02 NiInit's four start-up functions with their callees (28). **Havok
+still open:** the big seven (00c95a80, 00d1a330, 00d28a30, 00d29bf0, 00d72190,
+00def570, 00d8d030), 00daf8e0, and a09's 23 extras plus 4 fallout listeners
+(agents/scratch/a09/STATUS.md).
+
 **Left uncommitted in agent worktrees (each has a STATUS.md in
 agents/scratch/aNN):** a01 (83 of 102 Havok gap functions, stand-in tested), a03
 (the game's Havok glue, ~40 of 120), a07 (NiCollision, ~37 of 120, continue at
