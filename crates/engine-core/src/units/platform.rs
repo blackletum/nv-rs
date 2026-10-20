@@ -6,6 +6,7 @@ use crate::prelude::*;
 
 pub mod dinput;
 pub mod dsound;
+pub mod files;
 pub mod loader;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
@@ -686,6 +687,8 @@ pub enum KernelObject {
     Window,
     /// An open registry key ([`reg_open_key_ex_a`]): `HKCUControl PanelMouse`.
     RegistryKey,
+    /// An open file ([`files::create_file_a`]): its path and position.
+    File(files::OpenFile),
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -729,6 +732,8 @@ pub struct Kernel {
     pub fls: loader::Fls,
     /// The DirectSound 8 objects ([`dsound`]).
     pub sound: dsound::Sound,
+    /// The files the game made in this run ([`files`]).
+    pub disk: files::Disk,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -979,6 +984,8 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         }
         Some(KernelObject::Window) => false,
         Some(KernelObject::RegistryKey) => false,
+        // A file handle is signalled while no I/O is pending (all of it is synchronous here).
+        Some(KernelObject::File(_)) => true,
         None if handle == CURRENT_THREAD => false,
         None => return None,
     };
@@ -1673,6 +1680,27 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, wait_for_single_object(u32, u32) -> u32).1,
         ),
         (k, "CloseHandle", entry!(0, close_handle(u32) -> i32).1),
+        (
+            k,
+            "CreateFileA",
+            entry!(0, files::create_file_a(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (k, "GetFileType", entry!(0, files::get_file_type(u32) -> u32).1),
+        (
+            k,
+            "SetFilePointer",
+            entry!(0, files::set_file_pointer(u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "WriteFile",
+            entry!(0, files::write_file(u32, Ptr, u32, Ptr, u32) -> i32).1,
+        ),
+        (
+            k,
+            "ReadFile",
+            entry!(0, files::read_file(u32, Ptr, u32, Ptr, u32) -> i32).1,
+        ),
         (
             k,
             "GetCurrentThread",
