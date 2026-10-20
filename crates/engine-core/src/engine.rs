@@ -144,11 +144,19 @@ impl Engine {
     /// Registers the platform versions of imported functions
     /// (`units::platform::imports`) at their import-slot addresses, so a
     /// translation calls `e.call(slot, ..)` as the game calls `[slot]`.
-    /// Returns how many were registered.
+    /// As the Windows loader fills the import table, each slot's word (when
+    /// mapped) becomes the address of the function behind it: here the slot's
+    /// own address, so code that reads a slot and calls the word later (the
+    /// CRT's `__mtinit` `00ed1327` keeps `TlsGetValue`, `TlsSetValue` and
+    /// `TlsFree` that way) reaches the same stand-in, or stops at the slot when
+    /// none is provided. Returns how many were registered.
     pub fn register_imports(&mut self, imports: &[crate::exe::Import]) -> usize {
         let table = crate::units::platform::imports();
         let mut n = 0;
         for i in imports {
+            if self.mem.is_mapped(i.slot) {
+                self.mem.set_u32(i.slot, i.slot);
+            }
             if let Some((_, _, f)) = table
                 .iter()
                 .find(|(d, name, _)| d.eq_ignore_ascii_case(&i.dll) && *name == i.name)

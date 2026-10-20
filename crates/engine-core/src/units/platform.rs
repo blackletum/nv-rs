@@ -5,6 +5,7 @@
 use crate::prelude::*;
 
 pub mod dinput;
+pub mod loader;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
@@ -723,6 +724,8 @@ pub struct Kernel {
     mouse_buttons_swapped: bool,
     /// The DirectInput 8 objects and the keyboard and mouse state behind them ([`dinput`]).
     pub input: dinput::Input,
+    /// Fiber-local storage ([`loader`]).
+    pub fls: loader::Fls,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -1587,6 +1590,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "ADVAPI32.dll",
             "RegCloseKey",
             entry!(0, reg_close_key(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetModuleHandleW",
+            entry!(0, loader::get_module_handle_w(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetProcAddress",
+            entry!(0, loader::get_proc_address(u32, u32) -> u32).1,
         ),
         (
             "DINPUT8.dll",

@@ -65,11 +65,12 @@ impl Host {
             ));
         }
         let mut engine = Engine::with_exe(&exe)?;
-        let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         let mut movement = player_move::PlayerMovement::default();
-        // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `NiInit` is a probe run too
-        // (it goes on past misses with zero results and records them all).
+        // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
+        // runs too (they go on past misses with zero results and record them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
+        start_crt_threads(&mut engine, &mut movement);
+        let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         let ni_init = start_ni(&mut engine, &mut movement);
         // `main` after `NiInit`: `Main::Main`, the renderer (its FPU side here), the scene
         // graph and `InitTES`'s `TES` (the movement's start-up stages).
@@ -129,6 +130,18 @@ pub fn start_ni(e: &mut Engine, movement: &mut player_move::PlayerMovement) -> O
             Ok(())
         })
         .err()
+}
+
+/// The CRT's thread start-up `__mtinit` (`00ed1327`) where `mainCRTStartup` runs it: after the
+/// heap's start-up and before `__cinit` runs the static initializers (the CRT heap is the
+/// engine's, platform). Through the movement's miss recorder (stage `crt`); a stop is kept and
+/// start-up goes on.
+pub fn start_crt_threads(e: &mut Engine, movement: &mut player_move::PlayerMovement) {
+    const MTINIT: u32 = 0x00ed_1327;
+    let _ = movement.guarded(e, "crt", |e| {
+        e.call(MTINIT, &[]);
+        Ok(())
+    });
 }
 
 /// What creating the renderer's Direct3D device does to the main thread's FPU,
