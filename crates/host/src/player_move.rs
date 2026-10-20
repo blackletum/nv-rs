@@ -87,6 +87,27 @@ const MAIN_SIZE: u32 = 0xa4;
 const MAIN_OBJECT: u32 = 0x011d_ea0c;
 /// The module handle `WinMain` gets (`main`'s first argument): the image base.
 const IMAGE_BASE: u32 = 0x0040_0000;
+/// `main`'s part between `Main::Main` and `InitSceneGraph` (`0086afa4`..`0086b066`): the TLS
+/// setting guard's enter and leave (`00404f00`/`00404f70`, a 4-byte object on `main`'s
+/// stack; enter with 0xD, 1, the source name `010829c4` and line 0x9F8), the 8-byte object
+/// `007005d0` makes into `011d8804`, `Error(0108295c)` (`0040fbe0`, empty), the renderer
+/// (`0086d500` on `Main`), the byte `011f4509`, the getter `0043c4b0` and the three calls on
+/// what it answers (`004a0370`; `0086bbd0` and `0086bae0`, each with a function and 0), then
+/// `0086bf70`.
+const SETTING_GUARD_ENTER: u32 = 0x0040_4f00;
+const SETTING_GUARD_LEAVE: u32 = 0x0040_4f70;
+const MAIN_SOURCE_NAME: u32 = 0x0108_29c4;
+const MAKE_011D8804: u32 = 0x0070_05d0;
+const OBJECT_011D8804: u32 = 0x011d_8804;
+const ERROR_0040FBE0: u32 = 0x0040_fbe0;
+const ERROR_TEXT_0108295C: u32 = 0x0108_295c;
+const INIT_RENDERER: u32 = 0x0086_d500;
+const RENDERER_MADE_011F4509: u32 = 0x011f_4509;
+const GETTER_0043C4B0: u32 = 0x0043_c4b0;
+const CALL_004A0370: u32 = 0x004a_0370;
+const CALL_0086BBD0: u32 = 0x0086_bbd0;
+const CALL_0086BAE0: u32 = 0x0086_bae0;
+const CALL_0086BF70: u32 = 0x0086_bf70;
 /// `Main::InitSceneGraph` (Xbox PDB, `0086d590`).
 const INIT_SCENE_GRAPH: u32 = 0x0086_d590;
 /// `InitTES`'s head (`0086cf81`..`0086d076`): `Sky::GetInstance` (`0046dd00`, kept at
@@ -282,6 +303,9 @@ pub struct PlayerMovement {
     /// The `Main` object (`main`, `0086af75`) and the scene graph (`0086b071`), made at
     /// start-up ([`PlayerMovement::start_up`]).
     main_object: Stage<u32>,
+    /// `main` from `Main::Main` to `InitSceneGraph`, the renderer's start-up among it (stage
+    /// `renderer`, [`run_main_up_to_scene_graph`]).
+    renderer: Stage<()>,
     scene_graph: Stage<()>,
     /// `TES` as `InitTES` makes it (its `TES::TES` runs `InitHavokSystem`); stage `tes`.
     havok: Stage<()>,
@@ -316,6 +340,7 @@ impl Default for PlayerMovement {
             engine_frames: 0,
             fallback_frames: 0,
             main_object: Stage::NotTried,
+            renderer: Stage::NotTried,
             scene_graph: Stage::NotTried,
             havok: Stage::NotTried,
             player: Stage::NotTried,
@@ -432,12 +457,11 @@ impl PlayerMovement {
     /// part a stage that records what it reaches: `main`: `operator new(0xA4)` and `Main::Main`
     /// (`0086c160`) with the main window (`engine::units::platform::create_window`, where `main`
     /// calls `CreateWindowExA` at `0086af42`) and the module handle, kept at `011dea0c`
-    /// (`0086af4b`..`0086af9e`); then `before_scene_graph` (the renderer's start-up point,
+    /// (`0086af4b`..`0086af9e`); `renderer`: `main` on to the scene graph ([`run_main_up_to_scene_graph`], the renderer `0086d500` among it); then `before_scene_graph` (the renderer's start-up point,
     /// [`crate::start_renderer_fpu`] in the host); `scenegraph`: `Main::InitSceneGraph`
     /// (`0086d590`) on it (`0086b071`); `tes`: `InitTES`'s head up to `TES::TES` and
     /// `00450c50` (`0086cf81`..`0086d076`), whose `TES::TES` runs `InitHavokSystem`. Not run
-    /// (listed): the rest of `main` between them (the renderer `0086d500`, `0086bbd0`,
-    /// `0086bae0`, `0086bf70`, `00702250`, `006519f0`, `00871c90`, `006a2920`, `0086c010`, the
+    /// (listed): the rest of `main` after the scene graph (`00702250`, `006519f0`, `00871c90`, `006a2920`, `0086c010`, the
     /// movie, ...) and `InitTES`'s scope and log objects.
     pub fn start_up(&mut self, e: &mut Engine, before_scene_graph: impl FnOnce(&mut Engine)) {
         self.main_object = match self.guarded(e, "main", |e| {
@@ -454,8 +478,17 @@ impl PlayerMovement {
             Ok(main) => Stage::Done(main),
             Err(why) => Stage::Failed(why),
         };
-        before_scene_graph(e);
         if let Some(main) = self.main_object.done() {
+            self.renderer = match self.guarded(e, "renderer", |e| {
+                run_main_up_to_scene_graph(e, main);
+                Ok(())
+            }) {
+                Ok(()) => Stage::Done(()),
+                Err(why) => Stage::Failed(why),
+            };
+        }
+        before_scene_graph(e);
+        if let (Some(main), Some(())) = (self.main_object.done(), self.renderer.done()) {
             self.scene_graph = match self.guarded(e, "scenegraph", |e| {
                 e.call(INIT_SCENE_GRAPH, &[main]);
                 Ok(())
@@ -483,11 +516,16 @@ impl PlayerMovement {
         cell: Option<FormId>,
         input: &MoveInput,
     ) -> bool {
+        // The player is made in `InitTES` after `TES::TES` (011dea10, which its constructor
+        // reads), so only once the tes stage passed.
         if self.player == Stage::NotTried {
-            let made = self.make_player(e, order, input);
-            self.player = match made {
-                Ok(p) => Stage::Done(p),
-                Err(why) => Stage::Failed(why),
+            self.player = if self.havok.done().is_some() {
+                match self.make_player(e, order, input) {
+                    Ok(p) => Stage::Done(p),
+                    Err(why) => Stage::Failed(why),
+                }
+            } else {
+                Stage::Failed("needs the tes stage".into())
             };
         }
         if self.threads == Stage::NotTried && self.havok.done().is_some() {
@@ -909,11 +947,12 @@ impl PlayerMovement {
         };
         let mut line = format!(
             "Game's movement: {} frames moved by the game's code, {} by crates/physics; \
-             Main {}; scene graph {}; TES {}; player {}; AI threads {}; cell {cell}; \
+             Main {}; renderer {}; scene graph {}; TES {}; player {}; AI threads {}; cell {cell}; \
              controller {}; {} untranslated addresses reached.",
             self.engine_frames,
             self.fallback_frames,
             word(&self.main_object),
+            word(&self.renderer),
             word(&self.scene_graph),
             word(&self.havok),
             word(&self.player),
@@ -1051,6 +1090,39 @@ impl crate::Host {
 /// `InitTES`'s head (`0086cf81`..`0086d076`): the sky, `InitSky`, the two scene-graph
 /// getters, the helper chain when `011dea14` holds a node, `TES::TES` into `011dea10`, then
 /// `00450c50` on it. Its scope object and log lines don't run.
+/// `main` between `Main::Main` and `InitSceneGraph` (`0086afa4`..`0086b066`), in its order:
+/// the setting guard's scope around the object `007005d0` makes into `011d8804` (null when
+/// `operator new` fails), `Error` (`0040fbe0`), the renderer `0086d500` on `Main`, the byte
+/// `011f4509` set, then `004a0370`, `0086bbd0(0x5d4a40, 0)` and `0086bae0(0x872570, 0)` each on
+/// what `0043c4b0` answers, and `0086bf70`.
+fn run_main_up_to_scene_graph(e: &mut Engine, main: u32) {
+    e.with_stack(4, |e, guard| {
+        let guard = guard.addr();
+        e.call(
+            SETTING_GUARD_ENTER,
+            &[guard, 0xd, 1, MAIN_SOURCE_NAME, 0x9f8],
+        );
+        let block = e.call(NEW, &[8]).u32();
+        let object = if block == 0 {
+            0
+        } else {
+            e.call(MAKE_011D8804, &[block]).u32()
+        };
+        e.mem.set_u32(OBJECT_011D8804, object);
+        e.call(SETTING_GUARD_LEAVE, &[guard]);
+    });
+    e.call(ERROR_0040FBE0, &[ERROR_TEXT_0108295C]);
+    e.call(INIT_RENDERER, &[main]);
+    e.mem.set_u8(RENDERER_MADE_011F4509, 1);
+    let owner = e.call(GETTER_0043C4B0, &[]).u32();
+    e.call(CALL_004A0370, &[owner]);
+    let owner = e.call(GETTER_0043C4B0, &[]).u32();
+    e.call(CALL_0086BBD0, &[owner, 0x005d_4a40, 0]);
+    let owner = e.call(GETTER_0043C4B0, &[]).u32();
+    e.call(CALL_0086BAE0, &[owner, 0x0087_2570, 0]);
+    e.call(CALL_0086BF70, &[]);
+}
+
 fn make_tes(e: &mut Engine) -> Result<(), String> {
     let sky = e.call(SKY_GET_INSTANCE, &[]).u32();
     e.mem.set_u32(SKY_OBJECT, sky);
@@ -1223,6 +1295,25 @@ mod tests {
         for f in [INIT_SCENE_GRAPH, INIT_SKY, TES_AFTER] {
             e.register(f, |_, _| Ret::default());
         }
+        // `main` between `Main::Main` and the scene graph (stage `renderer`).
+        e.mem.map(OBJECT_011D8804 & !0xfff, 0x1000);
+        e.mem.map(RENDERER_MADE_011F4509 & !0xfff, 0x1000);
+        for f in [
+            SETTING_GUARD_ENTER,
+            SETTING_GUARD_LEAVE,
+            ERROR_0040FBE0,
+            INIT_RENDERER,
+            CALL_004A0370,
+            CALL_0086BBD0,
+            CALL_0086BAE0,
+            CALL_0086BF70,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(MAKE_011D8804, |_, a| engine::abi::RetVal::into_ret(a[0]));
+        e.register(GETTER_0043C4B0, |_, _| {
+            engine::abi::RetVal::into_ret(0x0300_0000u32)
+        });
         e.register(SKY_GET_INSTANCE, |_, _| {
             engine::abi::RetVal::into_ret(0x5000u32)
         });
@@ -1280,12 +1371,69 @@ mod tests {
         assert_eq!(e.mem.u32(SKY_OBJECT), 0x5000);
         assert_eq!(e.mem.u32(TES_OBJECT), tes);
         assert_eq!(m.havok, Stage::Done(()));
+        assert_eq!(e.mem.u32(OBJECT_011D8804), 0x0200_0008);
+        assert_eq!(e.mem.u8(RENDERER_MADE_011F4509), 1);
+        assert_eq!(m.renderer, Stage::Done(()));
         // A stop in the scene graph: recorded, and `tes` isn't tried.
         let mut m = PlayerMovement::default();
         e.register(INIT_SCENE_GRAPH, |e, _| e.call(0x00ab_cdef, &[]));
         m.start_up(&mut e, |_| {});
         assert_eq!(m.misses[&0x00ab_cdef].stage, "scenegraph");
         assert_eq!(m.havok, Stage::NotTried);
+    }
+
+    /// `renderer`: `main`'s calls from `0086afa4` to `0086b066`, in its order, with its words.
+    #[test]
+    fn main_up_to_the_scene_graph_runs_in_mains_order() {
+        let mut e = Engine::new();
+        e.mem.map(OBJECT_011D8804 & !0xfff, 0x1000);
+        e.mem.map(RENDERER_MADE_011F4509 & !0xfff, 0x1000);
+        let glue = [
+            SETTING_GUARD_ENTER,
+            SETTING_GUARD_LEAVE,
+            ERROR_0040FBE0,
+            INIT_RENDERER,
+            CALL_004A0370,
+            CALL_0086BBD0,
+            CALL_0086BAE0,
+            CALL_0086BF70,
+        ];
+        for f in glue {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(NEW, |_, _| Ret::default());
+        e.register(GETTER_0043C4B0, |_, _| {
+            engine::abi::RetVal::into_ret(0x0300_0000u32)
+        });
+        e.mem.set_u32(OBJECT_011D8804, 0x55);
+        e.call_log = Some(vec![]);
+        run_main_up_to_scene_graph(&mut e, 0x0200_0000);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|(a, _)| glue.contains(a) || *a == NEW || *a == MAKE_011D8804)
+            .collect();
+        let guard = calls[0].1[0];
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    SETTING_GUARD_ENTER,
+                    vec![guard, 0xd, 1, MAIN_SOURCE_NAME, 0x9f8]
+                ),
+                (NEW, vec![8]),
+                (SETTING_GUARD_LEAVE, vec![guard]),
+                (ERROR_0040FBE0, vec![ERROR_TEXT_0108295C]),
+                (INIT_RENDERER, vec![0x0200_0000]),
+                (CALL_004A0370, vec![0x0300_0000]),
+                (CALL_0086BBD0, vec![0x0300_0000, 0x005d_4a40, 0]),
+                (CALL_0086BAE0, vec![0x0300_0000, 0x0087_2570, 0]),
+                (CALL_0086BF70, vec![]),
+            ]
+        );
+        // `operator new` failed: null stored, `007005d0` not run.
+        assert_eq!(e.mem.u32(OBJECT_011D8804), 0);
+        assert_eq!(e.mem.u8(RENDERER_MADE_011F4509), 1);
     }
 
     /// `threads`: `iNumHWThreads` from the processor count (1 made 2), then
