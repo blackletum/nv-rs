@@ -3,6 +3,7 @@
 
 pub mod bsaudio;
 pub mod bscore;
+pub mod bsdevices;
 pub mod bsmain;
 pub mod bsmenu;
 pub mod bsmovie;
@@ -23,6 +24,7 @@ pub use engine_gamebryo::units::nixenonrenderer;
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     bsaudio::funcs(out);
     bscore::funcs(out);
+    bsdevices::funcs(out);
     bsmain::funcs(out);
     bsmenu::funcs(out);
     bsmovie::funcs(out);

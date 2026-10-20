@@ -108,8 +108,12 @@ const PLATFORM_FUNCS: &[u32] = &[0x00ee_6e2e];
 /// `RemoteLog`; and the tasklet manager (2026-10-20: `BSTaskletManager::QInstance`,
 /// `CreateTaskGroup`, the manager's constructor `00b01d50` and base `00b02720`, its worker and
 /// starter threads and their loop, list and hook helpers), whose threads the thread host runs.
+/// `Controls::Poll` (`00a23010`) and its empty end `00a232c0` in `BSDevices` read the devices
+/// through the DirectInput layer each frame.
 /// Only their OS calls go to the platform layer.
 const GAME_FUNCS: &[u32] = &[
+    0x00a2_3010,
+    0x00a2_32c0,
     0x00af_cfe0,
     0x00af_d390,
     0x00af_d4e0,

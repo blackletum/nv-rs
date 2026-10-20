@@ -4,6 +4,7 @@
 
 pub use engine_bs::units::bsaudio;
 pub use engine_bs::units::bscore;
+pub use engine_bs::units::bsdevices;
 pub use engine_bs::units::bsmain;
 pub use engine_bs::units::bsmenu;
 pub use engine_bs::units::bsmovie;

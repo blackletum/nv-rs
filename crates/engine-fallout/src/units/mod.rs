@@ -27,6 +27,7 @@ pub mod unplaced;
 // The units of the crates below this one, so `crate::units::<subsystem>` reaches them.
 pub use engine_bs::units::bsaudio;
 pub use engine_bs::units::bscore;
+pub use engine_bs::units::bsdevices;
 pub use engine_bs::units::bsmain;
 pub use engine_bs::units::bsmenu;
 pub use engine_bs::units::bsmovie;

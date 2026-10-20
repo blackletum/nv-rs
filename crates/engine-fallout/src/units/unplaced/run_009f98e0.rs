@@ -69,12 +69,25 @@ pub fn fn_009feae8(e: &mut Engine, word_0: Ptr, word_1: Ptr) -> u32 {
     e.call(target, &args![word_0, word_1]).u32()
 }
 
+/// The slot `009f996e` jumps through (XINPUT1_3 ordinal 2, `XInputGetState`).
+const IMPORT_SLOT_009F996E: u32 = 0x00fd_f394;
+
+// Translated from 009f996e (disassembled, FalloutNV.exe 1.4.0.525)
+/// Import thunk `JMP dword ptr [0x00fdf394]` (XINPUT1_3.dll ordinal 2, `XInputGetState`; Ghidra
+/// labels it so). stdcall (the callee pops its words): the 2 stack words (user index, state) go
+/// unchanged to the import and its result comes back. Argument count from the caller at
+/// `00a2304c` (`Controls::Poll`, two pushes, no cleanup).
+pub fn fn_009f996e(e: &mut Engine, user: u32, state: Ptr) -> u32 {
+    e.call(IMPORT_SLOT_009F996E, &args![user, state]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x009f_9d50, fn_009f9d50(Ptr, Ptr) -> u32),
         entry!(0x009f_dd50, fn_009fdd50(Ptr, u32) -> u32),
         entry!(0x009f_9968, fn_009f9968(u32)),
+        entry!(0x009f_996e, fn_009f996e(u32, Ptr) -> u32),
         entry!(0x009f_ead0, fn_009fead0(u32, Ptr) -> u32),
         entry!(0x009f_ead6, fn_009fead6(u32, Ptr) -> u32),
         entry!(0x009f_eae2, fn_009feae2(Ptr, Ptr) -> u32),
