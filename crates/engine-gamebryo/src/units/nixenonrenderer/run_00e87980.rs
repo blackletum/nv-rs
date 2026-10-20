@@ -229,11 +229,41 @@ pub fn fn_00e881a0(e: &mut Engine, this: Ptr, renderer: u32) -> Ptr {
     this
 }
 
+// Translated from 00e87af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e87980`): the render state's renderer hook-up,
+/// `thiscall` with one word (the renderer). Stores the renderer at +0x10fc. With a renderer,
+/// the object at its +0x288 replaces the one held at +0x10f8: the old one gets its vtable
+/// slot 8 call (release) first, then the new one is stored and gets its slot 4 call (add
+/// reference) when not null. Without one, the held object gets its slot 8 call and +0x10f8 is
+/// cleared.
+pub fn fn_00e87af0(e: &mut Engine, this: Ptr, renderer: u32) {
+    let base = this.addr();
+    e.mem.set_u32(base.wrapping_add(0x10fc), renderer);
+    if renderer != 0 {
+        let object = e.mem.u32(renderer.wrapping_add(0x288));
+        let held = e.mem.u32(base.wrapping_add(0x10f8));
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(base.wrapping_add(0x10f8), object);
+        if object != 0 {
+            e.vcall(object, 4, &args![]);
+        }
+        return;
+    }
+    let held = e.mem.u32(base.wrapping_add(0x10f8));
+    if held != 0 {
+        e.vcall(held, 8, &args![]);
+    }
+    e.mem.set_u32(base.wrapping_add(0x10f8), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e8_8c20, fn_00e88c20(Ptr, u8)),
         entry!(0x00e8_81a0, fn_00e881a0(Ptr, u32) -> Ptr),
+        entry!(0x00e8_7af0, fn_00e87af0(Ptr, u32)),
     ]
 }
 
@@ -304,5 +334,64 @@ mod b000w_tests {
             .as_ref()
             .unwrap()
             .contains(&(MEMSET_00EC61C0, vec![STATE_TABLE_0126F958, 0xffff, 0x42])));
+    }
+}
+
+#[cfg(test)]
+mod b000x_tests {
+    use super::*;
+
+    /// An object whose vtable slots 4 and 8 are doubles at 0x0e10_0004 and 0x0e10_0008.
+    fn object(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 4, 0x0e10_0004);
+        e.mem.set_u32(vtable + 8, 0x0e10_0008);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn calls(e: &mut Engine) -> Vec<(u32, u32)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x0e10_0004 || *a == 0x0e10_0008)
+            .map(|(a, words)| (a, words[0]))
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e87af0_swaps_the_renderer_object() {
+        let mut e = Engine::new();
+        e.register(0x0e10_0004, |_, _| Ret::default());
+        e.register(0x0e10_0008, |_, _| Ret::default());
+        let this = e.mem.alloc(0x1100);
+        let old = object(&mut e);
+        let new = object(&mut e);
+        let renderer = e.mem.alloc(0x290);
+        e.mem.set_u32(renderer + 0x288, new);
+        e.mem.set_u32(this + 0x10f8, old);
+        e.call_log = Some(vec![]);
+        e.call(HOOK_UP_00E87AF0, &args![this, renderer]);
+        assert_eq!(e.mem.u32(this + 0x10fc), renderer);
+        assert_eq!(e.mem.u32(this + 0x10f8), new);
+        assert_eq!(calls(&mut e), vec![(0x0e10_0008, old), (0x0e10_0004, new)]);
+        // A renderer without an object: nothing held, nothing added.
+        let bare = e.mem.alloc(0x290);
+        e.call_log = Some(vec![]);
+        e.call(HOOK_UP_00E87AF0, &args![this, bare]);
+        assert_eq!(e.mem.u32(this + 0x10f8), 0);
+        assert_eq!(calls(&mut e), vec![(0x0e10_0008, new)]);
+        // No renderer: released (none held now) and cleared.
+        e.mem.set_u32(this + 0x10f8, old);
+        e.call_log = Some(vec![]);
+        e.call(HOOK_UP_00E87AF0, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x10fc), 0);
+        assert_eq!(e.mem.u32(this + 0x10f8), 0);
+        assert_eq!(calls(&mut e), vec![(0x0e10_0008, old)]);
+        e.call_log = Some(vec![]);
+        e.call(HOOK_UP_00E87AF0, &args![this, 0u32]);
+        assert!(calls(&mut e).is_empty());
     }
 }
