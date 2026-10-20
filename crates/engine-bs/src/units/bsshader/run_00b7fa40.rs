@@ -315,6 +315,25 @@ pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> u32 {
     u32::from(order == 0)
 }
 
+/// The hash map `GetAt` on the package's shader map (`00a53c30`, unnamed; `thiscall` on the map:
+/// key, address of the result word; `RET 8`).
+const SHADER_MAP_GET_AT_00A53C30: u32 = 0x00a5_3c30;
+
+// Translated from 00b7fac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the shader package's lookup, `thiscall` with one
+/// stack word (the compiled shader's name). Looks the name up in the package's string map at
+/// +8 (`00a53c30`, with a stack word cleared first for the result) and answers what it left
+/// there (0 when not found).
+pub fn fn_00b7fac0(e: &mut Engine, this: Ptr, name: u32) -> u32 {
+    let map = this.addr().wrapping_add(8);
+    e.with_stack(4, |e, result| {
+        let result = result.addr();
+        e.mem.set_u32(result, 0);
+        e.call(SHADER_MAP_GET_AT_00A53C30, &args![map, name, result]);
+        e.mem.u32(result)
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -326,6 +345,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
         entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> u32),
         entry!(0x00b8_0040, fn_00b80040(Ptr, u32, u32, u32)),
+        entry!(0x00b7_fac0, fn_00b7fac0(Ptr, u32) -> u32),
     ]
 }
 
@@ -696,5 +716,39 @@ mod tests_branch {
         });
         assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 7u32]).u32(), 1);
         assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 8u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod package_find_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b7fac0_answers_what_the_map_finds() {
+        let mut e = Engine::new();
+        e.register(SHADER_MAP_GET_AT_00A53C30, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0);
+            if a[1] == 0x0e00_0010 {
+                e.mem.set_u32(a[2], 0x0e00_0100);
+            }
+            u32::from(a[1] == 0x0e00_0010).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let package = e.mem.alloc(0x1c);
+        assert_eq!(
+            e.call(0x00b7_fac0, &args![package, 0x0e00_0010u32]).u32(),
+            0x0e00_0100
+        );
+        assert_eq!(
+            e.call(0x00b7_fac0, &args![package, 0x0e00_0020u32]).u32(),
+            0
+        );
+        let log = e.call_log.take().unwrap();
+        let maps: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == SHADER_MAP_GET_AT_00A53C30)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(maps, vec![package + 8, package + 8]);
     }
 }

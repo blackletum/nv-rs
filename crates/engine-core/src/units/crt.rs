@@ -4183,6 +4183,72 @@ pub fn report_gsfailure(e: &mut Engine) {
     );
 }
 
+/// `__fsopen` (`00ec9983`, cdecl: path, mode, share flag), `_lock_file` (`00ece01b`) and
+/// `__unlock_file` (`00ece08e`) (cdecl, the stream), `_fclose_nolock` (`00ec9890`, cdecl, the
+/// stream) and `_fwrite_nolock` (`00ecaf24`, cdecl: buffer, size, count, stream) (engine map).
+const FSOPEN: u32 = 0x00ec_9983;
+const LOCK_FILE: u32 = 0x00ec_e01b;
+const UNLOCK_FILE: u32 = 0x00ec_e08e;
+const FCLOSE_NOLOCK: u32 = 0x00ec_9890;
+const FWRITE_NOLOCK: u32 = 0x00ec_af24;
+
+// Translated from 00ec9a47 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fopen` (LIBCMT/fopen.c; the engine map's name, `std::basic_string<..>::c_str`, is a folded
+/// one; Ghidra: `_fopen`), cdecl: `_fsopen(path, mode, _SH_DENYNO (0x40))`.
+pub fn fopen(e: &mut Engine, path: Ptr, mode: Ptr) -> Ptr {
+    e.call(FSOPEN, &args![path, mode, 0x40u32]).ptr()
+}
+
+// Translated from 00ec9907 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fclose` (LIBCMT/fclose.c, Ghidra's function ID), cdecl, the stream. A null stream sets
+/// `errno` to `EINVAL` (0x16), calls the invalid-parameter handler (`00ec7c30` with five zeros)
+/// and answers -1. A string stream (`_flag` +0xc has 0x40) gets its flags cleared and answers
+/// -1. Otherwise, with the stream locked (`_lock_file`), `_fclose_nolock` answers, and the
+/// stream is unlocked (the `__finally` block at `00ec997b`, this function's own code).
+// Translation incomplete: 00ec9907 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated.
+pub fn fclose(e: &mut Engine, stream: Ptr) -> i32 {
+    let stream = stream.addr();
+    if stream == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return -1;
+    }
+    if e.mem.u8(stream + 0xc) & 0x40 != 0 {
+        e.mem.set_u32(stream + 0xc, 0);
+        return -1;
+    }
+    e.call(LOCK_FILE, &args![stream]);
+    let result = e.call(FCLOSE_NOLOCK, &args![stream]).i32();
+    e.call(UNLOCK_FILE, &args![stream]);
+    result
+}
+
+// Translated from 00ecb086 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fwrite` (LIBCMT/fwrite.c), cdecl: buffer, element size, count, stream. Answers 0 when the
+/// size or the count is 0; a null stream sets `errno` to `EINVAL` (0x16), calls the
+/// invalid-parameter handler (`00ec7c30` with five zeros) and answers 0. Otherwise, with the
+/// stream locked (`_lock_file`), `_fwrite_nolock` answers, and the stream is unlocked (the
+/// `__finally` block at `00ecb0fe`, this function's own code).
+// Translation incomplete: 00ecb086 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated.
+pub fn fwrite(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream: Ptr) -> u32 {
+    if size == 0 || count == 0 {
+        return 0;
+    }
+    if stream.addr() == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return 0;
+    }
+    e.call(LOCK_FILE, &args![stream]);
+    let written = e
+        .call(FWRITE_NOLOCK, &args![buffer, size, count, stream])
+        .u32();
+    e.call(UNLOCK_FILE, &args![stream]);
+    written
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401000, operator_new(u32) -> Ptr),
@@ -4305,6 +4371,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed4638, write_string(Ptr, Ptr, Ptr, i32)),
         entry!(0x00ecdf44, iob_func() -> Ptr),
         (0x00ed27c5, fload_with_fb_entry as AbiFn),
+        entry!(0x00ec_9a47, fopen(Ptr, Ptr) -> Ptr),
+        entry!(0x00ec_9907, fclose(Ptr) -> i32),
+        entry!(0x00ec_b086, fwrite(Ptr, u32, u32, Ptr) -> u32),
     ]
 }
 
@@ -7397,5 +7466,87 @@ mod tan_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00ec_a590, &args![1.0f64]).f64(), 1.0f64.tan());
         assert_eq!(e.call(0x00ec_a590, &args![0.0f64]).f64(), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The invalid-parameter handler the doubled `__decode_pointer` answers.
+    const HANDLER: u32 = 0x0e30_0000;
+
+    /// An engine whose thread block (`__getptd_noexit`) is a block it answers (`errno` at
+    /// +8), with a handler set and the stream calls doubled.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        let block = e.mem.alloc(0x10);
+        e.register_double(GETPTD_NOEXIT, move |_, _| block.into_ret());
+        e.register(DECODE_POINTER, |_, _| HANDLER.into_ret());
+        for target in [HANDLER, LOCK_FILE, UNLOCK_FILE] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.register(FCLOSE_NOLOCK, |_, _| 7u32.into_ret());
+        e.register(FWRITE_NOLOCK, |_, a| a[2].into_ret());
+        e.register(FSOPEN, |_, _| 0x0e00_0000u32.into_ret());
+        e.call_log = Some(vec![]);
+        (e, block + 8)
+    }
+
+    #[test]
+    fn fopen_opens_shared() {
+        let (mut e, _) = engine();
+        assert_eq!(e.call(0x00ec_9a47, &args![1u32, 2u32]).u32(), 0x0e00_0000);
+        assert_eq!(calls(&e, FSOPEN), vec![vec![1, 2, 0x40]]);
+    }
+
+    #[test]
+    fn fclose_locks_or_refuses() {
+        let (mut e, error) = engine();
+        let stream = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x00ec_9907, &args![stream]).i32(), 7);
+        assert_eq!(calls(&e, LOCK_FILE), vec![vec![stream]]);
+        assert_eq!(calls(&e, FCLOSE_NOLOCK), vec![vec![stream]]);
+        assert_eq!(calls(&e, UNLOCK_FILE), vec![vec![stream]]);
+        // A string stream: flags cleared, -1.
+        e.mem.set_u32(stream + 0xc, 0x49);
+        assert_eq!(e.call(0x00ec_9907, &args![stream]).i32(), -1);
+        assert_eq!(e.mem.u32(stream + 0xc), 0);
+        assert_eq!(calls(&e, LOCK_FILE).len(), 1);
+        // No stream: EINVAL and the handler.
+        assert_eq!(e.call(0x00ec_9907, &args![0u32]).i32(), -1);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, HANDLER), vec![vec![0, 0, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn fwrite_locks_or_refuses() {
+        let (mut e, error) = engine();
+        let stream = e.mem.alloc(0x20);
+        assert_eq!(
+            e.call(0x00ec_b086, &args![9u32, 4u32, 3u32, stream]).u32(),
+            3
+        );
+        assert_eq!(calls(&e, FWRITE_NOLOCK), vec![vec![9, 4, 3, stream]]);
+        assert_eq!(calls(&e, UNLOCK_FILE), vec![vec![stream]]);
+        assert_eq!(
+            e.call(0x00ec_b086, &args![9u32, 0u32, 3u32, stream]).u32(),
+            0
+        );
+        assert_eq!(e.call(0x00ec_b086, &args![9u32, 4u32, 0u32, 0u32]).u32(), 0);
+        assert!(calls(&e, HANDLER).is_empty());
+        assert_eq!(e.call(0x00ec_b086, &args![9u32, 4u32, 3u32, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, HANDLER).len(), 1);
+        assert_eq!(calls(&e, LOCK_FILE).len(), 1);
     }
 }

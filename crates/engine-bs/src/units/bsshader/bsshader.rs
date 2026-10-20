@@ -672,6 +672,60 @@ pub fn bs_shader_compile_pixel_shader_hlsl(
     Ptr::new(made)
 }
 
+/// `NiD3DShaderProgram::NiD3DShaderProgram` (engine map, `00e897d0`, `thiscall`, two stack
+/// words: the renderer and a program type) and `NiD3DVertexShader`'s vtable (`010ef87c`, RTTI
+/// `.?AVNiD3DVertexShader@@`).
+const SHADER_PROGRAM_CONSTRUCT_00E897D0: u32 = 0x00e8_97d0;
+const VERTEX_SHADER_VTABLE_010EF87C: u32 = 0x010e_f87c;
+
+// Translated from 00be0b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DVertexShader::NiD3DVertexShader` (engine map), `thiscall` with one stack word (the
+/// renderer). Runs `NiD3DShaderProgram::NiD3DShaderProgram` with the renderer and 0, clears the
+/// byte +0x2c and the words +0x30 to +0x38, stores the vtable `010ef87c` and answers `this`.
+pub fn ni_d3d_vertex_shader_ni_d3d_vertex_shader(e: &mut Engine, this: Ptr, renderer: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(
+        SHADER_PROGRAM_CONSTRUCT_00E897D0,
+        &args![base, renderer, 0u32],
+    );
+    e.mem.set_u8(base + 0x2c, 0);
+    for offset in [0x30u32, 0x34, 0x38] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u32(base, VERTEX_SHADER_VTABLE_010EF87C);
+    this
+}
+
+/// The folder appended for the HDR shaders (the string at `010bc608`).
+const HDR_FOLDER_010BC608: u32 = 0x010b_c608;
+
+// Translated from 00be0dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshader.cpp`): the compiled shader file's path, `cdecl`
+/// with four words: the 0x104-byte buffer, the source path (only checked for null), the
+/// compiled name and a fourth word the code does not read. Nothing when the buffer, the source
+/// path or the name is null. Otherwise copies the cache root (`011f9200` when its first byte is
+/// set, else the shader root `011f9308`) into the buffer (`strcpy_s`), appends the HDR folder
+/// (`010bc608`) when `011f941e` is set and then the name (`strcat_s`).
+pub fn fn_00be0dc0(e: &mut Engine, buffer: Ptr, source: Ptr, name: Ptr, _unused_3: u32) {
+    let buffer = buffer.addr();
+    if buffer == 0 || source.addr() == 0 {
+        return;
+    }
+    if name.addr() == 0 {
+        return;
+    }
+    let root = if e.global::<u8>(CACHE_ROOT_011F9200) != 0 {
+        CACHE_ROOT_011F9200
+    } else {
+        SHADER_ROOT_011F9308
+    };
+    e.call(STRCPY_S, &args![buffer, 0x104u32, root]);
+    if e.global::<u8>(HDR_MACRO_011F941E) != 0 {
+        e.call(STRCAT_S, &args![buffer, 0x104u32, HDR_FOLDER_010BC608]);
+    }
+    e.call(STRCAT_S, &args![buffer, 0x104u32, name]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -685,6 +739,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00be_1750,
             bs_shader_compile_pixel_shader_hlsl(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr
         ),
+        entry!(0x00be_0b30, ni_d3d_vertex_shader_ni_d3d_vertex_shader(Ptr, Ptr) -> Ptr),
+        entry!(0x00be_0dc0, fn_00be0dc0(Ptr, Ptr, Ptr, u32)),
     ]
 }
 
@@ -1281,5 +1337,74 @@ mod tests {
             ]]
         );
         assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b000n_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn vertex_shader_constructor_clears_its_fields() {
+        let mut e = Engine::new();
+        e.register(SHADER_PROGRAM_CONSTRUCT_00E897D0, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x3c);
+        e.mem.write(this, &[0xcc; 0x3c]);
+        assert_eq!(
+            e.call(0x00be_0b30, &args![this, 0x0e00_0000u32]).u32(),
+            this
+        );
+        assert_eq!(e.mem.u32(this), VERTEX_SHADER_VTABLE_010EF87C);
+        assert_eq!(e.mem.u8(this + 0x2c), 0);
+        assert_eq!(e.mem.u8(this + 0x2d), 0xcc);
+        assert_eq!(e.mem.bytes(this + 0x30, 0xc), vec![0; 0xc]);
+        assert_eq!(
+            calls(&e, SHADER_PROGRAM_CONSTRUCT_00E897D0),
+            vec![vec![this, 0x0e00_0000, 0]]
+        );
+    }
+
+    #[test]
+    fn compiled_path_uses_the_cache_root_and_the_hdr_folder() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.register(STRCPY_S, |_, _| Ret::default());
+        e.register(STRCAT_S, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let buffer = 0x0e10_0000u32;
+        e.call(0x00be_0dc0, &args![buffer, 1u32, 0x0e20_0000u32, 0u32]);
+        assert_eq!(
+            calls(&e, STRCPY_S),
+            vec![vec![buffer, 0x104, SHADER_ROOT_011F9308]]
+        );
+        assert_eq!(calls(&e, STRCAT_S), vec![vec![buffer, 0x104, 0x0e20_0000]]);
+        e.set_global(CACHE_ROOT_011F9200, b'c');
+        e.set_global(HDR_MACRO_011F941E, 1u8);
+        e.call(0x00be_0dc0, &args![buffer, 1u32, 0x0e20_0000u32, 0u32]);
+        assert_eq!(
+            calls(&e, STRCPY_S)[1],
+            vec![buffer, 0x104, CACHE_ROOT_011F9200]
+        );
+        assert_eq!(
+            calls(&e, STRCAT_S)[1..].to_vec(),
+            vec![
+                vec![buffer, 0x104, HDR_FOLDER_010BC608],
+                vec![buffer, 0x104, 0x0e20_0000]
+            ]
+        );
+        // Any null pointer: nothing.
+        for words in [[0u32, 1, 2], [buffer, 0, 2], [buffer, 1, 0]] {
+            e.call(0x00be_0dc0, &args![words[0], words[1], words[2], 0u32]);
+        }
+        assert_eq!(calls(&e, STRCPY_S).len(), 2);
     }
 }

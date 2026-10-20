@@ -101,9 +101,28 @@ pub fn fn_00e78c60(
     true
 }
 
+// Translated from 00e76320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`): the constructor of a 0x1c-byte
+/// declaration entry, `thiscall`, no stack words: clears +0 and +4, sets +8 to -1 and +0xc to
+/// 0x11, clears +0x10 to +0x18 and answers `this`.
+pub fn fn_00e76320(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + 4, 0);
+    e.mem.set_u32(base + 8, 0xffff_ffff);
+    e.mem.set_u32(base + 0xc, 0x11);
+    for offset in [0x10u32, 0x14, 0x18] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e7_8c60, fn_00e78c60(Ptr, Ptr, u32, u32) -> bool)]
+    vec![
+        entry!(0x00e7_8c60, fn_00e78c60(Ptr, Ptr, u32, u32) -> bool),
+        entry!(0x00e7_6320, fn_00e76320(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -204,5 +223,21 @@ mod tests {
         let this = e.mem.alloc(0x2c);
         e.call(0x00e7_8c60, &args![this, renderer, 3u32, 0u32]);
         assert_eq!(calls(&e, NI_ARRAY_ALLOCATE_00AA1420), vec![vec![0]]);
+    }
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e76320_sets_up_the_entry() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.write(this, &[0xcc; 0x20]);
+        assert_eq!(e.call(0x00e7_6320, &args![this]).u32(), this);
+        let words: Vec<u32> = (0..7).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(words, vec![0, 0, 0xffff_ffff, 0x11, 0, 0, 0]);
+        assert_eq!(e.mem.u32(this + 0x1c), 0xcccc_cccc);
     }
 }
