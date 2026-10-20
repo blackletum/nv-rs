@@ -502,3 +502,185 @@ impl ThreadHost for Cooperative {
         }
     }
 }
+
+/// What the game's main thread did in a turn ([`run_main_frame`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MainTurn {
+    /// It reached the end of a frame (its message loop found the queue empty,
+    /// [`end_main_frame`]) and waits for the next.
+    Frame,
+    /// Its start function (`main`) returned this.
+    Finished(u32),
+    /// It stopped (an untranslated function, a fault): the first line, with the innermost
+    /// functions it was in.
+    Stopped(String),
+}
+
+/// The game's main thread run as a coroutine the host drives frame by frame: `main` (the
+/// game's `WinMain`) runs on its own OS thread, as the game threads do (module
+/// documentation), and is the thread host's main thread while it runs (it switches to the
+/// other game threads itself). Its message loop is the frame driver: when it finds no message
+/// (`PeekMessageA`, [`end_main_frame`]) it hands the engine back to the host, which resumes it
+/// for the next frame. Between frames its entered functions are kept here.
+pub struct MainThread {
+    link: Link,
+    call_stack: Vec<u32>,
+    /// How its last turn ended (`None` before the first).
+    pub last: Option<MainTurn>,
+}
+
+impl std::fmt::Debug for MainThread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MainThread")
+            .field("last", &self.last)
+            .finish()
+    }
+}
+
+thread_local! {
+    /// The main thread's coroutine end of its link, on its own OS thread.
+    static MAIN_COROUTINE: RefCell<Option<(Receiver<Baton>, Sender<Yield>)>> = const { RefCell::new(None) };
+}
+
+/// Makes the game's main thread: `start(words)` (`main`'s address and its four words) on its
+/// own OS thread, run from the first [`run_main_frame`].
+pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
+    let (resume, resumed) = channel::<Baton>();
+    let (yields, yielded) = channel::<Yield>();
+    std::thread::Builder::new()
+        .name("game main thread".into())
+        .stack_size(COROUTINE_STACK)
+        .spawn(move || {
+            let Ok(Baton(engine)) = resumed.recv() else {
+                return;
+            };
+            MAIN_COROUTINE.with(|c| *c.borrow_mut() = Some((resumed, yields.clone())));
+            // SAFETY: see `Baton`.
+            let e = unsafe { &mut *engine };
+            load_fpu(e);
+            let out =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.call(start, &words).eax));
+            let reply = match out {
+                Ok(code) => Yield::Finished(code),
+                Err(payload) => {
+                    // The functions it was in when it stopped (`Engine::call` pops only on
+                    // return), innermost first.
+                    let path: Vec<String> = e
+                        .call_stack
+                        .iter()
+                        .rev()
+                        .take(6)
+                        .map(|a| format!("{a:08x}"))
+                        .collect();
+                    let first = panic_line(payload);
+                    if path.is_empty() {
+                        Yield::Stopped(first)
+                    } else {
+                        Yield::Stopped(format!("{first} (in {})", path.join(" < ")))
+                    }
+                }
+            };
+            let _ = yields.send(reply);
+        })
+        .expect("the game main thread's coroutine");
+    MainThread {
+        link: Link { resume, yielded },
+        call_stack: Vec::new(),
+        last: None,
+    }
+}
+
+/// Runs the game's main thread for one turn: until the end of its next frame, its return or
+/// its stop. Called from the host's thread, never from a game thread. A thread that finished or
+/// stopped is not resumed (its last turn is answered again).
+pub fn run_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
+    if let Some(last @ (MainTurn::Finished(_) | MainTurn::Stopped(_))) = &main.last {
+        return last.clone();
+    }
+    ensure_main(e);
+    e.kernel.threads.current = 0;
+    let host_stack = std::mem::replace(&mut e.call_stack, std::mem::take(&mut main.call_stack));
+    let baton = Baton(e as *mut Engine);
+    let reply = match main.link.resume.send(baton) {
+        Ok(()) => main.link.yielded.recv().ok(),
+        Err(_) => None,
+    };
+    main.call_stack = std::mem::replace(&mut e.call_stack, host_stack);
+    load_fpu(e);
+    let turn = match reply {
+        Some(Yield::Paused) => MainTurn::Frame,
+        Some(Yield::Finished(code)) => MainTurn::Finished(code),
+        Some(Yield::Stopped(why)) => MainTurn::Stopped(why),
+        None => MainTurn::Stopped("the main thread's coroutine ended".into()),
+    };
+    main.last = Some(turn.clone());
+    turn
+}
+
+/// The end of a frame on the game's main thread (its message loop found the queue empty): when
+/// the main thread runs as the host's coroutine ([`start_main_thread`]) it hands the engine
+/// back to the host and waits for the next frame, then answers true; anywhere else (a test
+/// calling the game's code directly) it answers false at once.
+pub fn end_main_frame(e: &mut Engine) -> bool {
+    let on_coroutine = MAIN_COROUTINE.with(|c| c.borrow().is_some());
+    if !on_coroutine || !on_main(e) {
+        return false;
+    }
+    MAIN_COROUTINE.with(|c| {
+        let c = c.borrow();
+        let (resumed, yields) = c.as_ref().expect("the main coroutine's link");
+        if yields.send(Yield::Paused).is_err() || resumed.recv().is_err() {
+            // The host dropped the engine: never run the frames on this stack again.
+            loop {
+                std::thread::park();
+            }
+        }
+    });
+    load_fpu(e);
+    true
+}
+
+#[cfg(test)]
+mod main_thread_tests {
+    use super::*;
+
+    /// A stand-in `main` whose loop ends a frame three times, then returns 7.
+    fn frames(e: &mut Engine, _: &[u32]) -> crate::Ret {
+        for _ in 0..3 {
+            let n = e.mem.u32(0x2000);
+            e.mem.set_u32(0x2000, n + 1);
+            assert!(end_main_frame(e));
+        }
+        crate::Ret {
+            eax: 7,
+            ..crate::Ret::default()
+        }
+    }
+
+    #[test]
+    fn the_main_thread_runs_frame_by_frame() {
+        let mut e = Engine::new();
+        e.mem.map(0x2000, 0x1000);
+        e.register(0x0040_0000, frames);
+        let mut main = start_main_thread(0x0040_0000, vec![]);
+        for frame in 1..=3 {
+            assert_eq!(run_main_frame(&mut e, &mut main), MainTurn::Frame);
+            assert_eq!(e.mem.u32(0x2000), frame);
+        }
+        assert_eq!(run_main_frame(&mut e, &mut main), MainTurn::Finished(7));
+        assert_eq!(run_main_frame(&mut e, &mut main), MainTurn::Finished(7));
+        // Outside the coroutine a frame's end doesn't wait.
+        assert!(!end_main_frame(&mut e));
+    }
+
+    #[test]
+    fn a_stop_on_the_main_thread_comes_back_with_where() {
+        let mut e = Engine::new();
+        e.register(0x0040_0000, |e, _| e.call(0x00ab_cdef, &[]));
+        let mut main = start_main_thread(0x0040_0000, vec![]);
+        let MainTurn::Stopped(why) = run_main_frame(&mut e, &mut main) else {
+            panic!("a stop");
+        };
+        assert!(why.contains("00abcdef"), "{why}");
+    }
+}
