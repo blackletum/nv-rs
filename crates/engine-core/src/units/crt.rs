@@ -452,6 +452,305 @@ pub fn strtol(e: &mut Engine, text: u32, end: u32, base: i32) -> i32 {
     strtoxl(e, locale, text, end, base, 0) as i32
 }
 
+// ---- Per-thread data and locale (LIBCMT tidtable.c, setlocal.c, mbctype.c) ----
+
+/// `GetLastError` (import slot).
+const IMPORT_GET_LAST_ERROR: u32 = 0x00fd_f094;
+/// `SetLastError` (import slot).
+const IMPORT_SET_LAST_ERROR: u32 = 0x00fd_f1dc;
+/// `GetCurrentThreadId` (import slot).
+const IMPORT_GET_CURRENT_THREAD_ID: u32 = 0x00fd_f1d0;
+/// `InterlockedIncrement` (import slot).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// `InterlockedDecrement` (import slot).
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// `___set_flsgetvalue` (`00ed100d`, cdecl, no arguments): the
+/// `FlsGetValue` function to call.
+const SET_FLSGETVALUE: u32 = 0x00ed_100d;
+/// `__flsindex`: the FLS slot of the thread data block (-1 until the CRT's
+/// start-up allocates it).
+const FLS_INDEX: u32 = 0x011c_1cbc;
+/// The encoded `FlsSetValue` pointer.
+const ENCODED_FLS_SET_VALUE: u32 = 0x0126_fe08;
+/// `_initptd` (`00ed107e`, cdecl: block, locale info).
+const INIT_PTD: u32 = 0x00ed_107e;
+/// `_amsg_exit` (`00eccc55`, cdecl: run-time error number).
+const AMSG_EXIT: u32 = 0x00ec_cc55;
+/// `_lock` (`00eddf39`, cdecl: lock number).
+const CRT_LOCK: u32 = 0x00ed_df39;
+/// `_unlock` (`00edde5f`, cdecl: lock number).
+const CRT_UNLOCK: u32 = 0x00ed_de5f;
+/// `__updatetlocinfoEx_nolock` (`00ecf704`): register arguments, EAX the
+/// slot to update and EDI the new locale info, passed as those two words.
+const UPDATE_TLOCINFO_EX_NOLOCK: u32 = 0x00ec_f704;
+/// `__globallocalestatus`: the `_ownlocale` bits that keep a thread's own
+/// locale.
+const GLOBAL_LOCALE_STATUS: u32 = 0x011c_2310;
+/// `__ptlocinfo`: the global locale info.
+const GLOBAL_LOCALE_INFO: u32 = 0x011c_23f8;
+/// `__ptmbcinfo`: the global multibyte info.
+const GLOBAL_MBC_INFO: u32 = 0x011c_2218;
+/// The CRT's initial (static) multibyte info, never freed.
+const INITIAL_MBC_INFO: u32 = 0x011c_1df0;
+/// `__crtGetStringTypeA_stat` (`00ee11e9`): the locale object in ECX and
+/// seven stack words, passed as eight words (the object first).
+const GET_STRING_TYPE_A_STAT: u32 = 0x00ee_11e9;
+
+// Translated from 00ed1165 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__getptd_noexit` (LIBCMT/tidtable.c, Ghidra's function ID; cdecl): the
+/// calling thread's CRT data block. Keeps the last error, reads the block
+/// from the FLS slot (`FlsGetValue` as `___set_flsgetvalue` returns it); a
+/// thread without one gets a zeroed 0x214-byte block stored in the slot
+/// (the decoded `FlsSetValue`) and set up by `_initptd(block, 0)` with its
+/// thread id and handle -1; a failed store frees it and returns 0. Restores
+/// the last error.
+pub fn getptd_noexit(e: &mut Engine) -> u32 {
+    let last_error = e.call(IMPORT_GET_LAST_ERROR, &[]).u32();
+    let index = e.mem.u32(FLS_INDEX);
+    let get_value = e.call(SET_FLSGETVALUE, &[]).u32();
+    let mut block = e.call(get_value, &[index]).u32();
+    if block == 0 {
+        block = calloc_crt(e, 1, 0x214).addr();
+        if block != 0 {
+            let encoded = e.mem.u32(ENCODED_FLS_SET_VALUE);
+            let index = e.mem.u32(FLS_INDEX);
+            let set_value = e.call(DECODE_POINTER, &[encoded]).u32();
+            if e.call(set_value, &[index, block]).u32() != 0 {
+                e.call(INIT_PTD, &[block, 0]);
+                let thread = e.call(IMPORT_GET_CURRENT_THREAD_ID, &[]).u32();
+                e.mem.set_u32(block + 4, u32::MAX);
+                e.mem.set_u32(block, thread);
+            } else {
+                free(e, Ptr::new(block));
+                block = 0;
+            }
+        }
+    }
+    e.call(IMPORT_SET_LAST_ERROR, &[last_error]);
+    block
+}
+
+// Translated from 00ed11de (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_getptd` (LIBCMT/tidtable.c; cdecl): [`getptd_noexit`], ending the
+/// program through `_amsg_exit(0x10)` (`_RT_THREAD`) when there is no
+/// block.
+pub fn getptd(e: &mut Engine) -> u32 {
+    let block = getptd_noexit(e);
+    if block == 0 {
+        e.call(AMSG_EXIT, &[0x10]);
+    }
+    block
+}
+
+// Translated from 00ecf742 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__updatetlocinfo` (LIBCMT/setlocal.c, Ghidra's function ID; cdecl): the
+/// thread's locale info: the thread's own (+0x6C) when its `_ownlocale`
+/// (+0x70) has a bit of `__globallocalestatus` and it has one; otherwise,
+/// under lock 0xC, `__updatetlocinfoEx_nolock(&ptd->ptlocinfo,
+/// __ptlocinfo)` (the `__finally` block at `00ecf7ac`, which unlocks and
+/// takes the result, is this function's own code). A null result ends the
+/// program (`_amsg_exit(0x20)`).
+// Translation incomplete: 00ecf742 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated.
+pub fn update_tlocinfo(e: &mut Engine) -> u32 {
+    let thread = getptd(e);
+    let status = e.mem.u32(GLOBAL_LOCALE_STATUS);
+    let info = if e.mem.u32(thread + 0x70) & status != 0 && e.mem.u32(thread + 0x6c) != 0 {
+        let thread = getptd(e);
+        e.mem.u32(thread + 0x6c)
+    } else {
+        e.call(CRT_LOCK, &[0xc]);
+        let global = e.mem.u32(GLOBAL_LOCALE_INFO);
+        let result = e
+            .call(UPDATE_TLOCINFO_EX_NOLOCK, &[thread + 0x6c, global])
+            .u32();
+        e.call(CRT_UNLOCK, &[0xc]);
+        result
+    };
+    if info == 0 {
+        e.call(AMSG_EXIT, &[0x20]);
+    }
+    info
+}
+
+// Translated from 00ed3cdf (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__updatetmbcinfo` (LIBCMT/mbctype.c, Ghidra's function ID; cdecl): the
+/// thread's multibyte info (+0x68). When the thread does not keep its own
+/// locale (the `_ownlocale` test, then its locale info +0x6C), under lock
+/// 0xD: a block other than `__ptmbcinfo` is released (`InterlockedDecrement`
+/// on its count; freed at zero unless it is the static initial one) and
+/// replaced by `__ptmbcinfo`, whose count goes up (the `__finally` block at
+/// `00ed3d7a`, the unlock, is this function's own code). A null result ends
+/// the program (`_amsg_exit(0x20)`).
+// Translation incomplete: 00ed3cdf - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated.
+pub fn update_tmbcinfo(e: &mut Engine) -> u32 {
+    let thread = getptd(e);
+    let status = e.mem.u32(GLOBAL_LOCALE_STATUS);
+    let info = if e.mem.u32(thread + 0x70) & status != 0 && e.mem.u32(thread + 0x6c) != 0 {
+        e.mem.u32(thread + 0x68)
+    } else {
+        e.call(CRT_LOCK, &[0xd]);
+        let mut info = e.mem.u32(thread + 0x68);
+        if info != e.mem.u32(GLOBAL_MBC_INFO) {
+            if info != 0
+                && e.call(IMPORT_INTERLOCKED_DECREMENT, &[info]).u32() == 0
+                && info != INITIAL_MBC_INFO
+            {
+                free(e, Ptr::new(info));
+            }
+            let global = e.mem.u32(GLOBAL_MBC_INFO);
+            e.mem.set_u32(thread + 0x68, global);
+            info = e.mem.u32(GLOBAL_MBC_INFO);
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &[info]);
+        }
+        e.call(CRT_UNLOCK, &[0xd]);
+        info
+    };
+    if info == 0 {
+        e.call(AMSG_EXIT, &[0x20]);
+    }
+    info
+}
+
+// Translated from 00ec660e (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_LocaleUpdate::_LocaleUpdate` (Ghidra's function ID; thiscall, one word):
+/// fills the 0x10-byte object: with a locale, its locale and multibyte info;
+/// without one, the thread's (`_getptd`, +0x6C and +0x68) brought up to date
+/// (`__updatetlocinfo` / `__updatetmbcinfo`) unless they are the globals or
+/// the thread keeps its own locale, the thread block at +0x08 and, when bit
+/// 1 of its `_ownlocale` (+0x70) was clear, that bit set and the "updated"
+/// byte (+0x0C) set. Returns `this`.
+pub fn locale_update(e: &mut Engine, this: u32, locale: u32) -> u32 {
+    e.mem.set_u8(this + 0xc, 0);
+    if locale != 0 {
+        let info = e.mem.u32(locale);
+        e.mem.set_u32(this, info);
+        let mbc = e.mem.u32(locale + 4);
+        e.mem.set_u32(this + 4, mbc);
+        return this;
+    }
+    let thread = getptd(e);
+    e.mem.set_u32(this + 8, thread);
+    let info = e.mem.u32(thread + 0x6c);
+    e.mem.set_u32(this, info);
+    let mbc = e.mem.u32(thread + 0x68);
+    e.mem.set_u32(this + 4, mbc);
+    if e.mem.u32(this) != e.mem.u32(GLOBAL_LOCALE_INFO)
+        && e.mem.u32(thread + 0x70) & e.mem.u32(GLOBAL_LOCALE_STATUS) == 0
+    {
+        let info = update_tlocinfo(e);
+        e.mem.set_u32(this, info);
+    }
+    if e.mem.u32(this + 4) != e.mem.u32(GLOBAL_MBC_INFO) {
+        let thread = e.mem.u32(this + 8);
+        if e.mem.u32(thread + 0x70) & e.mem.u32(GLOBAL_LOCALE_STATUS) == 0 {
+            let mbc = update_tmbcinfo(e);
+            e.mem.set_u32(this + 4, mbc);
+        }
+    }
+    let thread = e.mem.u32(this + 8);
+    let own = e.mem.u32(thread + 0x70);
+    if own & 2 == 0 {
+        e.mem.set_u32(thread + 0x70, own | 2);
+        e.mem.set_u8(this + 0xc, 1);
+    }
+    this
+}
+
+// Translated from 00ed419c (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_isleadbyte_l` (Ghidra's function ID; cdecl: character, locale): bit
+/// 0x8000 (`_LEADBYTE`) of the low byte's entry in the locale's ctype table
+/// (+0xC8).
+pub fn isleadbyte_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    e.with_stack(0x10, |e, update| {
+        let update = update.addr();
+        locale_update(e, update, locale);
+        let info = e.mem.u32(update);
+        let table = e.mem.u32(info + 0xc8);
+        let kind = u32::from(e.mem.u16(table + (c & 0xff) * 2)) & 0x8000;
+        locale_update_release(e, update);
+        kind
+    })
+}
+
+// Translated from 00ee13a3 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__crtGetStringTypeA` (Ghidra's function ID; cdecl, eight words): takes
+/// the locale and passes the seven other words to `__crtGetStringTypeA_stat`
+/// (`00ee11e9`) with the locale object, returning its result.
+#[allow(clippy::too_many_arguments)]
+pub fn crt_get_string_type_a(
+    e: &mut Engine,
+    locale: u32,
+    info_type: u32,
+    text: u32,
+    length: u32,
+    types: u32,
+    code_page: u32,
+    lcid: u32,
+    error: u32,
+) -> u32 {
+    e.with_stack(0x10, |e, update| {
+        let update = update.addr();
+        locale_update(e, update, locale);
+        let result = e
+            .call(
+                GET_STRING_TYPE_A_STAT,
+                &[
+                    update, info_type, text, length, types, code_page, lcid, error,
+                ],
+            )
+            .u32();
+        locale_update_release(e, update);
+        result
+    })
+}
+
+// Translated from 00ed41e7 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_isctype_l` (Ghidra's function ID; cdecl: character, mask, locale): for
+/// -1..255 the character's entry in the locale's ctype table (+0xC8);
+/// otherwise the type `__crtGetStringTypeA(.., CT_CTYPE1, ..)` gives for
+/// its one or two bytes (two when the high byte is a lead byte), 0 when
+/// that fails. Returns the type masked by `mask`.
+pub fn isctype_l(e: &mut Engine, c: i32, mask: u32, locale: u32) -> u32 {
+    // The frame from EBP-0x18: the `_LocaleUpdate` object, the 3-byte
+    // text at EBP-0x8 and the 16-bit type at EBP-0x4.
+    e.with_stack(0x18, |e, frame| {
+        let update = frame.addr();
+        let text = update + 0x10;
+        let kind_slot = update + 0x14;
+        locale_update(e, update, locale);
+        let kind = if (c as u32).wrapping_add(1) <= 0x100 {
+            let info = e.mem.u32(update);
+            let table = e.mem.u32(info + 0xc8);
+            u32::from(e.mem.u16(table.wrapping_add((c as u32).wrapping_mul(2))))
+        } else {
+            let high = c >> 8;
+            let length = if isleadbyte_l(e, (high as u32) & 0xff, update) != 0 {
+                e.mem.set_u8(text, high as u8);
+                e.mem.set_u8(text + 1, c as u8);
+                e.mem.set_u8(text + 2, 0);
+                2
+            } else {
+                e.mem.set_u8(text, c as u8);
+                e.mem.set_u8(text + 1, 0);
+                1
+            };
+            let info = e.mem.u32(update);
+            let code_page = e.mem.u32(info + 4);
+            let lcid = e.mem.u32(info + 0x14);
+            let ok =
+                crt_get_string_type_a(e, update, 1, text, length, kind_slot, code_page, lcid, 1);
+            if ok == 0 {
+                locale_update_release(e, update);
+                return 0;
+            }
+            u32::from(e.mem.u16(kind_slot))
+        };
+        let result = kind & mask;
+        locale_update_release(e, update);
+        result
+    })
+}
+
 /// C `atof`: the longest prefix that is a decimal floating-point number.
 fn parse_double(s: &[u8]) -> f64 {
     let t: Vec<u8> = s
@@ -2465,6 +2764,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca6bd, atol_body(Ptr) -> i32),
         entry!(0x00ec8d08, strtol(u32, u32, i32) -> i32),
         entry!(0x00ec8ad9, strtoxl(u32, u32, u32, i32, u32) -> u32),
+        entry!(0x00ed1165, getptd_noexit() -> u32),
+        entry!(0x00ed11de, getptd() -> u32),
+        entry!(0x00ecf742, update_tlocinfo() -> u32),
+        entry!(0x00ed3cdf, update_tmbcinfo() -> u32),
+        entry!(0x00ec660e, locale_update(u32, u32) -> u32),
+        entry!(0x00ed419c, isleadbyte_l(u32, u32) -> u32),
+        entry!(0x00ee13a3, crt_get_string_type_a(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ed41e7, isctype_l(i32, u32, u32) -> u32),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
@@ -4412,5 +4719,251 @@ mod strtol_tests {
         // A null end pointer is allowed.
         e.mem.write(s, b"-9\0");
         assert_eq!(e.call(0x00ec_8d08, &[s, 0, 10]).u32() as i32, -9);
+    }
+}
+
+#[cfg(test)]
+mod thread_data_tests {
+    use super::*;
+
+    const FLS_GET_VALUE: u32 = 0x0077_0000;
+    const FLS_SET_VALUE: u32 = 0x0077_0010;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An engine with the platform's imports at the slots these functions
+    /// call, the CRT globals' pages mapped and the thread block `block`
+    /// (0: none) behind the FLS doubles; `FlsSetValue` succeeds when
+    /// `store_ok`.
+    fn engine(block: u32, store_ok: bool) -> Engine {
+        let mut e = Engine::new();
+        let table = crate::units::platform::imports();
+        for (slot, name) in [
+            (IMPORT_GET_LAST_ERROR, "GetLastError"),
+            (IMPORT_SET_LAST_ERROR, "SetLastError"),
+            (IMPORT_GET_CURRENT_THREAD_ID, "GetCurrentThreadId"),
+            (IMPORT_INTERLOCKED_INCREMENT, "InterlockedIncrement"),
+            (IMPORT_INTERLOCKED_DECREMENT, "InterlockedDecrement"),
+        ] {
+            let (_, _, f) = table.iter().find(|(_, n, _)| *n == name).unwrap();
+            e.register(slot, *f);
+        }
+        e.map(0x011c_1000, 0x2000);
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(FLS_INDEX, 3);
+        e.register(SET_FLSGETVALUE, |_, _| FLS_GET_VALUE.into_ret());
+        e.register_double(FLS_GET_VALUE, move |_, a| {
+            assert_eq!(a, [3]);
+            block.into_ret()
+        });
+        e.register(DECODE_POINTER, |_, _| FLS_SET_VALUE.into_ret());
+        e.register_double(FLS_SET_VALUE, move |_, _| u32::from(store_ok).into_ret());
+        e.register(INIT_PTD, |_, _| 0u32.into_ret());
+        e.register(AMSG_EXIT, |_, _| 0u32.into_ret());
+        e.register(CRT_LOCK, |_, _| 0u32.into_ret());
+        e.register(CRT_UNLOCK, |_, _| 0u32.into_ret());
+        e
+    }
+
+    #[test]
+    fn getptd_returns_the_thread_block_and_keeps_the_last_error() {
+        let mut e = engine(0x0055_0000, true);
+        e.call(IMPORT_SET_LAST_ERROR, &[7]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_11de, &[]).u32(), 0x0055_0000);
+        assert_eq!(calls_to(&e, IMPORT_SET_LAST_ERROR), vec![vec![7]]);
+        assert!(calls_to(&e, FLS_SET_VALUE).is_empty());
+        assert!(calls_to(&e, AMSG_EXIT).is_empty());
+    }
+
+    #[test]
+    fn getptd_noexit_makes_a_block_for_a_new_thread() {
+        let mut e = engine(0, true);
+        e.call_log = Some(vec![]);
+        let block = e.call(0x00ed_1165, &[]).u32();
+        assert_ne!(block, 0);
+        assert_eq!(calls_to(&e, FLS_SET_VALUE), vec![vec![3, block]]);
+        assert_eq!(calls_to(&e, INIT_PTD), vec![vec![block, 0]]);
+        assert_eq!(e.mem.u32(block), crate::units::platform::MAIN_THREAD_ID);
+        assert_eq!(e.mem.u32(block + 4), u32::MAX);
+        assert!(e.mem.bytes(block + 8, 0x20c).iter().all(|b| *b == 0));
+        // The store fails: the block is freed, 0, and _getptd ends the program.
+        let mut e = engine(0, false);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_11de, &[]).u32(), 0);
+        assert!(calls_to(&e, INIT_PTD).is_empty());
+        assert_eq!(calls_to(&e, AMSG_EXIT), vec![vec![0x10]]);
+    }
+
+    /// A thread block with `_ownlocale` `own` and the given locale and
+    /// multibyte info.
+    fn thread(e: &mut Engine, own: u32, info: u32, mbc: u32) -> u32 {
+        let block = e.mem.alloc(0x214);
+        e.mem.set_u32(block + 0x70, own);
+        e.mem.set_u32(block + 0x6c, info);
+        e.mem.set_u32(block + 0x68, mbc);
+        block
+    }
+
+    #[test]
+    fn locale_update_copies_a_locale_or_takes_the_threads() {
+        let mut e = engine(0, true);
+        let locale = e.mem.alloc(8);
+        e.mem.set_u32(locale, 0x11);
+        e.mem.set_u32(locale + 4, 0x22);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u8(this + 0xc, 9);
+        assert_eq!(e.call(0x00ec_660e, &[this, locale]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x11);
+        assert_eq!(e.mem.u32(this + 4), 0x22);
+        assert_eq!(e.mem.u8(this + 0xc), 0);
+
+        // The thread's globals: nothing to update; bit 1 set and noted.
+        let mut e = engine(0, true);
+        e.mem.set_u32(GLOBAL_LOCALE_INFO, 0x100);
+        e.mem.set_u32(GLOBAL_MBC_INFO, 0x200);
+        let block = thread(&mut e, 0, 0x100, 0x200);
+        e.register_double(FLS_GET_VALUE, move |_, _| block.into_ret());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_660e, &[this, 0]);
+        assert_eq!(e.mem.u32(this), 0x100);
+        assert_eq!(e.mem.u32(this + 4), 0x200);
+        assert_eq!(e.mem.u32(this + 8), block);
+        assert_eq!(e.mem.u8(this + 0xc), 1);
+        assert_eq!(e.mem.u32(block + 0x70), 2);
+        assert!(calls_to(&e, CRT_LOCK).is_empty());
+        // Bit 1 already set: not noted again.
+        e.call(0x00ec_660e, &[this, 0]);
+        assert_eq!(e.mem.u8(this + 0xc), 0);
+    }
+
+    #[test]
+    fn locale_update_refreshes_stale_thread_locales() {
+        let mut e = engine(0, true);
+        e.mem.set_u32(GLOBAL_LOCALE_INFO, 0x100);
+        let global_mbc = e.mem.alloc(4);
+        e.mem.set_u32(global_mbc, 1);
+        e.mem.set_u32(GLOBAL_MBC_INFO, global_mbc);
+        let old_mbc = e.mem.alloc(4);
+        e.mem.set_u32(old_mbc, 1);
+        let block = thread(&mut e, 0, 0x300, old_mbc);
+        e.register_double(FLS_GET_VALUE, move |_, _| block.into_ret());
+        e.register(UPDATE_TLOCINFO_EX_NOLOCK, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[1].into_ret()
+        });
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_660e, &[this, 0]);
+        assert_eq!(
+            calls_to(&e, UPDATE_TLOCINFO_EX_NOLOCK),
+            vec![vec![block + 0x6c, 0x100]]
+        );
+        assert_eq!(e.mem.u32(this), 0x100);
+        // The old multibyte info's count fell to zero; the global's rose.
+        assert_eq!(e.mem.u32(this + 4), global_mbc);
+        assert_eq!(e.mem.u32(block + 0x68), global_mbc);
+        assert_eq!(e.mem.u32(global_mbc), 2);
+        assert_eq!(
+            calls_to(&e, IMPORT_INTERLOCKED_DECREMENT),
+            vec![vec![old_mbc]]
+        );
+        assert_eq!(calls_to(&e, CRT_LOCK), vec![vec![0xc], vec![0xd]]);
+        assert_eq!(calls_to(&e, CRT_UNLOCK), vec![vec![0xc], vec![0xd]]);
+    }
+
+    #[test]
+    fn update_functions_keep_a_threads_own_locale_and_stop_on_null() {
+        let mut e = engine(0, true);
+        e.mem.set_u32(GLOBAL_LOCALE_STATUS, 1);
+        let block = thread(&mut e, 1, 0x400, 0x500);
+        e.register_double(FLS_GET_VALUE, move |_, _| block.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_f742, &[]).u32(), 0x400);
+        assert_eq!(e.call(0x00ed_3cdf, &[]).u32(), 0x500);
+        assert!(calls_to(&e, CRT_LOCK).is_empty());
+        assert_eq!(calls_to(&e, SET_FLSGETVALUE).len(), 3);
+        // Not kept, and the update gives null: _amsg_exit(0x20).
+        e.mem.set_u32(GLOBAL_LOCALE_STATUS, 0);
+        e.register(UPDATE_TLOCINFO_EX_NOLOCK, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_f742, &[]).u32(), 0);
+        assert_eq!(calls_to(&e, AMSG_EXIT), vec![vec![0x20]]);
+        // The multibyte info equal to the global: kept as it is.
+        e.mem.set_u32(GLOBAL_MBC_INFO, 0x500);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_3cdf, &[]).u32(), 0x500);
+        assert!(calls_to(&e, IMPORT_INTERLOCKED_INCREMENT).is_empty());
+        // The static initial info is not freed when its count reaches 0.
+        e.mem.set_u32(INITIAL_MBC_INFO, 1);
+        e.mem.set_u32(block + 0x68, INITIAL_MBC_INFO);
+        let global = e.mem.alloc(4);
+        e.mem.set_u32(GLOBAL_MBC_INFO, global);
+        assert_eq!(e.call(0x00ed_3cdf, &[]).u32(), global);
+        assert_eq!(e.mem.u32(INITIAL_MBC_INFO), 0);
+    }
+
+    /// A locale object (`_locale_tstruct`) whose locale info has a ctype
+    /// table where `A` is upper case (1) and 0x81 a lead byte (0x8000), and
+    /// code page 932 at +4, locale id 0x411 at +0x14.
+    fn locale(e: &mut Engine) -> u32 {
+        let table = e.mem.alloc(0x202);
+        e.mem.set_u16(table + 2 * 0x41, 1);
+        e.mem.set_u16(table + 2 * 0x81, 0x8000);
+        let info = e.mem.alloc(0x100);
+        e.mem.set_u32(info + 0xc8, table);
+        e.mem.set_u32(info + 4, 932);
+        e.mem.set_u32(info + 0x14, 0x411);
+        let locale = e.mem.alloc(8);
+        e.mem.set_u32(locale, info);
+        locale
+    }
+
+    /// The byte strings the string-type double received.
+    type Seen = std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>;
+
+    #[test]
+    fn character_types_read_the_table_or_ask_the_string_types() {
+        let mut e = engine(0, true);
+        let l = locale(&mut e);
+        assert_eq!(e.call(0x00ed_419c, &[0x181, l]).u32(), 0x8000);
+        assert_eq!(e.call(0x00ed_419c, &[0x41, l]).u32(), 0);
+        assert_eq!(e.call(0x00ed_41e7, &[0x41, 1, l]).u32(), 1);
+        assert_eq!(e.call(0x00ed_41e7, &[0x41, 2, l]).u32(), 0);
+        // Above 255: the string types of one or two bytes.
+        let seen: Seen = Default::default();
+        let record = seen.clone();
+        e.register_double(GET_STRING_TYPE_A_STAT, move |e, a| {
+            assert_eq!(a[1], 1);
+            assert_eq!((a[5], a[6], a[7]), (932, 0x411, 1));
+            record.borrow_mut().push(e.mem.bytes(a[2], a[3]));
+            e.mem.set_u16(a[4], 0x0104);
+            u32::from(a[3] == 2).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_41e7, &[0x8142, 0xffff, l]).u32(), 0x0104);
+        assert_eq!(e.call(0x00ed_41e7, &[0x4142, 0xffff, l]).u32(), 0);
+        assert_eq!(*seen.borrow(), vec![vec![0x81, 0x42], vec![0x42]]);
+        assert_eq!(calls_to(&e, GET_STRING_TYPE_A_STAT).len(), 2);
+        // __crtGetStringTypeA passes the locale object and its seven words.
+        let text = e.mem.alloc(4);
+        e.mem.write(text, &[0x81, 0x42]);
+        let out = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x00ee_13a3, &[l, 1, text, 2, out, 932, 0x411, 1])
+            .u32();
+        assert_eq!(result, 1);
+        let call = &calls_to(&e, GET_STRING_TYPE_A_STAT)[0];
+        assert_eq!(&call[1..], &[1, text, 2, out, 932, 0x411, 1]);
     }
 }
