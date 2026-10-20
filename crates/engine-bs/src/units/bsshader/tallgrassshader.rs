@@ -70,9 +70,63 @@ pub fn fn_00bacf00(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The tall grass shader's vtable (`010b8980`; no RTTI locator before it).
+const TALL_GRASS_VTABLE_010B8980: u32 = 0x010b_8980;
+/// The four words copied (`011a9bd0`..`011a9bdc` into `01200570`..`0120057c`).
+const WORDS_011A9BD0: u32 = 0x011a_9bd0;
+const WORDS_01200570: u32 = 0x0120_0570;
+/// The shader model setting (`011f91c0`).
+const SHADER_MODEL_011F91C0: u32 = 0x011f_91c0;
+
+// Translated from 00bacd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `tallgrassshader.cpp`): the tall grass shader's constructor,
+/// `thiscall` with one stack word (the declaration). Runs `BSShader::BSShader` (`00be2200`),
+/// stores the vtable `010b8980`, constructs the `NiPointer` arrays at +0x6c (0x2c, destructor
+/// `00b79930`), +0x128 (0x18) and +0x188 (7, both destructor `00b66f20`), stores 0.0 at
+/// +0x1b0 to +0x1dc, sets +0x68 to 6, assigns the declaration to the `NiPointer` at +0x28,
+/// stores 0.0 at +0x11c, copies the four words at `011a9bd0` to `01200570`, sets the 16-bit
+/// count at +0x1ac to 0xe4 (0x50 when the setting at `011f91c0` is below 2, signed), allocates
+/// that many 0x10-byte elements from the memory manager into +0x1a4 and clears +0x1a8.
+/// Answers `this`.
+// Translation incomplete: 00bacd00 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the base and the arrays) is not translated.
+pub fn fn_00bacd00(e: &mut Engine, this: Ptr, declaration: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, TALL_GRASS_VTABLE_010B8980);
+    construct_pointer_array(e, base + 0x6c, 0x2c, DESTRUCT_00B79930);
+    construct_pointer_array(e, base + 0x128, 0x18, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x188, 7, DESTRUCT_00B66F20);
+    for offset in (0x1b0u32..=0x1dc).step_by(4) {
+        e.mem.set_f32(base + offset, 0.0);
+    }
+    e.mem.set_u32(base + 0x68, 6);
+    ni_pointer_assign(e, base + 0x28, declaration.addr());
+    e.mem.set_f32(base + 0x11c, 0.0);
+    for index in 0..4u32 {
+        let word = e.global::<u32>(WORDS_011A9BD0 + 4 * index);
+        e.set_global::<u32>(WORDS_01200570 + 4 * index, word);
+    }
+    let count: u16 = if e.global::<i32>(SHADER_MODEL_011F91C0) < 2 {
+        0x50
+    } else {
+        0xe4
+    };
+    e.mem.set_u16(base + 0x1ac, count);
+    let count = e.mem.u16(base + 0x1ac);
+    let elements = allocate_array(e, u32::from(count), 0x10);
+    e.mem.set_u32(base + 0x1a4, elements);
+    e.mem.set_u32(base + 0x1a8, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ba_cf00, fn_00bacf00() -> Ptr)]
+    vec![
+        entry!(0x00ba_cd00, fn_00bacd00(Ptr, Ptr) -> Ptr),
+        entry!(0x00ba_cf00, fn_00bacf00() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -109,5 +163,72 @@ mod tests {
             ]
         );
         assert_eq!(e.mem.u32(CONTEXT_SEEN), CONTEXT_TALL_GRASS);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn construct(model: i32) -> (Engine, u32, u32) {
+        let mut e = rig();
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x0120_0000, 0x1000);
+        for index in 0..4u32 {
+            e.set_global::<u32>(WORDS_011A9BD0 + 4 * index, 0x70 + index);
+        }
+        e.set_global::<i32>(SHADER_MODEL_011F91C0, model);
+        let this = e.mem.alloc(0x1e0);
+        e.mem.write(this, &[0xcc; 0x1e0]);
+        e.mem.set_u32(this + 0x28, 0);
+        let declaration = object(&mut e, 1);
+        assert_eq!(e.call(0x00ba_cd00, &args![this, declaration]).u32(), this);
+        (e, this, declaration)
+    }
+
+    #[test]
+    fn fn_00bacd00_builds_the_shader() {
+        let (e, this, declaration) = construct(3);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), TALL_GRASS_VTABLE_010B8980);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 0x2c, DESTRUCT_00B79930),
+                pointer_array(this + 0x128, 0x18, DESTRUCT_00B66F20),
+                pointer_array(this + 0x188, 7, DESTRUCT_00B66F20),
+            ]
+        );
+        for offset in (0x1b0u32..=0x1dc).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0x68), 6);
+        assert_eq!(e.mem.u32(this + 0x28), declaration);
+        assert_eq!(e.mem.u32(declaration + 4), 2);
+        assert_eq!(e.mem.u32(this + 0x11c), 0);
+        for index in 0..4u32 {
+            assert_eq!(e.global::<u32>(WORDS_01200570 + 4 * index), 0x70 + index);
+        }
+        assert_eq!(e.mem.u16(this + 0x1ac), 0xe4);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0xe40]]
+        );
+        assert_ne!(e.mem.u32(this + 0x1a4), 0);
+        assert_eq!(e.mem.u32(this + 0x1a8), 0);
+    }
+
+    #[test]
+    fn fn_00bacd00_small_count_below_model_2() {
+        let (e, this, _) = construct(1);
+        assert_eq!(e.mem.u16(this + 0x1ac), 0x50);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x500]]
+        );
+        let (e, this, _) = construct(-7);
+        assert_eq!(e.mem.u16(this + 0x1ac), 0x50);
     }
 }

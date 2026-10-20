@@ -72,9 +72,26 @@ pub fn image_space_manager_initialize(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(tls.wrapping_add(TLS_CONTEXT), saved_context);
 }
 
+// Translated from 00b8b360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceManager::SetupEffects` (Xbox PDB), `thiscall`, no stack words: for each of the
+/// 0x22 effect slots of the array at +0x8 (re-read for every slot), calls a set effect's
+/// vtable slot +0x8 with the manager and 0.
+pub fn image_space_manager_setup_effects(e: &mut Engine, this: Ptr) {
+    for index in 0..0x22u32 {
+        let effects = e.mem.u32(this.addr() + 8);
+        let effect = e.mem.u32(effects.wrapping_add(4 * index));
+        if effect != 0 {
+            e.vcall(effect, 8, &args![this, 0u32]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b9_77d0, image_space_manager_initialize(Ptr))]
+    vec![
+        entry!(0x00b8_b360, image_space_manager_setup_effects(Ptr)),
+        entry!(0x00b9_77d0, image_space_manager_initialize(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -175,5 +192,40 @@ mod tests {
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
         assert_eq!(e.mem.u32(this + 0x318), 0x55);
         assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 9);
+    }
+}
+
+#[cfg(test)]
+mod setup_effects_tests {
+    use super::*;
+
+    #[test]
+    fn image_space_manager_setup_effects_calls_each_set_effect() {
+        const SETUP: u32 = 0x0e40_0000;
+        let mut e = Engine::new();
+        e.register(SETUP, |_, _| Ret::default());
+        e.put_vtable(0x0e41_0000, &[0, 0, SETUP]);
+        let this = e.mem.alloc(0x10);
+        let effects = e.mem.alloc(0x88);
+        e.mem.set_u32(this + 8, effects);
+        let mut set = vec![];
+        for index in [0u32, 5, 0x21] {
+            let effect = e.mem.alloc(4);
+            e.mem.set_u32(effect, 0x0e41_0000);
+            e.mem.set_u32(effects + 4 * index, effect);
+            set.push(effect);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_b360, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let seen: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == SETUP)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(
+            seen,
+            set.iter().map(|&s| vec![s, this, 0]).collect::<Vec<_>>()
+        );
     }
 }

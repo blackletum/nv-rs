@@ -51,9 +51,47 @@ pub fn fn_00bc4af0(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The shader's vtable (`010bad98`; no RTTI locator before it).
+const SHADER_VTABLE_010BAD98: u32 = 0x010b_ad98;
+/// CRT `_memset` (`00ec61c0`, `cdecl`).
+const MEMSET: u32 = 0x00ec_61c0;
+
+// Translated from 00bc4830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`): the constructor of shader 0x1a, `thiscall` with
+/// one stack word (the declaration). Runs `BSShader::BSShader` (`00be2200`), stores the vtable
+/// `010bad98`, clears the words +0xb4, +0xb8, +0xbc, sets +0x68 to 0x10, the byte +0x24 to 1
+/// and +0x6c to 0x243; then the pass pointer at +0xb4 is cleared (its count at +0x64 dropped,
+/// `00e80190` at 0), the declaration assigned to the `NiPointer` at +0x28, the `NiPointer`s
+/// at +0xb8 and +0xbc cleared (each just set to 0, so these releases find nothing), 0.0
+/// stored at +0x70 and 0x40 bytes from +0x74 cleared (`memset`). Answers `this`.
+// Translation incomplete: 00bc4830 - the C++ exception frame (FS:[0] chain, unwind state 3 for the base and the pointers) is not translated.
+pub fn fn_00bc4830(e: &mut Engine, this: Ptr, declaration: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, SHADER_VTABLE_010BAD98);
+    e.mem.set_u32(base + 0xb4, 0);
+    e.mem.set_u32(base + 0xb8, 0);
+    e.mem.set_u32(base + 0xbc, 0);
+    e.mem.set_u32(base + 0x68, 0x10);
+    e.mem.set_u8(base + 0x24, 1);
+    e.mem.set_u32(base + 0x6c, 0x243);
+    pass_pointer_clear(e, base + 0xb4);
+    ni_pointer_assign(e, base + 0x28, declaration.addr());
+    ni_pointer_clear(e, base + 0xb8);
+    ni_pointer_clear(e, base + 0xbc);
+    e.mem.set_f32(base + 0x70, 0.0);
+    e.call(MEMSET, &args![base + 0x74, 0u32, 0x40u32]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bc_4af0, fn_00bc4af0() -> Ptr)]
+    vec![
+        entry!(0x00bc_4830, fn_00bc4830(Ptr, Ptr) -> Ptr),
+        entry!(0x00bc_4af0, fn_00bc4af0() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -85,5 +123,37 @@ mod tests {
                 (shader_slot(0xc0), vec![SHADER, d]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bc4830_builds_the_shader() {
+        let mut e = rig();
+        e.register(MEMSET, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0xc0);
+        e.mem.write(this, &[0xcc; 0xc0]);
+        let old = object(&mut e, 1);
+        e.mem.set_u32(this + 0x28, old);
+        let declaration = object(&mut e, 0);
+        assert_eq!(e.call(0x00bc_4830, &args![this, declaration]).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), SHADER_VTABLE_010BAD98);
+        assert_eq!(e.mem.u32(this + 0x68), 0x10);
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        assert_eq!(e.mem.u32(this + 0x6c), 0x243);
+        assert_eq!(e.mem.u32(this + 0x70), 0);
+        for offset in [0xb4u32, 0xb8, 0xbc] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0x28), declaration);
+        assert_eq!(e.mem.u32(declaration + 4), 1);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
+        assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
+        assert_eq!(calls(&e, MEMSET), vec![vec![this + 0x74, 0, 0x40]]);
     }
 }
