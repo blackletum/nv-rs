@@ -295,9 +295,260 @@ pub fn image_space_manager_init_geometry(e: &mut Engine, this: Ptr) {
     });
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::{MEMORY_ALLOCATE, MEMORY_MANAGER};
+
+/// `00ba3aa0` (unnamed, same unit; `thiscall` on the manager's effect array at +0x4, `RET 8`):
+/// stores the word the second argument points at under the index.
+const ARRAY_SET_00BA3AA0: u32 = 0x00ba_3aa0;
+/// The constructor of the 0x60-byte objects made in pairs by `00b94520` (`00ba4640`, unnamed,
+/// `thiscall`).
+const CONSTRUCT_00BA4640: u32 = 0x00ba_4640;
+
+/// The first objects of `00b94520`, in the exe's order: the size given to the memory manager
+/// (`00aa3e40` on `011f6238`), the constructor (`thiscall`) and the array index.
+const SET_UP_MANAGED: [(u32, u32, u32); 20] = [
+    (0x68, 0x00c0_5680, 0xd),
+    (0x68, 0x00bd_93d0, 0x2),
+    (0x7c, 0x00c0_3810, 0x8),
+    (0x70, 0x00ba_d500, 0x1),
+    (0x7c, 0x00c0_5420, 0x0),
+    (0xc8, 0x00c0_4d20, 0x3),
+    (0x58, 0x00bb_8900, 0xa),
+    (0x58, 0x00bc_0600, 0xb),
+    (0xbc, 0x00bd_7120, 0x4),
+    (0x78, 0x00c0_49c0, 0xc),
+    (0x88, 0x00ba_4880, 0x7),
+    (0xd4, 0x00b5_a590, 0x5),
+    (0x74, 0x00b5_a410, 0x6),
+    (0x58, 0x00ba_a160, 0xe),
+    (0x64, 0x00c0_4600, 0xf),
+    (0xbc, 0x00ba_15e0, 0x1f),
+    (0x74, 0x00ba_02f0, 0x20),
+    (0x2bc, 0x00b9_b830, 0x21),
+    (0x68, 0x00c0_33c0, 0x9),
+    (0x58, 0x00bb_9180, 0x1e),
+];
+
+/// The `NiMemObject`s of `00b94520` stored through the inline `SetAt`, in the exe's order: the
+/// size given to `00aa13e0`, the constructor (`thiscall`) and the array index; the element is
+/// the object +0x6c.
+const SET_UP_NI: [(u32, u32, u32); 78] = [
+    (0xd0, 0x00b8_efa0, 0x22),
+    (0xd0, 0x00b8_f010, 0x23),
+    (0xd0, 0x00b8_f660, 0x24),
+    (0xd0, 0x00b8_f520, 0x25),
+    (0xd0, 0x00b8_efa0, 0x26),
+    (0xd0, 0x00b8_f1b0, 0x27),
+    (0xd0, 0x00b8_f360, 0x28),
+    (0xd0, 0x00b9_2180, 0x29),
+    (0xd0, 0x00b8_d330, 0x2a),
+    (0xd0, 0x00b8_d850, 0x2b),
+    (0xd0, 0x00b8_fea0, 0x2c),
+    (0xd0, 0x00b8_d5b0, 0x2d),
+    (0xd0, 0x00b8_d700, 0x2e),
+    (0xd4, 0x00b9_22d0, 0x2f),
+    (0xd0, 0x00b8_ee20, 0x32),
+    (0xd0, 0x00b8_f7e0, 0x33),
+    (0xd0, 0x00b8_fd40, 0x34),
+    (0xd0, 0x00b9_17c0, 0x30),
+    (0xd0, 0x00b9_1900, 0x31),
+    (0xd0, 0x00b9_1b80, 0x35),
+    (0xd0, 0x00b8_f930, 0x36),
+    (0xd0, 0x00b8_fa80, 0x37),
+    (0xd0, 0x00b8_fbe0, 0x38),
+    (0xd0, 0x00b8_bea0, 0x39),
+    (0xd0, 0x00b8_fff0, 0x3a),
+    (0xd0, 0x00b9_0190, 0x3b),
+    (0xd0, 0x00b9_0330, 0x3c),
+    (0xd0, 0x00b9_0520, 0x3d),
+    (0xd0, 0x00b9_06b0, 0x3e),
+    (0xd0, 0x00b9_0830, 0x3f),
+    (0xd0, 0x00b9_09c0, 0x40),
+    (0xd0, 0x00b9_0b50, 0x41),
+    (0xd0, 0x00b9_1000, 0x43),
+    (0xd0, 0x00b9_11a0, 0x42),
+    (0xd0, 0x00b9_1340, 0x45),
+    (0xd0, 0x00b9_14e0, 0x44),
+    (0xd0, 0x00b9_0ce0, 0x46),
+    (0xd0, 0x00b9_0e70, 0x47),
+    (0xd0, 0x00b9_1680, 0x48),
+    (0xd0, 0x00b8_bce0, 0x49),
+    (0xd0, 0x00b9_2500, 0x4b),
+    (0xd0, 0x00b9_1a40, 0x4c),
+    (0xd0, 0x00b8_d990, 0x4e),
+    (0xd0, 0x00b8_dae0, 0x4f),
+    (0xd0, 0x00b8_dc30, 0x50),
+    (0xd0, 0x00b8_dd80, 0x51),
+    (0xd0, 0x00b8_ded0, 0x52),
+    (0xd0, 0x00b8_e020, 0x53),
+    (0xd0, 0x00b8_e170, 0x54),
+    (0xd0, 0x00b8_e2c0, 0x55),
+    (0xd0, 0x00b8_e460, 0x56),
+    (0xd0, 0x00b8_e600, 0x57),
+    (0xd0, 0x00b8_e7a0, 0x58),
+    (0xd0, 0x00b8_e940, 0x59),
+    (0xd0, 0x00b8_eae0, 0x5a),
+    (0xd0, 0x00b8_ec80, 0x5b),
+    (0xd0, 0x00b9_32d0, 0x5d),
+    (0xd0, 0x00b9_3600, 0x5e),
+    (0xd0, 0x00b9_3950, 0x5f),
+    (0xd0, 0x00b9_3aa0, 0x60),
+    (0xd0, 0x00b9_3bf0, 0x61),
+    (0xd0, 0x00b9_3d40, 0x62),
+    (0xd0, 0x00b9_3e90, 0x63),
+    (0xd0, 0x00b9_3fe0, 0x64),
+    (0xd0, 0x00b9_4130, 0x65),
+    (0xd0, 0x00b9_4280, 0x66),
+    (0xd0, 0x00b9_32d0, 0x67),
+    (0xd0, 0x00b9_43d0, 0x68),
+    (0xd0, 0x00b9_2690, 0x69),
+    (0xd0, 0x00b9_27e0, 0x6a),
+    (0xd0, 0x00b9_2930, 0x6b),
+    (0xd0, 0x00b9_2a80, 0x6c),
+    (0xd0, 0x00b9_2bd0, 0x6d),
+    (0xd0, 0x00b9_2d90, 0x6e),
+    (0xd0, 0x00b9_2ee0, 0x6f),
+    (0xd0, 0x00b9_3030, 0x70),
+    (0xd0, 0x00b9_3180, 0x71),
+    (0xd0, 0x00b9_1cf0, 0x72),
+];
+
+/// The last two `NiMemObject`s of `00b94520` (0xd0 bytes each), stored through `00ba3aa0`: the
+/// constructor and the array index.
+const SET_UP_NI_ARRAY: [(u32, u32); 2] = [(0x00b9_1e40, 0x73), (0x00b8_c070, 0x4d)];
+
+/// The 16-bit size (+0xe of the manager) and element count (+0x10) of the effect array whose
+/// element block pointer is at +0x8.
+const EFFECTS: u32 = 0x8;
+const EFFECTS_SIZE: u32 = 0xe;
+const EFFECTS_COUNT: u32 = 0x10;
+
+/// The element count of the effect array, moved by a wrapping 16-bit step.
+fn effects_count_add(e: &mut Engine, base: u32, step: u16) {
+    let count = e.mem.u16(base + EFFECTS_COUNT);
+    e.mem
+        .set_u16(base + EFFECTS_COUNT, count.wrapping_add(step));
+}
+
+// Translated from 00b94520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`; `ImageSpaceManager::Initialize`
+/// runs it first), `thiscall` on the manager, no stack words, no answer. Makes the image-space
+/// effects and puts them in the effect array at +0x4 (element block +0x8, 16-bit size +0xe and
+/// count +0x10):
+///
+/// - the 20 objects of `SET_UP_MANAGED`: each allocated from the memory manager, constructed
+///   when the allocation is not null (else null), kept in a stack word and stored through
+///   `00ba3aa0` with its index and the word's address;
+/// - for k from 1 to 7, two 0x60-byte objects (constructor `00ba4640`, null when the
+///   allocation fails, and called through the vtable even then): vtable +0x20 with k, then
+///   +0x24 with 0 (the first) or 1 (the second), stored at index k + 0xf (the first) and
+///   k + 0x16 (the second) by a short inline `SetAt` (an index at or past the size makes the
+///   size index + 1, and that or an empty slot adds one to the count, without a null check);
+/// - the 78 objects of `SET_UP_NI` (allocated through `00aa13e0`), each element (the object
+///   +0x6c, or null) stored by the full inline `SetAt` (past the size: the size grows to the
+///   index + 1 and a non-null element counts; else a non-null element into an empty slot adds
+///   one and a null one over a full slot takes one away);
+/// - the two of `SET_UP_NI_ARRAY`, their element (object +0x6c, or null) stored through
+///   `00ba3aa0`;
+///
+/// then, for the elements at +0x88 to +0x1cc of the block (indices 0x22 to 0x73, the block
+/// pointer read again for each), when set, calls vtable +0x120 of the object (element - 0x6c).
+// Translation incomplete: 00b94520 - the C++ exception frame (FS:[0] chain, unwind states 0 to 0x65 for each allocation) and the stack cookie are not translated.
+pub fn fn_00b94520(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let array = base + 4;
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        for (size, construct, index) in SET_UP_MANAGED {
+            let object = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+            e.mem.set_u32(local, object);
+            let made = if object != 0 {
+                e.call(construct, &args![object]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(local, made);
+            e.call(ARRAY_SET_00BA3AA0, &args![array, index, local]);
+        }
+        for k in 1..=7u32 {
+            for (flag, index) in [(0u32, k + 0xf), (1, k + 0x16)] {
+                let object = e
+                    .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x60u32])
+                    .u32();
+                let element = if object != 0 {
+                    e.call(CONSTRUCT_00BA4640, &args![object]).u32()
+                } else {
+                    0
+                };
+                e.vcall(element, 0x20, &args![k]);
+                e.vcall(element, 0x24, &args![flag]);
+                let size = u32::from(e.mem.u16(base + EFFECTS_SIZE));
+                if index >= size {
+                    e.mem.set_u16(base + EFFECTS_SIZE, (index + 1) as u16);
+                    effects_count_add(e, base, 1);
+                } else {
+                    let block = e.mem.u32(base + EFFECTS);
+                    if e.mem.u32(block + 4 * index) == 0 {
+                        effects_count_add(e, base, 1);
+                    }
+                }
+                let block = e.mem.u32(base + EFFECTS);
+                e.mem.set_u32(block + 4 * index, element);
+            }
+        }
+        for (size, construct, index) in SET_UP_NI {
+            let object = e.call(NI_ALLOCATE, &args![size]).u32();
+            let made = if object != 0 {
+                e.call(construct, &args![object]).u32()
+            } else {
+                0
+            };
+            let element = if made != 0 { made + 0x6c } else { 0 };
+            if index as u16 >= e.mem.u16(base + EFFECTS_SIZE) {
+                e.mem.set_u16(base + EFFECTS_SIZE, (index + 1) as u16);
+                if element != 0 {
+                    effects_count_add(e, base, 1);
+                }
+            } else if element != 0 {
+                let block = e.mem.u32(base + EFFECTS);
+                if e.mem.u32(block + 4 * index) == 0 {
+                    effects_count_add(e, base, 1);
+                }
+            } else {
+                let block = e.mem.u32(base + EFFECTS);
+                if e.mem.u32(block + 4 * index) != 0 {
+                    effects_count_add(e, base, 0xffff);
+                }
+            }
+            let block = e.mem.u32(base + EFFECTS);
+            e.mem.set_u32(block + 4 * index, element);
+        }
+        for (construct, index) in SET_UP_NI_ARRAY {
+            let object = e.call(NI_ALLOCATE, &args![0xd0u32]).u32();
+            let made = if object != 0 {
+                e.call(construct, &args![object]).u32()
+            } else {
+                0
+            };
+            let element = if made != 0 { made + 0x6c } else { 0 };
+            e.mem.set_u32(local, element);
+            e.call(ARRAY_SET_00BA3AA0, &args![array, index, local]);
+        }
+    });
+    for offset in (0x88..0x1d0u32).step_by(4) {
+        let block = e.mem.u32(base + EFFECTS);
+        let element = e.mem.u32(block + offset);
+        if element != 0 {
+            let effect = if element != 0 { element - 0x6c } else { 0 };
+            e.vcall(effect, 0x120, &args![]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_4520, fn_00b94520(Ptr)),
         entry!(0x00b8_c170, image_space_manager_init_geometry(Ptr)),
         entry!(0x00b8_ad70, fn_00b8ad70()),
         entry!(0x00b8_b360, image_space_manager_setup_effects(Ptr)),
@@ -660,5 +911,137 @@ mod init_geometry_tests {
             calls(&e, SCREEN_ELEMENTS_DATA_INSERT),
             vec![vec![0, 4, 0, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod set_up_00b94520_tests {
+    use super::*;
+
+    const VTABLE: u32 = 0x0e50_0000;
+    const SLOT_20: u32 = 0x0e51_0020;
+    const SLOT_24: u32 = 0x0e51_0024;
+    const SLOT_120: u32 = 0x0e51_0120;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn rig(ni_objects: bool) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x49];
+        slots[0x20 / 4] = SLOT_20;
+        slots[0x24 / 4] = SLOT_24;
+        slots[0x120 / 4] = SLOT_120;
+        e.put_vtable(VTABLE, &slots);
+        for addr in [SLOT_20, SLOT_24, SLOT_120] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        if ni_objects {
+            e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        } else {
+            e.register(NI_ALLOCATE, |_, _| Ret::default());
+        }
+        let constructors = SET_UP_MANAGED
+            .iter()
+            .map(|c| c.1)
+            .chain(SET_UP_NI.iter().map(|c| c.1))
+            .chain(SET_UP_NI_ARRAY.iter().map(|c| c.0))
+            .chain([CONSTRUCT_00BA4640]);
+        for addr in constructors {
+            e.register(addr, |e, a| {
+                e.mem.set_u32(a[0], VTABLE);
+                a[0].into_ret()
+            });
+        }
+        // The array setter stores the pointed-at word under the index.
+        e.register(ARRAY_SET_00BA3AA0, |e, a| {
+            let block = e.mem.u32(a[0] + 4);
+            let word = e.mem.u32(a[2]);
+            e.mem.set_u32(block + 4 * a[1], word);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        let block = e.mem.alloc(4 * 0x80);
+        e.mem.set_u32(this + EFFECTS, block);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00b94520_fills_the_effect_array() {
+        let (mut e, this) = rig(true);
+        e.call(0x00b9_4520, &args![this]);
+        let managed = calls(&e, MEMORY_ALLOCATE);
+        assert_eq!(managed.len(), 20 + 14);
+        assert_eq!(managed[0], vec![MEMORY_MANAGER, 0x68]);
+        assert_eq!(managed[20], vec![MEMORY_MANAGER, 0x60]);
+        let ni = calls(&e, NI_ALLOCATE);
+        assert_eq!(ni.len(), 80);
+        assert_eq!(ni.iter().filter(|a| a[0] == 0xd4).count(), 1);
+        let stored: Vec<Vec<u32>> = calls(&e, ARRAY_SET_00BA3AA0)
+            .iter()
+            .map(|a| a[..2].to_vec())
+            .collect();
+        assert_eq!(stored.len(), 22);
+        assert_eq!(stored[0], vec![this + 4, 0xd]);
+        assert_eq!(stored[10], vec![this + 4, 7]);
+        assert_eq!(stored[20], vec![this + 4, 0x73]);
+        assert_eq!(stored[21], vec![this + 4, 0x4d]);
+        let block = e.mem.u32(this + EFFECTS);
+        // The pairs: vtable +0x20 with k, +0x24 with 0 then 1.
+        let ranks: Vec<u32> = calls(&e, SLOT_20).iter().map(|a| a[1]).collect();
+        assert_eq!(ranks, vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]);
+        let flags: Vec<u32> = calls(&e, SLOT_24).iter().map(|a| a[1]).collect();
+        assert_eq!(flags, [0, 1].repeat(7));
+        assert_eq!(calls(&e, SLOT_20)[0][0], e.mem.u32(block + 4 * 0x10));
+        assert_eq!(calls(&e, SLOT_20)[13][0], e.mem.u32(block + 4 * 0x1d));
+        // The inline stores: elements are the objects +0x6c; size 0x73, 14 + 78 counted.
+        let first = ni[0].clone();
+        assert_eq!(first, vec![0xd0]);
+        assert_eq!(e.mem.u32(e.mem.u32(block + 4 * 0x22) - 0x6c), VTABLE);
+        assert_eq!(e.mem.u16(this + EFFECTS_SIZE), 0x73);
+        assert_eq!(e.mem.u16(this + EFFECTS_COUNT), 14 + 78);
+        // The closing pass over indices 0x22 to 0x73 calls vtable +0x120 of each object.
+        let set = (0x22..=0x73u32)
+            .filter(|&i| e.mem.u32(block + 4 * i) != 0)
+            .count();
+        let finals = calls(&e, SLOT_120);
+        assert_eq!(finals.len(), set);
+        assert_eq!(finals.len(), 80);
+        assert_eq!(finals[0], vec![e.mem.u32(block + 4 * 0x22) - 0x6c]);
+    }
+
+    #[test]
+    fn fn_00b94520_null_elements_empty_full_slots() {
+        let (mut e, this) = rig(false);
+        let block = e.mem.u32(this + EFFECTS);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object, VTABLE);
+        for index in 0..0x80u32 {
+            e.mem.set_u32(block + 4 * index, object + 0x6c);
+        }
+        e.mem.set_u16(this + EFFECTS_SIZE, 0x80);
+        e.mem.set_u16(this + EFFECTS_COUNT, 0x80);
+        e.call(0x00b9_4520, &args![this]);
+        // Each null element over a full slot takes one away; the pairs land in full slots.
+        assert_eq!(e.mem.u16(this + EFFECTS_SIZE), 0x80);
+        assert_eq!(e.mem.u16(this + EFFECTS_COUNT), 0x80 - 78);
+        assert!(calls(&e, ARRAY_SET_00BA3AA0).iter().all(|a| a[1] < 0x80));
+        assert_eq!(e.mem.u32(block + 4 * 0x73), 0);
+        assert_eq!(e.mem.u32(block + 4 * 0x4d), 0);
+        // Only the slots nothing stored to are still set at the closing pass.
+        let left = (0x22..=0x73u32)
+            .filter(|&i| e.mem.u32(block + 4 * i) != 0)
+            .count();
+        assert_eq!(calls(&e, SLOT_120).len(), left);
+        assert!(calls(&e, SLOT_120).iter().all(|a| a == &vec![object]));
     }
 }
