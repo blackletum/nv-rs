@@ -4969,9 +4969,8 @@ pub fn write(e: &mut Engine, handle: u32, buffer: Ptr, count: u32) -> i32 {
     result
 }
 
-/// `_fmode` (`012708dc`), `_umask`'s mask (`0126fdb8`), `_commode` (`012708d8`) and
+/// `_umask`'s mask (`0126fdb8`), `_commode` (`012708d8`) and
 /// `_cflush` (`0126fdf0`).
-const FMODE: u32 = 0x0127_08dc;
 const UMASK: u32 = 0x0126_fdb8;
 const COMMODE: u32 = 0x0127_08d8;
 const CFLUSH: u32 = 0x0126_fdf0;
@@ -4980,19 +4979,9 @@ const CFLUSH: u32 = 0x0126_fdf0;
 const READ_NOLOCK: u32 = 0x00ed_c94a;
 const CHSIZE_NOLOCK: u32 = 0x00ee_5fc4;
 
-// Translated from 00ee6236 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `_get_fmode` (LIBCMT), cdecl: stores `_fmode` (`012708dc`) in the word given and answers 0;
-/// a null pointer gives `EINVAL` (0x16) with the invalid-parameter handler and answers 0x16.
-pub fn get_fmode(e: &mut Engine, mode: Ptr) -> u32 {
-    if mode.addr() == 0 {
-        set_errno(e, 0x16);
-        invalid_parameter_zeros(e);
-        return 0x16;
-    }
-    let value = e.mem.u32(FMODE);
-    e.mem.set_u32(mode.addr(), value);
-    0
-}
+/// `_get_fmode` (`00ee6236`, cdecl: the address of a word; translated in its own unit,
+/// `unplaced/run_00ee6236`).
+const GET_FMODE: u32 = 0x00ee_6236;
 
 /// How `__tsopen_nolock`'s steps after the open end.
 enum OpenStep {
@@ -5177,7 +5166,7 @@ fn tsopen_body(
     };
     let file_mode = e.with_stack(4, |e, word| {
         e.mem.set_u32(word.addr(), 0);
-        if get_fmode(e, word) != 0 {
+        if e.call(GET_FMODE, &args![word]).u32() != 0 {
             e.call(INVOKE_WATSON_ADDR, &[0, 0, 0, 0, 0]);
         }
         e.mem.u32(word.addr())
@@ -6077,7 +6066,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_809e, close_nolock(u32) -> i32),
         entry!(0x00ed_813a, close(u32) -> i32),
         entry!(0x00ed_c743, write(u32, Ptr, u32) -> i32),
-        entry!(0x00ee_6236, get_fmode(Ptr) -> u32),
         entry!(0x00ee_311d, tsopen_nolock(Ptr, Ptr, Ptr, u32, u32, u32) -> u32),
         entry!(0x00ee_383c, sopen_helper(Ptr, u32, u32, u32, Ptr, u32) -> u32),
         entry!(0x00ee_3908, sopen_s(Ptr, Ptr, u32, u32, u32) -> u32),
@@ -9497,6 +9485,11 @@ mod file_layer_tests {
         e.register(IMPORT_GET_FILE_TYPE, |_, _| 1u32.into_ret());
         e.register(IMPORT_SET_FILE_POINTER, |_, _| 0x40u32.into_ret());
         e.register(IMPORT_CLOSE_HANDLE, |_, _| 1u32.into_ret());
+        // `_get_fmode` (in another crate) answers the text default 0.
+        e.register(GET_FMODE, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            0u32.into_ret()
+        });
         e.register(IMPORT_GET_LAST_ERROR, |_, _| 0u32.into_ret());
         e.call_log = Some(vec![]);
         (e, block, entries)
@@ -9853,10 +9846,5 @@ mod file_layer_tests {
             calls(&e, IMPORT_LEAVE_CRITICAL_SECTION)[1],
             vec![stream + 0x20]
         );
-        e.mem.set_u32(FMODE, 0x8000);
-        let word = e.mem.alloc(4);
-        assert_eq!(e.call(0x00ee_6236, &args![word]).u32(), 0);
-        assert_eq!(e.mem.u32(word), 0x8000);
-        assert_eq!(e.call(0x00ee_6236, &args![0u32]).u32(), 0x16);
     }
 }
