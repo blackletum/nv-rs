@@ -332,6 +332,10 @@ type MoveParts<'w> = (
     Option<Res<'w, crate::controls::Controls>>,
     ResMut<'w, Movement>,
     Option<NonSendMut<'w, host::Host>>,
+    (
+        Res<'w, bevy::input::mouse::AccumulatedMouseMotion>,
+        Res<'w, bevy::input::mouse::AccumulatedMouseScroll>,
+    ),
 );
 
 /// Walking: the keys set the wanted speed, the character moves through the
@@ -351,7 +355,7 @@ pub fn walk(
     walkers: Query<&crate::ai::Walker>,
     mut settings: Local<Option<SpeedSettings>>,
     (mut attack, mut sounds, anim, mut heights, nav): SneakParts,
-    (mouse, controls, mut movement, mut host): MoveParts,
+    (mouse, controls, mut movement, mut host, (motion, scroll)): MoveParts,
 ) {
     if !player.walking || !player.ready {
         return;
@@ -529,6 +533,9 @@ pub fn walk(
             // The keys down for the game's own DirectInput keyboard (`Controls::Poll`).
             let down: Vec<u8> = keys.get_pressed().filter_map(|k| dinput_code(*k)).collect();
             host.set_keys_down(&down);
+            // The mouse for the game's DirectInput mouse: the frame's motion and wheel
+            // (120 a notch, `WHEEL_DELTA`) and the buttons in DirectInput's order.
+            host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
             host.move_player(order, state.0.player_cell, &input)
         }
     };
@@ -913,4 +920,38 @@ fn dinput_code(key: KeyCode) -> Option<u8> {
         Delete => 0xd3,
         _ => return None,
     })
+}
+
+/// The frame's mouse motion for the game's DirectInput mouse: x and y as the raw motion
+/// (mickeys), the wheel in `WHEEL_DELTA` units (120 a notch, a line here; 40 pixels a line
+/// as the viewer's other scroll readers count them).
+fn mouse_motion(
+    motion: &bevy::input::mouse::AccumulatedMouseMotion,
+    scroll: &bevy::input::mouse::AccumulatedMouseScroll,
+) -> [i32; 3] {
+    use bevy::input::mouse::MouseScrollUnit;
+    let lines = match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+    };
+    [
+        motion.delta.x.round() as i32,
+        motion.delta.y.round() as i32,
+        (lines * 120.0).round() as i32,
+    ]
+}
+
+/// The buttons down, in DirectInput's mouse order (`DIMOFS_BUTTON0` left, 1 right,
+/// 2 middle, 3 and 4 the side buttons).
+fn mouse_buttons(mouse: &ButtonInput<MouseButton>) -> [bool; 8] {
+    [
+        mouse.pressed(MouseButton::Left),
+        mouse.pressed(MouseButton::Right),
+        mouse.pressed(MouseButton::Middle),
+        mouse.pressed(MouseButton::Back),
+        mouse.pressed(MouseButton::Forward),
+        false,
+        false,
+        false,
+    ]
 }
