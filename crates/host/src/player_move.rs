@@ -1197,15 +1197,21 @@ mod tests {
     fn start_up_runs_main_the_scene_graph_and_tes_in_mains_order() {
         let mut e = Engine::new();
         e.mem.map(MAIN_OBJECT & !0xfff, 0x1000);
-        e.register(NEW, |_, a| (0x0200_0000 + a[0]).into_ret());
-        e.register(MAIN_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(NEW, |_, a| {
+            engine::abi::RetVal::into_ret(0x0200_0000 + a[0])
+        });
+        e.register(MAIN_CONSTRUCT, |_, a| engine::abi::RetVal::into_ret(a[0]));
         for f in [INIT_SCENE_GRAPH, INIT_SKY, TES_AFTER] {
             e.register(f, |_, _| Ret::default());
         }
-        e.register(SKY_GET_INSTANCE, |_, _| 0x5000u32.into_ret());
-        e.register(OBJECT_LOD_ROOT, |_, _| 0x6000u32.into_ret());
+        e.register(SKY_GET_INSTANCE, |_, _| {
+            engine::abi::RetVal::into_ret(0x5000u32)
+        });
+        e.register(OBJECT_LOD_ROOT, |_, _| {
+            engine::abi::RetVal::into_ret(0x6000u32)
+        });
         e.register(LOD_ROOT, |_, _| Ret::default());
-        e.register(TES_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(TES_CONSTRUCT, |_, a| engine::abi::RetVal::into_ret(a[0]));
         e.mem.set_u32(WATER_LOD_NODE, 0x7000);
         e.call_log = Some(vec![]);
         let mut m = PlayerMovement::default();
