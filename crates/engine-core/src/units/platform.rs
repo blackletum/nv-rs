@@ -5,9 +5,11 @@
 use crate::prelude::*;
 
 pub mod dinput;
+pub mod d3d9;
 pub mod dsound;
 pub mod files;
 pub mod loader;
+pub mod window;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
@@ -144,6 +146,47 @@ pub fn bs_save_data_system_utility_instance(e: &mut Engine) -> Ptr {
 /// else.
 pub fn fn_00af2f20(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), SAVE_DATA_UTILITY_VTABLE);
+}
+
+/// `BSMsgDialogSystemUtility` singleton (`BSSystemUtilities`): its storage in `.data`
+/// (`011f72ec`, 8 bytes), the function-local static's guard word (`011f72f4`, bit 0 =
+/// constructed), its vtable (`010a42cc`) and its `atexit` destructor stub (`00fdc310`).
+const MSG_DIALOG_UTILITY: u32 = 0x011f_72ec;
+const MSG_DIALOG_UTILITY_GUARD: u32 = 0x011f_72f4;
+const MSG_DIALOG_UTILITY_VTABLE: u32 = 0x010a_42cc;
+const MSG_DIALOG_UTILITY_ATEXIT: u32 = 0x00fd_c310;
+
+// Translated from 00af3020 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af3020 - the SEH frame (FS:[0] handler 00f2306e, state -1/0 around the constructor call) is not translated.
+/// The `BSMsgDialogSystemUtility` singleton getter (the map gives no name; the same
+/// `_Immortalize` shape as [`bs_system_utility_q_instance`]): the first call sets bit 0 of the
+/// guard word `011f72f4`, constructs the object at `011f72ec` with [`fn_00af33f0`] and
+/// registers its destructor stub `00fdc310` with `_atexit`; every call returns `011f72ec`.
+pub fn fn_00af3020(e: &mut Engine) -> Ptr {
+    let guard = e.mem.u32(MSG_DIALOG_UTILITY_GUARD);
+    if guard & 1 == 0 {
+        e.mem.set_u32(MSG_DIALOG_UTILITY_GUARD, guard | 1);
+        fn_00af33f0(e, Ptr::new(MSG_DIALOG_UTILITY));
+        e.call(ATEXIT, &args![Ptr::<()>::new(MSG_DIALOG_UTILITY_ATEXIT)]);
+    }
+    Ptr::new(MSG_DIALOG_UTILITY)
+}
+
+// Translated from 00af33f0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `BSMsgDialogSystemUtility` constructor (`thiscall`, plain `RET`; the map gives no name):
+/// the vtable `010a42cc` at +0, the word at +4 cleared; answers `this`.
+pub fn fn_00af33f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), MSG_DIALOG_UTILITY_VTABLE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 008526c0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSMsgDialogSystemUtility::QInstance` (engine map; `BSSystemUtilities/
+/// bsmsgdialogsystemutility_xenon.cpp`, `thiscall` with `ECX` unused, plain `RET`): answers
+/// [`fn_00af3020`]'s singleton.
+pub fn bs_msg_dialog_system_utility_q_instance(e: &mut Engine, _this: Ptr) -> Ptr {
+    e.call_as(0x00af_3020, &args![])
 }
 
 // ---- Files ----------------------------------------------------------------------
@@ -290,6 +333,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00af2e50, bs_save_data_system_utility_instance() -> Ptr),
         entry!(0x00af2ed0, fn_00af2ed0(Ptr) -> Ptr),
         entry!(0x00af2f20, fn_00af2f20(Ptr)),
+        entry!(0x00af_3020, fn_00af3020() -> Ptr),
+        entry!(0x00af_33f0, fn_00af33f0(Ptr) -> Ptr),
+        entry!(0x0085_26c0, bs_msg_dialog_system_utility_q_instance(Ptr) -> Ptr),
         entry!(0x00aa3e40, memory_manager_allocate(Ptr, u32) -> Ptr),
         entry!(0x00aa4060, memory_manager_deallocate(Ptr, Ptr)),
     ]
@@ -609,6 +655,22 @@ fn set_last_error(e: &mut Engine, code: u32) {
     e.kernel.last_error = code;
 }
 
+// Platform: replaces USER32.DLL GetSystemMetrics (import)
+/// `GetSystemMetrics(index)`: the screen metrics the Direct3D 9 layer's capture recorded for a
+/// program without a DPI-awareness manifest (`d3d9::system_metric`: `SM_CXSCREEN`,
+/// `SM_CYSCREEN`, `SM_CMONITORS`). Other metrics are not provided.
+fn get_system_metrics(e: &mut Engine, index: u32) -> u32 {
+    match d3d9::system_metric(e, index) {
+        Some(value) => value,
+        None => panic!("GetSystemMetrics({index:#x}) is not provided"),
+    }
+}
+
+// Platform: replaces D3D9.DLL D3DPERF_SetOptions (import)
+/// `D3DPERF_SetOptions(options)`: bit 0 asks PIX not to profile the program; there is no
+/// profiler here, so nothing changes.
+fn d3dperf_set_options(_e: &mut Engine, _options: u32) {}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_ms
@@ -687,6 +749,11 @@ pub enum KernelObject {
     Window,
     /// An open registry key ([`reg_open_key_ex_a`]): `HKCUControl PanelMouse`.
     RegistryKey,
+    /// A mutex ([`window::create_mutex_a`]): its name, the owning thread's id (0: none) and how
+    /// many times the owner took it.
+    Mutex { name: Vec<u8>, owner: u32, count: u32 },
+    /// A USER32 or GDI32 object this layer only hands out a handle for (an icon, a stock brush).
+    UserObject(&'static str),
     /// An open file ([`files::create_file_a`]): its path and position.
     File(files::OpenFile),
 }
@@ -732,6 +799,10 @@ pub struct Kernel {
     pub fls: loader::Fls,
     /// The DirectSound 8 objects ([`dsound`]).
     pub sound: dsound::Sound,
+    /// The Direct3D 9 objects ([`d3d9`]).
+    pub graphics: d3d9::Graphics,
+    /// Window classes, windows, the message queue and the command line ([`window`]).
+    pub windows: window::Windows,
     /// The files the game made in this run ([`files`]).
     pub disk: files::Disk,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
@@ -953,6 +1024,9 @@ pub fn signalled(e: &Engine, handle: u32) -> bool {
         Some(KernelObject::Thread { .. }) => {
             crate::thread_host::thread_ended(e, handle).unwrap_or(false)
         }
+        Some(KernelObject::Mutex { owner, .. }) => {
+            *owner == 0 || *owner == crate::thread_host::current_id(e)
+        }
         _ => false,
     }
 }
@@ -961,6 +1035,7 @@ pub fn signalled(e: &Engine, handle: u32) -> bool {
 /// semaphore down; an ended thread stays signalled. `None` for a handle that
 /// is not open.
 fn take(e: &mut Engine, handle: u32) -> Option<bool> {
+    let me = crate::thread_host::current_id(e);
     let taken = match e.kernel.objects.get_mut(&handle) {
         Some(KernelObject::Event {
             manual_reset,
@@ -984,6 +1059,17 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         }
         Some(KernelObject::Window) => false,
         Some(KernelObject::RegistryKey) => false,
+        Some(KernelObject::UserObject(_)) => false,
+        // A mutex is taken by its owner again (recursively) or by anyone when unowned.
+        Some(KernelObject::Mutex { owner, count, .. }) => {
+            if *owner == 0 || *owner == me {
+                *owner = me;
+                *count += 1;
+                true
+            } else {
+                false
+            }
+        }
         // A file handle is signalled while no I/O is pending (all of it is synchronous here).
         Some(KernelObject::File(_)) => true,
         None if handle == CURRENT_THREAD => false,
@@ -1585,6 +1671,123 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "USER32.dll",
             "GetDoubleClickTime",
             entry!(0, get_double_click_time() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetSystemMetrics",
+            entry!(0, get_system_metrics(u32) -> u32).1,
+        ),
+        (
+            k,
+            "LoadLibraryA",
+            entry!(0, loader::load_library_a(Ptr) -> u32).1,
+        ),
+        (
+            "d3d9.dll",
+            "D3DPERF_SetOptions",
+            entry!(0, d3dperf_set_options(u32)).1,
+        ),
+        (
+            k,
+            "CreateMutexA",
+            entry!(0, window::create_mutex_a(u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "MessageBoxA",
+            entry!(0, window::message_box_a(u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (k, "ExitProcess", entry!(0, window::exit_process(u32)).1),
+        (
+            "SHELL32.dll",
+            "ShellExecuteA",
+            entry!(0, window::shell_execute_a(u32, u32, Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "IsDebuggerPresent",
+            entry!(0, window::is_debugger_present() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "FindWindowA",
+            entry!(0, window::find_window_a(u32, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SetForegroundWindow",
+            entry!(0, window::set_foreground_window(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCommandLineW",
+            entry!(0, window::get_command_line_w() -> u32).1,
+        ),
+        (
+            "SHELL32.dll",
+            "CommandLineToArgvW",
+            entry!(0, window::command_line_to_argv_w(Ptr, Ptr) -> u32).1,
+        ),
+        (k, "LocalFree", entry!(0, window::local_free(u32) -> u32).1),
+        (
+            "USER32.dll",
+            "LoadIconA",
+            entry!(0, window::load_icon_a(u32, u32) -> u32).1,
+        ),
+        (
+            "GDI32.dll",
+            "GetStockObject",
+            entry!(0, window::get_stock_object(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "RegisterClassA",
+            entry!(0, window::register_class_a(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "AdjustWindowRect",
+            entry!(0, window::adjust_window_rect(Ptr, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "AdjustWindowRectEx",
+            entry!(0, window::adjust_window_rect_ex(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "CreateWindowExA",
+            entry!(0, window::create_window_ex_a(u32, u32, Ptr, u32, i32, i32, i32, i32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetWindowLongA",
+            entry!(0, window::get_window_long_a(u32, i32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetClassLongA",
+            entry!(0, window::get_class_long_a(u32, i32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SetWindowPos",
+            entry!(0, window::set_window_pos(u32, u32, i32, i32, i32, i32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "PeekMessageA",
+            entry!(0, window::peek_message_a(Ptr, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "TranslateMessage",
+            entry!(0, window::translate_message(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "DispatchMessageA",
+            entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
         ),
         (
             "ADVAPI32.dll",
