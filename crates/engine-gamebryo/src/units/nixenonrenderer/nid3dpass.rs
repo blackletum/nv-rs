@@ -404,6 +404,72 @@ pub fn fn_00e7fd20(e: &mut Engine, this: Ptr, size: u32) {
     e.call(FREE_POINTERS_00E7FCD0, &args![old]);
 }
 
+/// The memory manager's free (`00aa4060`, `thiscall` on `011f6238`, the block).
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00e7fcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): `delete[]` of an array of stage pointers
+/// (the count word before it), `cdecl` with one word (the array). Nothing for null. Otherwise
+/// each stage, from the last one down, is let go (count at +0x60 down, `00e7ecd0` at 0; the
+/// signed count stops at 0) and the block (from the count word) goes back to the memory
+/// manager.
+pub fn fn_00e7fcd0(e: &mut Engine, array: Ptr) {
+    let array = array.addr();
+    if array == 0 {
+        return;
+    }
+    let count = e.mem.u32(array.wrapping_sub(4));
+    let mut index = count.wrapping_sub(1) as i32;
+    while index >= 0 {
+        let stage = e
+            .mem
+            .u32(array.wrapping_add((index as u32).wrapping_mul(4)));
+        if stage != 0 {
+            stage_release(e, stage);
+        }
+        index = index.wrapping_sub(1);
+    }
+    e.call(
+        MEMORY_MANAGER_DEALLOCATE,
+        &args![MEMORY_MANAGER_OBJECT, array.wrapping_sub(4)],
+    );
+}
+
+/// `NiD3DPass`'s vtable (`010ef364`, RTTI `.?AVNiD3DPass@@`) and the stage array's
+/// constructor `00e80020` (unit `nid3dpass.cpp`, unnamed; `thiscall` on the array: the max size
+/// and the grow-by).
+const PASS_VTABLE_010EF364: u32 = 0x010e_f364;
+const STAGES_CONSTRUCT_00E80020: u32 = 0x00e8_0020;
+
+// Translated from 00e800f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): `NiD3DPass`'s constructor (the vtable it
+/// stores has that class's RTTI), `thiscall`, no stack words. Stores the vtable `010ef364`,
+/// clears the current stage, stage count and textures per pass (+0x14 to +0x1c), builds the
+/// stage array at +0x20 (`00e80020` with the word at `011bf558` and 4), clears +0x30 to +0x48,
+/// the byte +0x4c, +0x50 to +0x5c, the bytes `m_bSoftwareVP` and `m_bRendererOwned`, the count
+/// +0x64 and the first byte of the name (+4). Answers `this`.
+pub fn fn_00e800f0(e: &mut Engine, this: Ptr<NiD3DPass>) -> Ptr<NiD3DPass> {
+    let base = this.addr();
+    e.mem.set_u32(base, PASS_VTABLE_010EF364);
+    e.set(this, NiD3DPass::m_uiCurrentStage, 0);
+    e.set(this, NiD3DPass::m_uiStageCount, 0);
+    e.set(this, NiD3DPass::m_uiTexturesPerPass, 0);
+    let max = e.global::<u32>(GROWING_STAGES_011BF558);
+    e.call(STAGES_CONSTRUCT_00E80020, &args![base + 0x20, max, 4u32]);
+    for offset in (0x30u32..=0x48).step_by(4) {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u8(base + 0x4c, 0);
+    for offset in [0x50u32, 0x54, 0x58, 0x5c] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.set(this, NiD3DPass::m_bSoftwareVP, 0);
+    e.set(this, NiD3DPass::m_bRendererOwned, 0);
+    e.mem.set_u32(base + 0x64, 0);
+    e.mem.set_u8(base + 4, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -417,6 +483,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_fb80, fn_00e7fb80(Ptr, u32, Ptr)),
         entry!(0x00e7_fc30, fn_00e7fc30(Ptr)),
         entry!(0x00e7_fd20, fn_00e7fd20(Ptr, u32)),
+        entry!(0x00e7_fcd0, fn_00e7fcd0(Ptr)),
+        entry!(0x00e8_00f0, fn_00e800f0(Ptr<NiD3DPass>) -> Ptr<NiD3DPass>),
     ]
 }
 
@@ -776,6 +844,69 @@ mod stage_array_tests {
         assert_eq!(
             calls(&e, FREE_POINTERS_00E7FCD0).last().unwrap(),
             &vec![grown]
+        );
+    }
+}
+
+#[cfg(test)]
+mod b000p_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e7fcd0_lets_the_stages_go_and_frees_the_block() {
+        let mut e = Engine::new();
+        e.register(STAGE_DELETE_00E7ECD0, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let kept = e.mem.alloc(0x68);
+        e.mem.set_u32(kept + 0x60, 2);
+        let dropped = e.mem.alloc(0x68);
+        e.mem.set_u32(dropped + 0x60, 1);
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block, 3);
+        e.mem.set_u32(block + 4, dropped);
+        e.mem.set_u32(block + 0xc, kept);
+        e.call(0x00e7_fcd0, &args![block + 4]);
+        assert_eq!(e.mem.u32(kept + 0x60), 1);
+        assert_eq!(calls(&e, STAGE_DELETE_00E7ECD0), vec![vec![dropped]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER_OBJECT, block]]
+        );
+        e.call(0x00e7_fcd0, &args![0u32]);
+        assert_eq!(calls(&e, MEMORY_MANAGER_DEALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e800f0_builds_an_empty_pass() {
+        let mut e = Engine::new();
+        e.map(0x011b_f000, 0x1000);
+        e.set_global(GROWING_STAGES_011BF558, 8u32);
+        e.register(STAGES_CONSTRUCT_00E80020, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        let pass = e.mem.alloc(0x68);
+        e.mem.write(pass, &[0xcc; 0x68]);
+        assert_eq!(e.call(0x00e8_00f0, &args![pass]).u32(), pass);
+        assert_eq!(e.mem.u32(pass), PASS_VTABLE_010EF364);
+        assert_eq!(e.mem.u8(pass + 4), 0);
+        assert_eq!(e.mem.u8(pass + 5), 0xcc);
+        assert_eq!(e.mem.bytes(pass + 0x14, 0xc), vec![0; 0xc]);
+        assert_eq!(e.mem.u32(pass + 0x20), 0xcccc_cccc);
+        assert_eq!(e.mem.bytes(pass + 0x30, 0x1d), vec![0; 0x1d]);
+        assert_eq!(e.mem.bytes(pass + 0x4d, 3), vec![0xcc; 3]);
+        assert_eq!(e.mem.bytes(pass + 0x50, 0x12), vec![0; 0x12]);
+        assert_eq!(e.mem.u32(pass + 0x64), 0);
+        assert_eq!(
+            calls(&e, STAGES_CONSTRUCT_00E80020),
+            vec![vec![pass + 0x20, 8, 4]]
         );
     }
 }

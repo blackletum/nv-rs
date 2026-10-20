@@ -1627,6 +1627,36 @@ pub fn fn_00b8bc20(e: &mut Engine, this: Ptr) {
     });
 }
 
+// Translated from 00b8b270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`): the set-at of an `NiTArray` of
+/// bytes (base +4, size +0xa, element count +0xc), `thiscall` with two stack words: the index
+/// and the address of the byte to store. At or past the size the size becomes the index plus one
+/// and a set byte raises the element count. Below it a set byte replacing a clear one raises the
+/// count and a clear byte replacing a set one lowers it. The byte is then stored at the index.
+pub fn fn_00b8b270(e: &mut Engine, this: Ptr, index: u32, value: Ptr) {
+    let base = this.addr();
+    let byte = e.mem.u8(value.addr());
+    let count = e.mem.u16(base + 0xc);
+    if index >= u32::from(e.mem.u16(base + 0xa)) {
+        e.mem.set_u16(base + 0xa, index.wrapping_add(1) as u16);
+        if byte != 0 {
+            e.mem.set_u16(base + 0xc, count.wrapping_add(1));
+        }
+    } else {
+        let held = e.mem.u8(e.mem.u32(base + 4).wrapping_add(index));
+        if byte != 0 {
+            if held == 0 {
+                e.mem.set_u16(base + 0xc, count.wrapping_add(1));
+            }
+        } else if held != 0 {
+            e.mem.set_u16(base + 0xc, count.wrapping_add(0xffff));
+        }
+    }
+    let elements = e.mem.u32(base + 4);
+    let byte = e.mem.u8(value.addr());
+    e.mem.set_u8(elements.wrapping_add(index), byte);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1714,6 +1744,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_4280, fn_00b94280(Ptr) -> Ptr),
         entry!(0x00b9_43d0, fn_00b943d0(Ptr) -> Ptr),
         entry!(0x00b8_bc20, fn_00b8bc20(Ptr)),
+        entry!(0x00b8_b270, fn_00b8b270(Ptr, u32, Ptr)),
     ]
 }
 
@@ -2729,5 +2760,44 @@ mod b000n_tests {
                 (this + 0x58, 3)
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod b000p_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b8b270_stores_bytes_and_counts_the_set_ones() {
+        let mut e = Engine::new();
+        let array = e.mem.alloc(0x10);
+        let bytes = e.mem.alloc(8);
+        e.mem.set_u32(array + 4, bytes);
+        let value = e.mem.alloc(4);
+        // Past the size: the size grows, a set byte counts.
+        e.mem.set_u8(value, 1);
+        e.call(0x00b8_b270, &args![array, 2u32, value]);
+        assert_eq!(e.mem.u16(array + 0xa), 3);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        assert_eq!(e.mem.u8(bytes + 2), 1);
+        // A clear byte past the size: the size grows, no count.
+        e.mem.set_u8(value, 0);
+        e.call(0x00b8_b270, &args![array, 4u32, value]);
+        assert_eq!(e.mem.u16(array + 0xa), 5);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        // Below the size: set over clear counts up, set over set does not, clear over set down.
+        e.mem.set_u8(value, 7);
+        e.call(0x00b8_b270, &args![array, 0u32, value]);
+        assert_eq!(e.mem.u16(array + 0xc), 2);
+        e.call(0x00b8_b270, &args![array, 0u32, value]);
+        assert_eq!(e.mem.u16(array + 0xc), 2);
+        assert_eq!(e.mem.u8(bytes), 7);
+        e.mem.set_u8(value, 0);
+        e.call(0x00b8_b270, &args![array, 2u32, value]);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        assert_eq!(e.mem.u8(bytes + 2), 0);
+        e.call(0x00b8_b270, &args![array, 1u32, value]);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        assert_eq!(e.mem.u16(array + 0xa), 5);
     }
 }

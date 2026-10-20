@@ -4,43 +4,49 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-/// The memory manager (`011f6238`) and its allocate (`00aa3e40`, `thiscall`, one word), the Ni
-/// array allocation `00aa1420` (`cdecl`, the byte count), the compiler's `vector constructor
-/// iterator` (`00401050`, `stdcall`: array, element size, count, constructor) and the pass
-/// constructor `00e800f0` (unit `nid3dpass.cpp`, unnamed).
+/// The memory manager singleton and its `Allocate` (`thiscall`, the size).
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
-const NI_ARRAY_ALLOCATE_00AA1420: u32 = 0x00aa_1420;
-const VECTOR_CONSTRUCT_00401050: u32 = 0x0040_1050;
-const PASS_CONSTRUCT_00E800F0: u32 = 0x00e8_00f0;
+/// The allocator used for a non-empty array (`cdecl`, the size).
+const ARRAY_ALLOCATE: u32 = 0x00aa_1420;
+/// The compiler's array constructor iterator (`stdcall`, (array, element size, count,
+/// constructor)).
+const VECTOR_CONSTRUCT: u32 = 0x0040_1050;
+/// The element constructor (`00e800f0`, unit `NiXenonRenderer/nid3dpass.cpp` in the engine
+/// map) and the element size.
+const ELEMENT_CONSTRUCT: u32 = 0x00e8_00f0;
+const ELEMENT_SIZE: u32 = 0x68;
+
+/// `count * 0x68 + 4`, the size of the array with its count word, all ones when either step
+/// overflows (the compiler's `SETO`/`SETC`, `NEG`, `OR`).
+fn array_bytes(count: u32) -> u32 {
+    count
+        .checked_mul(ELEMENT_SIZE)
+        .unwrap_or(u32::MAX)
+        .checked_add(4)
+        .unwrap_or(u32::MAX)
+}
 
 // Translated from 00e80390 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (no unit): the pass pool's pass array maker, `cdecl` with one
-/// word: the count. `operator new[]` of that many 0x68-byte passes after a count word: 4 bytes
-/// from the memory manager for a count of 0, else `count * 0x68 + 4` bytes from `00aa1420`
-/// (all ones when the product or the sum overflows). Null when that fails; otherwise the count
-/// is stored, the passes are built (`vector constructor iterator` with `00e800f0`) and the
-/// address after the count is answered.
+/// Unnamed in the engine map (`cdecl`, one word): an array `new[]` of `count` elements of
+/// 0x68 bytes, each built by `00e800f0`. An empty array allocates the 4-byte count word
+/// from the memory manager (`00aa3e40`), a non-empty one `count * 0x68 + 4` bytes through
+/// `00aa1420`. Stores the count in the first word, runs the array constructor iterator
+/// over the elements (also for an empty array) and answers the first element, or 0 when
+/// the allocation failed.
 pub fn fn_00e80390(e: &mut Engine, count: u32) -> u32 {
     let block = if count == 0 {
         e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 4u32]).u32()
     } else {
-        let product = u64::from(count) * 0x68;
-        let bytes = if product > u64::from(u32::MAX) {
-            u32::MAX
-        } else {
-            product as u32
-        };
-        let total = bytes.checked_add(4).unwrap_or(u32::MAX);
-        e.call(NI_ARRAY_ALLOCATE_00AA1420, &args![total]).u32()
+        e.call(ARRAY_ALLOCATE, &args![array_bytes(count)]).u32()
     };
     if block == 0 {
         return 0;
     }
     e.mem.set_u32(block, count);
     e.call(
-        VECTOR_CONSTRUCT_00401050,
-        &args![block + 4, 0x68u32, count, PASS_CONSTRUCT_00E800F0],
+        VECTOR_CONSTRUCT,
+        &args![block + 4, ELEMENT_SIZE, count, ELEMENT_CONSTRUCT],
     );
     block + 4
 }
@@ -54,53 +60,51 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
-    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
-        let log = e.call_log.as_ref().unwrap();
-        log.iter()
-            .filter(|c| c.0 == addr)
-            .map(|c| c.1.clone())
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
             .collect()
     }
 
-    fn engine() -> Engine {
+    #[test]
+    fn fn_00e80390_allocates_counts_and_constructs_the_elements() {
         let mut e = Engine::new();
-        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
-        e.register(NI_ARRAY_ALLOCATE_00AA1420, |e, a| {
-            if a[0] <= 0x1000 {
-                e.mem.alloc(a[0]).into_ret()
-            } else {
-                0u32.into_ret()
-            }
-        });
-        e.register(VECTOR_CONSTRUCT_00401050, |_, a| a[0].into_ret());
+        let block = e.mem.alloc(0x200);
+        e.register_double(MEMORY_ALLOCATE, move |_, _| block.into_ret());
+        e.register_double(ARRAY_ALLOCATE, move |_, _| block.into_ret());
+        e.register(VECTOR_CONSTRUCT, |_, _| Ret::default());
+
+        // An empty array: the 4-byte count word from the memory manager.
         e.call_log = Some(vec![]);
-        e
-    }
-
-    #[test]
-    fn fn_00e80390_makes_the_counted_pass_array() {
-        let mut e = engine();
-        let passes = e.call(0x00e8_0390, &args![2u32]).u32();
-        assert_eq!(e.mem.u32(passes - 4), 2);
-        assert_eq!(calls(&e, NI_ARRAY_ALLOCATE_00AA1420), vec![vec![0xd4]]);
+        assert_eq!(e.call(0x00e8_0390, &[0]).u32(), block + 4);
+        assert_eq!(calls_to(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 4]]);
+        assert!(calls_to(&e, ARRAY_ALLOCATE).is_empty());
         assert_eq!(
-            calls(&e, VECTOR_CONSTRUCT_00401050),
-            vec![vec![passes, 0x68, 2, PASS_CONSTRUCT_00E800F0]]
+            calls_to(&e, VECTOR_CONSTRUCT),
+            vec![vec![block + 4, 0x68, 0, ELEMENT_CONSTRUCT]]
         );
-        let empty = e.call(0x00e8_0390, &args![0u32]).u32();
-        assert_eq!(e.mem.u32(empty - 4), 0);
-        assert_eq!(calls(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 4]]);
-    }
+        assert_eq!(e.mem.u32(block), 0);
 
-    #[test]
-    fn fn_00e80390_overflowing_sizes_ask_for_all_ones() {
-        let mut e = engine();
-        assert_eq!(e.call(0x00e8_0390, &args![0x0300_0000u32]).u32(), 0);
-        let asked: Vec<u32> = calls(&e, NI_ARRAY_ALLOCATE_00AA1420)
-            .iter()
-            .map(|a| a[0])
-            .collect();
-        assert_eq!(asked, vec![u32::MAX]);
-        assert!(calls(&e, VECTOR_CONSTRUCT_00401050).is_empty());
+        // Three elements: 3 * 0x68 + 4 bytes from the array allocator.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_0390, &[3]).u32(), block + 4);
+        assert_eq!(calls_to(&e, ARRAY_ALLOCATE), vec![vec![3 * 0x68 + 4]]);
+        assert!(calls_to(&e, MEMORY_ALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(block), 3);
+
+        // An overflowing count asks for all ones.
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_0390, &[0x0300_0000]);
+        assert_eq!(calls_to(&e, ARRAY_ALLOCATE), vec![vec![u32::MAX]]);
+
+        // A failed allocation constructs nothing and answers 0.
+        e.register(ARRAY_ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_0390, &[2]).u32(), 0);
+        assert!(calls_to(&e, VECTOR_CONSTRUCT).is_empty());
     }
 }
