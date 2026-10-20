@@ -29,9 +29,20 @@ pub fn fn_0063f7b0(e: &mut Engine, this: Ptr) {
     e.call(NODE_DESTRUCT, &args![node, 1u32]);
 }
 
+// Translated from 0063f790 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word, `RET 4`): stores the float `value` at
+/// `+0xc` through `FLD`/`FSTP` (a signalling NaN is stored quiet).
+pub fn fn_0063f790(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_u32(this.addr() + 0xc, x87_quiet_bits(value.to_bits()));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0063f7b0, fn_0063f7b0(Ptr))]
+    vec![
+        entry!(0x0063f7b0, fn_0063f7b0(Ptr)),
+        entry!(0x0063_f790, fn_0063f790(Ptr, f32)),
+    ]
 }
 
 #[cfg(test)]
@@ -72,5 +83,20 @@ mod tests {
         e.call(0x0063_f7b0, &args![container]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
         assert_eq!(e.mem.u32(container.addr()), 0);
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    #[test]
+    fn stores_the_float_at_0xc_quiet() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x100);
+        e.call(0x0063_f790, &args![0x1000u32, 2.5f32.to_bits()]);
+        assert_eq!(e.mem.f32(0x100c), 2.5);
+        e.call(0x0063_f790, &args![0x1000u32, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(0x100c), 0x7fc0_0001);
     }
 }

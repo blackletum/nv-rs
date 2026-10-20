@@ -34,9 +34,23 @@ pub fn fn_004a71f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004a51d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two stack words, `RET 8`): the three words at `point`
+/// copied to `+0` (through integer registers, unchanged) and the float `value` stored at `+0xc`
+/// through `FLD`/`FSTP` (a signalling NaN is stored quiet). Returns nothing.
+pub fn fn_004a51d0(e: &mut Engine, this: Ptr, point: Ptr, value: f32) {
+    let (to, from) = (this.addr(), point.addr());
+    for i in 0..3 {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+    e.mem.set_u32(to + 0xc, x87_quiet_bits(value.to_bits()));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004a_51d0, fn_004a51d0(Ptr, Ptr, f32)),
         entry!(0x004a7290, fn_004a7290(Ptr) -> f32),
         entry!(0x004a_7040, fn_004a7040(Ptr) -> f64),
         entry!(0x004a_71f0, fn_004a71f0(Ptr, u32) -> Ptr),
@@ -94,5 +108,24 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod point_and_value_tests {
+    use super::*;
+
+    #[test]
+    fn copies_the_point_and_stores_the_value() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x100);
+        for (i, w) in [0x3f80_0000u32, 0x7f80_0001, 5].into_iter().enumerate() {
+            e.mem.set_u32(0x1040 + 4 * i as u32, w);
+        }
+        e.call(0x004a_51d0, &args![0x1000u32, 0x1040u32, 0x7f80_0002u32]);
+        assert_eq!(
+            [0, 4, 8, 0xc].map(|o| e.mem.u32(0x1000 + o)),
+            [0x3f80_0000, 0x7f80_0001, 5, 0x7fc0_0002]
+        );
     }
 }
