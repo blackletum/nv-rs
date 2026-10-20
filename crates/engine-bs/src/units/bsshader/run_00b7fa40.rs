@@ -284,16 +284,23 @@ pub fn fn_00b7fbe0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(FREE_00AA10F0, &args![buckets]).u32()
 }
 
-/// `00aa1360` (`cdecl`, two words): compares two C strings, 0 when equal.
-const STRING_COMPARE: u32 = 0x00aa_1360;
+use crate::units::bsshader::geometrydecalshader::shader_inline::pass_render_state;
 
-// Translated from 00b7fce0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map: a string map's key compare (slot `+8` of `NiStream`'s loader
-/// map vtable `0109bf4c`, so `thiscall` with `ECX` unused; two stack words, `RET 8`): the
-/// two keys through `00aa1360`, then `NEG`/`SBB`/`INC`: 1 when it answered 0 (equal), else 0.
-pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> u32 {
-    let order = e.call(STRING_COMPARE, &args![first, second]).u32();
-    u32::from(order == 0)
+// Translated from 00b80040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): a pass's blend setter, `thiscall` with three
+/// stack words (`RET 0xc`), the third not read. Sets the render states 0x13 and 0x14 (the
+/// source and destination blend in Direct3D 9's numbering) to the two words: for each, the
+/// pass's render-state block (+0x30) is made first (`00e7f5d0`) when it is null, then
+/// `00e7f430` sets the state on it with the value and 1.
+pub fn fn_00b80040(
+    e: &mut Engine,
+    this: Ptr,
+    source_blend: u32,
+    destination_blend: u32,
+    _unused_3: u32,
+) {
+    pass_render_state(e, this.addr(), 0x13, source_blend);
+    pass_render_state(e, this.addr(), 0x14, destination_blend);
 }
 
 /// This unit's translated functions, by exe address.
@@ -305,7 +312,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
         entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
-        entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> u32),
+        entry!(0x00b8_0040, fn_00b80040(Ptr, u32, u32, u32)),
     ]
 }
 
@@ -641,16 +648,25 @@ mod base_clean_up_tests {
 }
 
 #[cfg(test)]
-mod tests_branch {
+mod blend_tests {
     use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_inline::{
+        NEW_RENDER_STATES_00E7F5D0, SET_RENDER_STATE_00E7F430,
+    };
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
 
     #[test]
-    fn equal_keys_answer_1() {
-        let mut e = Engine::new();
-        e.register(STRING_COMPARE, |_, a| {
-            (if a[0] == a[1] { 0u32 } else { 0xffff_ffff }).into_ret()
-        });
-        assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 7u32]).u32(), 1);
-        assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 8u32]).u32(), 0);
+    fn fn_00b80040_sets_both_blend_states() {
+        let mut e = pass_rig();
+        let pass = e.mem.alloc(0x68);
+        e.call(0x00b8_0040, &args![pass, 5u32, 6u32, 0u32]);
+        assert_eq!(render_states(&e, pass), vec![(0x13, 5), (0x14, 6)]);
+        assert_eq!(calls(&e, NEW_RENDER_STATES_00E7F5D0).len(), 1);
+        // A block already there is kept.
+        let block = e.mem.u32(pass + 0x30);
+        e.call(0x00b8_0040, &args![pass, 2u32, 1u32, 9u32]);
+        assert_eq!(e.mem.u32(pass + 0x30), block);
+        assert_eq!(calls(&e, NEW_RENDER_STATES_00E7F5D0).len(), 1);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00E7F430).len(), 4);
     }
 }
