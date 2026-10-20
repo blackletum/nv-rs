@@ -751,6 +751,798 @@ pub fn isctype_l(e: &mut Engine, c: i32, mask: u32, locale: u32) -> u32 {
     })
 }
 
+// ---- Thread start-up: __mtinit and its chain (LIBCMT tidtable.c, mlock.c) ----
+
+/// `GetModuleHandleW` (import slot).
+const IMPORT_GET_MODULE_HANDLE_W: u32 = 0x00fd_f198;
+/// `GetProcAddress` (import slot).
+const IMPORT_GET_PROC_ADDRESS: u32 = 0x00fd_f0ac;
+/// `TlsAlloc` (import slot).
+const IMPORT_TLS_ALLOC: u32 = 0x00fd_f048;
+/// `TlsGetValue` (import slot).
+const IMPORT_TLS_GET_VALUE: u32 = 0x00fd_f044;
+/// `TlsSetValue` (import slot).
+const IMPORT_TLS_SET_VALUE: u32 = 0x00fd_f04c;
+/// `TlsFree` (import slot).
+const IMPORT_TLS_FREE: u32 = 0x00fd_f050;
+/// `Sleep` (import slot).
+const IMPORT_SLEEP: u32 = 0x00fd_f104;
+/// `EnterCriticalSection` (import slot).
+const IMPORT_ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+/// `LeaveCriticalSection` (import slot).
+const IMPORT_LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+/// `InitializeCriticalSectionAndSpinCount` (import slot).
+const IMPORT_INIT_CRITICAL_SECTION_SPIN: u32 = 0x00fd_f130;
+/// `GetStringTypeW` (import slot).
+const IMPORT_GET_STRING_TYPE_W: u32 = 0x00fd_f230;
+/// `GetStringTypeA` (import slot).
+const IMPORT_GET_STRING_TYPE_A: u32 = 0x00fd_f234;
+/// `MultiByteToWideChar` (import slot).
+const IMPORT_MULTI_BYTE_TO_WIDE_CHAR: u32 = 0x00fd_f128;
+/// The wide string `KERNEL32.DLL`.
+const KERNEL32_NAME: u32 = 0x010f_29e8;
+/// The strings `FlsAlloc`, `FlsGetValue`, `FlsSetValue`, `FlsFree`,
+/// `EncodePointer` and `DecodePointer`.
+const FLS_ALLOC_NAME: u32 = 0x010f_2a34;
+const FLS_GET_VALUE_NAME: u32 = 0x010f_2a28;
+const FLS_SET_VALUE_NAME: u32 = 0x010f_2a1c;
+const FLS_FREE_NAME: u32 = 0x010f_2a14;
+const ENCODE_POINTER_NAME: u32 = 0x010f_29d8;
+const DECODE_POINTER_NAME: u32 = 0x010f_2a04;
+/// The four FLS function pointers `__mtinit` fills (encoded once set):
+/// `FlsAlloc`, `FlsGetValue`, `FlsSetValue`, `FlsFree`.
+const FLS_ALLOC_POINTER: u32 = 0x0126_fe00;
+const FLS_GET_VALUE_POINTER: u32 = 0x0126_fe04;
+const FLS_SET_VALUE_POINTER: u32 = 0x0126_fe08;
+const FLS_FREE_POINTER: u32 = 0x0126_fe0c;
+/// `__tlsindex`: the TLS slot holding the `FlsGetValue` pointer (-1 until
+/// `__mtinit`).
+const TLS_INDEX: u32 = 0x011c_1cc0;
+/// `__crtTlsAlloc` (`00ed1004`): the `FlsAlloc` stand-in when the system
+/// has no FLS (`TlsAlloc`, its callback ignored).
+const CRT_TLS_ALLOC: u32 = 0x00ed_1004;
+/// `_freefls` (`00ed11f8`), the FLS destructor `FlsAlloc` is given.
+const FREE_FLS: u32 = 0x00ed_11f8;
+/// `__mtdeletelocks` (`00edde08`), where `__mtterm` ends.
+const MT_DELETE_LOCKS: u32 = 0x00ed_de08;
+/// The lock table: 0x24 entries of (critical section, kind), kind 1 for
+/// the locks `__mtinitlocks` sets up from the static block at `012705c0`.
+const LOCK_TABLE: u32 = 0x011c_28a8;
+const STATIC_LOCKS: u32 = 0x0127_05c0;
+/// `__mtinitlocknum`'s "start-up done" word (0: too early, the program
+/// ends).
+const LOCKS_READY: u32 = 0x0127_05bc;
+/// `_FF_MSGBANNER` (`00ed2ab7`, no arguments) and `_NMSG_WRITE`
+/// (`00ed290c`, cdecl: message number).
+const FF_MSGBANNER: u32 = 0x00ed_2ab7;
+const NMSG_WRITE: u32 = 0x00ed_290c;
+/// The encoded exit routine `_amsg_exit` calls with 0xFF.
+const ENCODED_EXIT: u32 = 0x011c_19c0;
+/// `___addlocaleref`, `___removelocaleref`, `___freetlocinfo` (cdecl, one
+/// word each).
+const ADD_LOCALE_REF: u32 = 0x00ec_f5b6;
+const REMOVE_LOCALE_REF: u32 = 0x00ec_f645;
+const FREE_TLOCINFO: u32 = 0x00ec_f46d;
+/// The CRT's initial (static) locale info, never freed.
+const INITIAL_LOCALE_INFO: u32 = 0x011c_2320;
+/// `_malloc` (`00ecd1c7`) and `__freea` (`00ec8e14`), cdecl.
+const MALLOC_BODY: u32 = 0x00ec_d1c7;
+const FREEA: u32 = 0x00ec_8e14;
+/// `___ansicp` (`00ee13e5`, cdecl: locale id) and `___convertcp`
+/// (`00ee142e`, cdecl, six words).
+const ANSI_CODE_PAGE: u32 = 0x00ee_13e5;
+const CONVERT_CODE_PAGE: u32 = 0x00ee_142e;
+/// Which string-type API works: 0 unknown, 1 the wide one, 2 the ANSI one.
+const STRING_TYPE_MODE: u32 = 0x0127_07c0;
+/// The wide empty string the probe passes.
+const EMPTY_WIDE_STRING: u32 = 0x0101_1d78;
+
+// Translated from 00eccc25 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__crt_waiting_on_module_handle` (engine map; cdecl: module name): sleeps
+/// 1000 ms, then 2000, ... while `GetModuleHandleW` finds nothing, giving
+/// up past 60000. Returns the handle (0 when it gave up).
+pub fn crt_waiting_on_module_handle(e: &mut Engine, name: u32) -> u32 {
+    let mut wait = 1000u32;
+    loop {
+        e.call(IMPORT_SLEEP, &[wait]);
+        let handle = e.call(IMPORT_GET_MODULE_HANDLE_W, &[name]).u32();
+        wait += 1000;
+        if wait > 60000 || handle != 0 {
+            return handle;
+        }
+    }
+}
+
+/// The function `name` of `KERNEL32.DLL` (`GetModuleHandleW`, waiting for
+/// it when needed, then `GetProcAddress`), 0 without the module: the
+/// shared tail of `__encode_pointer` and `__decode_pointer`.
+fn kernel32_function(e: &mut Engine, name: u32) -> u32 {
+    let mut module = e.call(IMPORT_GET_MODULE_HANDLE_W, &[KERNEL32_NAME]).u32();
+    if module == 0 {
+        module = crt_waiting_on_module_handle(e, KERNEL32_NAME);
+        if module == 0 {
+            return 0;
+        }
+    }
+    e.call(IMPORT_GET_PROC_ADDRESS, &[module, name]).u32()
+}
+
+/// `EncodePointer`/`DecodePointer` as the thread block caches them
+/// (`ptd + offset`), else from `KERNEL32.DLL` (`name`); the value passed
+/// through it, or unchanged when there is none.
+fn code_pointer(e: &mut Engine, value: u32, offset: u32, name: u32) -> u32 {
+    let mut function = 0;
+    let mut cached = false;
+    let tls_index = e.mem.u32(TLS_INDEX);
+    if e.call(IMPORT_TLS_GET_VALUE, &[tls_index]).u32() != 0 {
+        let fls_index = e.mem.u32(FLS_INDEX);
+        if fls_index != u32::MAX {
+            let tls_index = e.mem.u32(TLS_INDEX);
+            let get_value = e.call(IMPORT_TLS_GET_VALUE, &[tls_index]).u32();
+            let block = e.call(get_value, &[fls_index]).u32();
+            if block != 0 {
+                function = e.mem.u32(block + offset);
+                cached = true;
+            }
+        }
+    }
+    if !cached {
+        function = kernel32_function(e, name);
+    }
+    if function != 0 {
+        e.call(function, &[value]).u32()
+    } else {
+        value
+    }
+}
+
+// Translated from 00ed0f17 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__encode_pointer` (engine map; cdecl: pointer): through the thread
+/// block's `EncodePointer` (+0x1F8) when the TLS slot and FLS slot give one,
+/// else `KERNEL32.DLL`'s; unchanged without either.
+pub fn encode_pointer(e: &mut Engine, value: u32) -> u32 {
+    code_pointer(e, value, 0x1f8, ENCODE_POINTER_NAME)
+}
+
+// Translated from 00ed0f92 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__decode_pointer` (Ghidra's function ID; the engine map's `doexit` name
+/// is folded code; cdecl: pointer): as [`encode_pointer`] with
+/// `DecodePointer` (+0x1FC).
+pub fn decode_pointer(e: &mut Engine, value: u32) -> u32 {
+    code_pointer(e, value, 0x1fc, DECODE_POINTER_NAME)
+}
+
+// Translated from 00ed0f89 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__encoded_null` (engine map): `__encode_pointer(0)`.
+pub fn encoded_null(e: &mut Engine) -> u32 {
+    encode_pointer(e, 0)
+}
+
+// Translated from 00ed100d (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___set_flsgetvalue` (engine map; cdecl): the TLS slot's value (the
+/// `FlsGetValue` function); when empty, the decoded `FlsGetValue` pointer,
+/// stored in the slot.
+pub fn set_flsgetvalue(e: &mut Engine) -> u32 {
+    let index = e.mem.u32(TLS_INDEX);
+    let mut value = e.call(IMPORT_TLS_GET_VALUE, &[index]).u32();
+    if value == 0 {
+        let encoded = e.mem.u32(FLS_GET_VALUE_POINTER);
+        value = decode_pointer(e, encoded);
+        let index = e.mem.u32(TLS_INDEX);
+        e.call(IMPORT_TLS_SET_VALUE, &[index, value]);
+    }
+    value
+}
+
+// Translated from 00ed1004 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__crtTlsAlloc` (Ghidra made no function here; read from the bytes;
+/// stdcall, one word): `TlsAlloc()`, the callback ignored.
+pub fn crt_tls_alloc(e: &mut Engine, _unused_1: u32) -> u32 {
+    e.call(IMPORT_TLS_ALLOC, &[]).u32()
+}
+
+// Translated from 00ede1fc (decompiled, FalloutNV.exe 1.4.0.525)
+/// One of `__init_pointers`' set-ups (unnamed): stores its argument in
+/// `0127072c`.
+pub fn fn_00ede1fc(e: &mut Engine, value: u32) {
+    e.mem.set_u32(0x0127_072c, value);
+}
+
+// Translated from 00ede18d (decompiled, FalloutNV.exe 1.4.0.525)
+/// One of `__init_pointers`' set-ups (unnamed): stores its argument in
+/// `01270728`.
+pub fn fn_00ede18d(e: &mut Engine, value: u32) {
+    e.mem.set_u32(0x0127_0728, value);
+}
+
+// Translated from 00ed2c6f (decompiled, FalloutNV.exe 1.4.0.525)
+/// One of `__init_pointers`' set-ups (unnamed): stores its argument in
+/// `01270464`.
+pub fn fn_00ed2c6f(e: &mut Engine, value: u32) {
+    e.mem.set_u32(0x0127_0464, value);
+}
+
+// Translated from 00ede17e (decompiled, FalloutNV.exe 1.4.0.525)
+/// One of `__init_pointers`' set-ups (unnamed): stores its argument in
+/// `01270724`.
+pub fn fn_00ede17e(e: &mut Engine, value: u32) {
+    e.mem.set_u32(0x0127_0724, value);
+}
+
+// Translated from 00eddf6c (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__initp_misc_winsig` (engine map): stores its argument in the four
+/// signal-handler words `01270710`..`0127071c`.
+pub fn initp_misc_winsig(e: &mut Engine, value: u32) {
+    for slot in [0x0127_0710, 0x0127_0714, 0x0127_0718, 0x0127_071c] {
+        e.mem.set_u32(slot, value);
+    }
+}
+
+// Translated from 00ec5eec (decompiled, FalloutNV.exe 1.4.0.525)
+/// One of `__init_pointers`' set-ups (unnamed): an empty function (`RET`);
+/// its one word is not read.
+pub fn fn_00ec5eec(_e: &mut Engine, _unused_1: u32) {}
+
+// Translated from 00ed1538 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__initp_eh_hooks` (engine map; its word is not read): stores the
+/// encoded `00ed14b4` in `0126fe10`.
+pub fn initp_eh_hooks(e: &mut Engine, _unused_1: u32) {
+    let encoded = encode_pointer(e, 0x00ed_14b4);
+    e.mem.set_u32(0x0126_fe10, encoded);
+}
+
+/// `00ec7af9`, the third of `__init_pointers`' set-ups
+/// (`units/unplaced/run_00ec7ad2.rs`).
+const INITP_00EC7AF9: u32 = 0x00ec_7af9;
+
+// Translated from 00eccf0f (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__init_pointers` (engine map; cdecl): hands the encoded null to the
+/// CRT's eight pointer set-ups and keeps the encoded `00eccedb` at
+/// `011c19c0` (the exit routine `_amsg_exit` calls).
+pub fn init_pointers(e: &mut Engine) {
+    let null = encoded_null(e);
+    fn_00ede1fc(e, null);
+    fn_00ede18d(e, null);
+    e.call(INITP_00EC7AF9, &[null]);
+    fn_00ed2c6f(e, null);
+    fn_00ede17e(e, null);
+    initp_misc_winsig(e, null);
+    fn_00ec5eec(e, null);
+    initp_eh_hooks(e, null);
+    let exit = encode_pointer(e, 0x00ec_cedb);
+    e.mem.set_u32(ENCODED_EXIT, exit);
+}
+
+// Translated from 00ede19c (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__crtInitCritSecAndSpinCount` (engine map; cdecl: section, spin count):
+/// `InitializeCriticalSectionAndSpinCount`'s result.
+// Translation incomplete: 00ede19c - the SEH frame and its __except handler (__SEH_prolog4/__SEH_epilog4) are not translated.
+pub fn crt_init_crit_sec_and_spin_count(e: &mut Engine, section: u32, spin: u32) -> u32 {
+    e.call(IMPORT_INIT_CRITICAL_SECTION_SPIN, &[section, spin])
+        .u32()
+}
+
+// Translated from 00edddbd (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mtinitlocks` (engine map; cdecl): gives each lock of kind 1 its
+/// critical section from the static block (0x18 bytes each, in order) and
+/// initializes it (spin count 0xFA0); a failure clears that entry and
+/// returns 0. Returns 1.
+pub fn mtinitlocks(e: &mut Engine) -> u32 {
+    let mut section = STATIC_LOCKS;
+    for index in 0..0x24u32 {
+        let entry = LOCK_TABLE + index * 8;
+        if e.mem.u32(entry + 4) == 1 {
+            e.mem.set_u32(entry, section);
+            section += 0x18;
+            let current = e.mem.u32(entry);
+            if crt_init_crit_sec_and_spin_count(e, current, 0xfa0) == 0 {
+                e.mem.set_u32(entry, 0);
+                return 0;
+            }
+        }
+    }
+    1
+}
+
+// Translated from 00eddf30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `__finally` block of `__mtinitlocknum` (its own function; it uses
+/// no frame): `_unlock(0xA)`.
+pub fn fn_00eddf30(e: &mut Engine) {
+    unlock(e, 0xa);
+}
+
+// Translated from 00edde76 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mtinitlocknum` (engine map; cdecl: lock number): before the CRT's
+/// start-up is done (`012705bc` 0) writes the banner and message 0x1E and
+/// exits with 0xFF. An entry that has its section returns 1; otherwise a
+/// 0x18-byte section is allocated (`ENOMEM` and 0 when that fails) and,
+/// under lock 0xA, initialized into the entry unless another thread did it
+/// first (then freed); a failed initialization frees it, sets `ENOMEM` and
+/// returns 0.
+// Translation incomplete: 00edde76 - the SEH frame (__SEH_prolog4/__SEH_epilog4) is not translated.
+pub fn mtinitlocknum(e: &mut Engine, number: u32) -> u32 {
+    let mut result = 1;
+    if e.mem.u32(LOCKS_READY) == 0 {
+        e.call(FF_MSGBANNER, &[]);
+        e.call(NMSG_WRITE, &[0x1e]);
+        // `___crtExitProcess` by address: it does not return.
+        e.call(0x00ec_cca9, &[0xff]);
+    }
+    let entry = LOCK_TABLE.wrapping_add(number.wrapping_mul(8));
+    if e.mem.u32(entry) != 0 {
+        return 1;
+    }
+    let section = malloc(e, 0x18).addr();
+    if section == 0 {
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0xc);
+        return 0;
+    }
+    lock(e, 0xa);
+    if e.mem.u32(entry) == 0 {
+        if crt_init_crit_sec_and_spin_count(e, section, 0xfa0) == 0 {
+            free(e, Ptr::new(section));
+            let slot = errno(e);
+            e.mem.set_u32(slot.addr(), 0xc);
+            result = 0;
+        } else {
+            e.mem.set_u32(entry, section);
+        }
+    } else {
+        free(e, Ptr::new(section));
+    }
+    fn_00eddf30(e);
+    result
+}
+
+// Translated from 00eddf39 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_lock` (engine map; cdecl: lock number): sets up the lock's section on
+/// first use (`__mtinitlocknum`; failing that, `_amsg_exit(0x11)`) and
+/// enters it.
+pub fn lock(e: &mut Engine, number: u32) {
+    let entry = LOCK_TABLE.wrapping_add(number.wrapping_mul(8));
+    if e.mem.u32(entry) == 0 && mtinitlocknum(e, number) == 0 {
+        amsg_exit(e, 0x11);
+    }
+    let section = e.mem.u32(entry);
+    e.call(IMPORT_ENTER_CRITICAL_SECTION, &[section]);
+}
+
+// Translated from 00edde5f (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_unlock` (cdecl: lock number): leaves the lock's section.
+pub fn unlock(e: &mut Engine, number: u32) {
+    let section = e.mem.u32(LOCK_TABLE.wrapping_add(number.wrapping_mul(8)));
+    e.call(IMPORT_LEAVE_CRITICAL_SECTION, &[section]);
+}
+
+// Translated from 00eccc55 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_amsg_exit` (engine map; cdecl: run-time error number): writes the
+/// banner and the message, then calls the decoded exit routine
+/// (`011c19c0`) with 0xFF.
+pub fn amsg_exit(e: &mut Engine, number: u32) {
+    e.call(FF_MSGBANNER, &[]);
+    e.call(NMSG_WRITE, &[number]);
+    let encoded = e.mem.u32(ENCODED_EXIT);
+    let exit = decode_pointer(e, encoded);
+    e.call(exit, &[0xff]);
+}
+
+// Translated from 00ed1153 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first `__finally` block of `_initptd` (its own function; it uses no
+/// frame): `_unlock(0xD)`.
+pub fn fn_00ed1153(e: &mut Engine) {
+    unlock(e, 0xd);
+}
+
+// Translated from 00ed115c (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second `__finally` block of `_initptd` (its own function; it uses
+/// no frame): `_unlock(0xC)`.
+pub fn fn_00ed115c(e: &mut Engine) {
+    unlock(e, 0xc);
+}
+
+// Translated from 00ed107e (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_initptd` (engine map; cdecl: thread block, locale info): sets the
+/// block's `_pxcptacttab` (+0x5C, `010fdca0`), `_holdrand` (+0x14, 1),
+/// `EncodePointer`/`DecodePointer` (+0x1F8/+0x1FC, from `KERNEL32.DLL` when
+/// it is found), `_ownlocale` (+0x70, 1), the two `'C'` bytes (+0xC8,
+/// +0x14B), the multibyte info (+0x68, the static one, its count raised
+/// under lock 0xD) and the locale info (+0x6C, `locale` or `__ptlocinfo`,
+/// its references added under lock 0xC).
+// Translation incomplete: 00ed107e - the SEH frame (__SEH_prolog4/__SEH_epilog4) is not translated.
+pub fn initptd(e: &mut Engine, block: u32, locale: u32) {
+    let mut module = e.call(IMPORT_GET_MODULE_HANDLE_W, &[KERNEL32_NAME]).u32();
+    if module == 0 {
+        module = crt_waiting_on_module_handle(e, KERNEL32_NAME);
+    }
+    e.mem.set_u32(block + 0x5c, 0x010f_dca0);
+    e.mem.set_u32(block + 0x14, 1);
+    if module != 0 {
+        let encode = e
+            .call(IMPORT_GET_PROC_ADDRESS, &[module, ENCODE_POINTER_NAME])
+            .u32();
+        e.mem.set_u32(block + 0x1f8, encode);
+        let decode = e
+            .call(IMPORT_GET_PROC_ADDRESS, &[module, DECODE_POINTER_NAME])
+            .u32();
+        e.mem.set_u32(block + 0x1fc, decode);
+    }
+    e.mem.set_u32(block + 0x70, 1);
+    e.mem.set_u8(block + 0xc8, 0x43);
+    e.mem.set_u8(block + 0x14b, 0x43);
+    e.mem.set_u32(block + 0x68, INITIAL_MBC_INFO);
+    lock(e, 0xd);
+    let mbc = e.mem.u32(block + 0x68);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &[mbc]);
+    fn_00ed1153(e);
+    lock(e, 0xc);
+    e.mem.set_u32(block + 0x6c, locale);
+    if locale == 0 {
+        let global = e.mem.u32(GLOBAL_LOCALE_INFO);
+        e.mem.set_u32(block + 0x6c, global);
+    }
+    let info = e.mem.u32(block + 0x6c);
+    e.call(ADD_LOCALE_REF, &[info]);
+    fn_00ed115c(e);
+}
+
+// Translated from 00ed1041 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mtterm` (engine map; cdecl): frees the FLS slot (the decoded
+/// `FlsFree`) and the TLS slot (`TlsFree`) that are set, marking them -1,
+/// then jumps to `__mtdeletelocks` (`00edde08`).
+pub fn mtterm(e: &mut Engine) {
+    let fls_index = e.mem.u32(FLS_INDEX);
+    if fls_index != u32::MAX {
+        let encoded = e.mem.u32(FLS_FREE_POINTER);
+        let fls_free = decode_pointer(e, encoded);
+        e.call(fls_free, &[fls_index]);
+        e.mem.set_u32(FLS_INDEX, u32::MAX);
+    }
+    let tls_index = e.mem.u32(TLS_INDEX);
+    if tls_index != u32::MAX {
+        e.call(IMPORT_TLS_FREE, &[tls_index]);
+        e.mem.set_u32(TLS_INDEX, u32::MAX);
+    }
+    e.call(MT_DELETE_LOCKS, &[]);
+}
+
+// Translated from 00ed1327 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mtinit` (engine map; cdecl): the CRT's thread start-up. Finds
+/// `KERNEL32.DLL`'s `FlsAlloc`/`FlsGetValue`/`FlsSetValue`/`FlsFree`; when
+/// one is missing uses `__crtTlsAlloc` and the import table's `TlsGetValue`,
+/// `TlsSetValue` and `TlsFree` words instead. Allocates the TLS slot and
+/// stores the `FlsGetValue` pointer in it, sets up the CRT's pointers,
+/// encodes the four FLS pointers, sets up the locks, allocates the FLS slot
+/// (with `_freefls`) and gives the calling thread its 0x214-byte block
+/// (stored in the slot, `_initptd`, thread id, handle -1). Returns 1; a
+/// failure returns 0 (after `__mtterm`, except when the TLS slot could not
+/// be allocated or set).
+pub fn mtinit(e: &mut Engine) -> u32 {
+    let mut module = e.call(IMPORT_GET_MODULE_HANDLE_W, &[KERNEL32_NAME]).u32();
+    if module == 0 {
+        module = crt_waiting_on_module_handle(e, KERNEL32_NAME);
+    }
+    if module == 0 {
+        mtterm(e);
+        return 0;
+    }
+    for (slot, name) in [
+        (FLS_ALLOC_POINTER, FLS_ALLOC_NAME),
+        (FLS_GET_VALUE_POINTER, FLS_GET_VALUE_NAME),
+        (FLS_SET_VALUE_POINTER, FLS_SET_VALUE_NAME),
+        (FLS_FREE_POINTER, FLS_FREE_NAME),
+    ] {
+        let function = e.call(IMPORT_GET_PROC_ADDRESS, &[module, name]).u32();
+        e.mem.set_u32(slot, function);
+    }
+    let found = [
+        FLS_ALLOC_POINTER,
+        FLS_GET_VALUE_POINTER,
+        FLS_SET_VALUE_POINTER,
+        FLS_FREE_POINTER,
+    ]
+    .iter()
+    .all(|slot| e.mem.u32(*slot) != 0);
+    if !found {
+        // The import table's words, as the code reads them.
+        let get_value = e.mem.u32(IMPORT_TLS_GET_VALUE);
+        e.mem.set_u32(FLS_GET_VALUE_POINTER, get_value);
+        let free_slot = e.mem.u32(IMPORT_TLS_FREE);
+        e.mem.set_u32(FLS_ALLOC_POINTER, CRT_TLS_ALLOC);
+        let set_value = e.mem.u32(IMPORT_TLS_SET_VALUE);
+        e.mem.set_u32(FLS_SET_VALUE_POINTER, set_value);
+        e.mem.set_u32(FLS_FREE_POINTER, free_slot);
+    }
+    let tls_index = e.call(IMPORT_TLS_ALLOC, &[]).u32();
+    e.mem.set_u32(TLS_INDEX, tls_index);
+    if tls_index == u32::MAX {
+        return 0;
+    }
+    let get_value = e.mem.u32(FLS_GET_VALUE_POINTER);
+    if e.call(IMPORT_TLS_SET_VALUE, &[tls_index, get_value]).u32() == 0 {
+        return 0;
+    }
+    init_pointers(e);
+    for slot in [
+        FLS_ALLOC_POINTER,
+        FLS_GET_VALUE_POINTER,
+        FLS_SET_VALUE_POINTER,
+        FLS_FREE_POINTER,
+    ] {
+        let plain = e.mem.u32(slot);
+        let encoded = encode_pointer(e, plain);
+        e.mem.set_u32(slot, encoded);
+    }
+    if mtinitlocks(e) == 0 {
+        mtterm(e);
+        return 0;
+    }
+    let encoded = e.mem.u32(FLS_ALLOC_POINTER);
+    let fls_alloc = decode_pointer(e, encoded);
+    let fls_index = e.call(fls_alloc, &[FREE_FLS]).u32();
+    e.mem.set_u32(FLS_INDEX, fls_index);
+    if fls_index == u32::MAX {
+        mtterm(e);
+        return 0;
+    }
+    let block = calloc_crt(e, 1, 0x214).addr();
+    if block == 0 {
+        mtterm(e);
+        return 0;
+    }
+    let encoded = e.mem.u32(FLS_SET_VALUE_POINTER);
+    let fls_set = decode_pointer(e, encoded);
+    let fls_index = e.mem.u32(FLS_INDEX);
+    if e.call(fls_set, &[fls_index, block]).u32() == 0 {
+        mtterm(e);
+        return 0;
+    }
+    initptd(e, block, 0);
+    let thread = e.call(IMPORT_GET_CURRENT_THREAD_ID, &[]).u32();
+    e.mem.set_u32(block + 4, u32::MAX);
+    e.mem.set_u32(block, thread);
+    1
+}
+
+// Translated from 00ecf704 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__updatetlocinfoEx_nolock` (engine map; register arguments: `slot` in
+/// EAX, `info` in EDI, passed as these two words): 0 when either is null;
+/// otherwise, when the slot holds another info, stores `info`, adds its
+/// references and removes the old one's, freeing the old one when its count
+/// is 0 and it is not the static initial info. Returns `info`.
+pub fn update_tlocinfo_ex_nolock(e: &mut Engine, slot: u32, info: u32) -> u32 {
+    if info == 0 || slot == 0 {
+        return 0;
+    }
+    let old = e.mem.u32(slot);
+    if old != info {
+        e.mem.set_u32(slot, info);
+        e.call(ADD_LOCALE_REF, &[info]);
+        if old != 0 {
+            e.call(REMOVE_LOCALE_REF, &[old]);
+            if e.mem.u32(old) == 0 && old != INITIAL_LOCALE_INFO {
+                e.call(FREE_TLOCINFO, &[old]);
+            }
+        }
+    }
+    info
+}
+
+// Translated from 00ee11e9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__crtGetStringTypeA_stat` (Ghidra's function ID; the locale object in
+/// ECX, then seven cdecl words: info type, text, length, types, code page,
+/// locale id, error flag). Probes once which API works (`GetStringTypeW` on
+/// an empty wide string; `ERROR_CALL_NOT_IMPLEMENTED` 0x78 picks the ANSI
+/// one). Wide: converts the text with `MultiByteToWideChar` (code page from
+/// the locale when 0; `MB_ERR_INVALID_CHARS` with the error flag) into a
+/// zeroed buffer (on the stack up to 0x400 bytes, marked 0xCCCC, else
+/// `_malloc`'d, marked 0xDDDD) and returns `GetStringTypeW`'s result (0 on
+/// a failure). ANSI: with the locale's id and code page when 0, converts the
+/// text to the ANSI code page when it differs (`___convertcp`) and returns
+/// `GetStringTypeA`'s result. The code-page conversion takes the length by
+/// address; here it is a stack word.
+// Translation incomplete: 00ee11e9 - the /GS stack cookie check (00ec408c) is not translated.
+#[allow(clippy::too_many_arguments)]
+pub fn crt_get_string_type_a_stat(
+    e: &mut Engine,
+    locale: u32,
+    info_type: u32,
+    text: u32,
+    length: u32,
+    types: u32,
+    code_page: u32,
+    lcid: u32,
+    error: u32,
+) -> u32 {
+    // EBP-0x8: the probe's out word and the wide result.
+    e.with_stack(4, |e, result_slot| {
+        let result_slot = result_slot.addr();
+        let mut mode = e.mem.u32(STRING_TYPE_MODE);
+        let mut wide = false;
+        if mode == 0 {
+            let probed = e
+                .call(
+                    IMPORT_GET_STRING_TYPE_W,
+                    &[1, EMPTY_WIDE_STRING, 1, result_slot],
+                )
+                .u32();
+            if probed != 0 {
+                e.mem.set_u32(STRING_TYPE_MODE, 1);
+                wide = true;
+            } else if e.call(IMPORT_GET_LAST_ERROR, &[]).u32() == 0x78 {
+                mode = 2;
+                e.mem.set_u32(STRING_TYPE_MODE, 2);
+            } else {
+                mode = e.mem.u32(STRING_TYPE_MODE);
+            }
+        }
+        if !wide {
+            if mode == 2 || mode == 0 {
+                return string_type_ansi(
+                    e, locale, info_type, text, length, types, code_page, lcid,
+                );
+            }
+            if mode != 1 {
+                return 0;
+            }
+        }
+        e.mem.set_u32(result_slot, 0);
+        let code_page = if code_page == 0 {
+            let info = e.mem.u32(locale);
+            e.mem.u32(info + 4)
+        } else {
+            code_page
+        };
+        let flags = u32::from(error != 0) * 8 + 1;
+        let count = e
+            .call(
+                IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
+                &[code_page, flags, text, length, 0, 0],
+            )
+            .u32();
+        if count == 0 {
+            return 0;
+        }
+        let size = count.wrapping_mul(2).wrapping_add(8);
+        let fits = (count as i32) > 0 && count <= 0x7fff_fff0;
+        if fits && size <= 0x400 {
+            // `_alloca` through the probe `00ec5ec0`: a stack block here.
+            e.with_stack(size, |e, block| {
+                let block = block.addr();
+                e.mem.set_u32(block, 0xcccc);
+                string_type_wide(
+                    e,
+                    block + 8,
+                    info_type,
+                    text,
+                    length,
+                    types,
+                    code_page,
+                    count,
+                    result_slot,
+                )
+            })
+        } else {
+            let mut buffer = 0;
+            if fits {
+                let block = e.call(MALLOC_BODY, &[size]).u32();
+                if block != 0 {
+                    e.mem.set_u32(block, 0xdddd);
+                    buffer = block + 8;
+                }
+            }
+            if buffer == 0 {
+                return 0;
+            }
+            string_type_wide(
+                e,
+                buffer,
+                info_type,
+                text,
+                length,
+                types,
+                code_page,
+                count,
+                result_slot,
+            )
+        }
+    })
+}
+
+/// The wide path's tail: clears the buffer, converts into it and asks
+/// `GetStringTypeW`, then `__freea`.
+#[allow(clippy::too_many_arguments)]
+fn string_type_wide(
+    e: &mut Engine,
+    buffer: u32,
+    info_type: u32,
+    text: u32,
+    length: u32,
+    types: u32,
+    code_page: u32,
+    count: u32,
+    result_slot: u32,
+) -> u32 {
+    memset(e, Ptr::new(buffer), 0, count.wrapping_mul(2));
+    let converted = e
+        .call(
+            IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
+            &[code_page, 1, text, length, buffer, count],
+        )
+        .u32();
+    if converted != 0 {
+        let result = e
+            .call(
+                IMPORT_GET_STRING_TYPE_W,
+                &[info_type, buffer, converted, types],
+            )
+            .u32();
+        e.mem.set_u32(result_slot, result);
+    }
+    e.call(FREEA, &[buffer]);
+    e.mem.u32(result_slot)
+}
+
+/// The ANSI path of [`crt_get_string_type_a_stat`].
+#[allow(clippy::too_many_arguments)]
+fn string_type_ansi(
+    e: &mut Engine,
+    locale: u32,
+    info_type: u32,
+    text: u32,
+    length: u32,
+    types: u32,
+    code_page: u32,
+    lcid: u32,
+) -> u32 {
+    let lcid = if lcid == 0 {
+        let info = e.mem.u32(locale);
+        e.mem.u32(info + 0x14)
+    } else {
+        lcid
+    };
+    let code_page = if code_page == 0 {
+        let info = e.mem.u32(locale);
+        e.mem.u32(info + 4)
+    } else {
+        code_page
+    };
+    let ansi = e.call(ANSI_CODE_PAGE, &[lcid]).u32();
+    if ansi == u32::MAX {
+        return 0;
+    }
+    // The length argument's slot, which `___convertcp` updates.
+    e.with_stack(4, |e, length_slot| {
+        let length_slot = length_slot.addr();
+        e.mem.set_u32(length_slot, length);
+        let mut source = text;
+        let mut converted = 0;
+        if ansi != code_page {
+            converted = e
+                .call(
+                    CONVERT_CODE_PAGE,
+                    &[code_page, ansi, text, length_slot, 0, 0],
+                )
+                .u32();
+            if converted == 0 {
+                return 0;
+            }
+            source = converted;
+        }
+        let length = e.mem.u32(length_slot);
+        let result = e
+            .call(
+                IMPORT_GET_STRING_TYPE_A,
+                &[lcid, info_type, source, length, types],
+            )
+            .u32();
+        if converted != 0 {
+            free(e, Ptr::new(converted));
+        }
+        result
+    })
+}
+
 /// C `atof`: the longest prefix that is a decimal floating-point number.
 fn parse_double(s: &[u8]) -> f64 {
     let t: Vec<u8> = s
@@ -2794,6 +3586,34 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed419c, isleadbyte_l(u32, u32) -> u32),
         entry!(0x00ee13a3, crt_get_string_type_a(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00ed41e7, isctype_l(i32, u32, u32) -> u32),
+        entry!(0x00eccc25, crt_waiting_on_module_handle(u32) -> u32),
+        entry!(0x00ed0f17, encode_pointer(u32) -> u32),
+        entry!(0x00ed0f92, decode_pointer(u32) -> u32),
+        entry!(0x00ed0f89, encoded_null() -> u32),
+        entry!(0x00ed100d, set_flsgetvalue() -> u32),
+        entry!(0x00ed1004, crt_tls_alloc(u32) -> u32),
+        entry!(0x00ede1fc, fn_00ede1fc(u32)),
+        entry!(0x00ede18d, fn_00ede18d(u32)),
+        entry!(0x00ed2c6f, fn_00ed2c6f(u32)),
+        entry!(0x00ede17e, fn_00ede17e(u32)),
+        entry!(0x00eddf6c, initp_misc_winsig(u32)),
+        entry!(0x00ec5eec, fn_00ec5eec(u32)),
+        entry!(0x00ed1538, initp_eh_hooks(u32)),
+        entry!(0x00eccf0f, init_pointers()),
+        entry!(0x00ede19c, crt_init_crit_sec_and_spin_count(u32, u32) -> u32),
+        entry!(0x00edddbd, mtinitlocks() -> u32),
+        entry!(0x00eddf30, fn_00eddf30()),
+        entry!(0x00edde76, mtinitlocknum(u32) -> u32),
+        entry!(0x00eddf39, lock(u32)),
+        entry!(0x00edde5f, unlock(u32)),
+        entry!(0x00eccc55, amsg_exit(u32)),
+        entry!(0x00ed1153, fn_00ed1153()),
+        entry!(0x00ed115c, fn_00ed115c()),
+        entry!(0x00ed107e, initptd(u32, u32)),
+        entry!(0x00ed1041, mtterm()),
+        entry!(0x00ed1327, mtinit() -> u32),
+        entry!(0x00ecf704, update_tlocinfo_ex_nolock(u32, u32) -> u32),
+        entry!(0x00ee11e9, crt_get_string_type_a_stat(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
@@ -5008,5 +5828,424 @@ mod thread_data_tests {
         assert_eq!(result, 1);
         let call = &calls_to(&e, GET_STRING_TYPE_A_STAT)[0];
         assert_eq!(&call[1..], &[1, text, 2, out, 932, 0x411, 1]);
+    }
+}
+
+#[cfg(test)]
+mod thread_start_up_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    const MODULE: u32 = 0x7700_0000;
+    const FLS_ALLOC: u32 = 0x0077_1000;
+    const FLS_GET: u32 = 0x0077_1010;
+    const FLS_SET: u32 = 0x0077_1020;
+    const FLS_FREE: u32 = 0x0077_1030;
+    const ENCODE: u32 = 0x0077_1040;
+    const DECODE: u32 = 0x0077_1050;
+    const EXIT: u32 = 0x0077_1060;
+    const KEY: u32 = 0x5a5a_5a5a;
+
+    /// Slot values of the doubles' TLS and FLS.
+    type Slots = Rc<RefCell<HashMap<u32, u32>>>;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An engine with doubles for the imports `__mtinit`'s chain calls:
+    /// `KERNEL32.DLL` at `MODULE` whose `GetProcAddress` knows the FLS
+    /// functions (when `fls`) and `EncodePointer`/`DecodePointer` (XOR with
+    /// `KEY`); TLS and FLS slots kept in maps; critical sections that
+    /// initialize when `sections_ok`. Lock entries 0xA, 0xC and 0xD are of
+    /// kind 1. Returns the engine and the TLS and FLS slots.
+    fn engine(fls: bool, sections_ok: bool) -> (Engine, Slots, Slots) {
+        let mut e = Engine::new();
+        for page in [
+            0x00fd_f000,
+            0x0101_1000,
+            0x011c_1000,
+            0x011c_2000,
+            0x0126_f000,
+            0x0127_0000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        let table = crate::units::platform::imports();
+        for (slot, name) in [
+            (IMPORT_GET_LAST_ERROR, "GetLastError"),
+            (IMPORT_SET_LAST_ERROR, "SetLastError"),
+            (IMPORT_GET_CURRENT_THREAD_ID, "GetCurrentThreadId"),
+            (IMPORT_INTERLOCKED_INCREMENT, "InterlockedIncrement"),
+        ] {
+            let (_, _, f) = table.iter().find(|(_, n, _)| *n == name).unwrap();
+            e.register(slot, *f);
+        }
+        e.register(IMPORT_GET_MODULE_HANDLE_W, |_, _| MODULE.into_ret());
+        e.register_double(IMPORT_GET_PROC_ADDRESS, move |_, a| {
+            assert_eq!(a[0], MODULE);
+            let found = match a[1] {
+                FLS_ALLOC_NAME => FLS_ALLOC,
+                FLS_GET_VALUE_NAME => FLS_GET,
+                FLS_SET_VALUE_NAME => FLS_SET,
+                FLS_FREE_NAME => FLS_FREE,
+                ENCODE_POINTER_NAME => return ENCODE.into_ret(),
+                DECODE_POINTER_NAME => return DECODE.into_ret(),
+                other => panic!("GetProcAddress({other:08x})"),
+            };
+            (if fls { found } else { 0 }).into_ret()
+        });
+        e.register(ENCODE, |_, a| (a[0] ^ KEY).into_ret());
+        e.register(DECODE, |_, a| (a[0] ^ KEY).into_ret());
+        let tls: Slots = Rc::default();
+        let fls_slots: Slots = Rc::default();
+        e.register(IMPORT_TLS_ALLOC, |_, _| 5u32.into_ret());
+        let slots = tls.clone();
+        e.register_double(IMPORT_TLS_GET_VALUE, move |_, a| {
+            slots.borrow().get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        let slots = tls.clone();
+        e.register_double(IMPORT_TLS_SET_VALUE, move |_, a| {
+            slots.borrow_mut().insert(a[0], a[1]);
+            1u32.into_ret()
+        });
+        e.register(IMPORT_TLS_FREE, |_, _| 1u32.into_ret());
+        e.register(FLS_ALLOC, |_, a| {
+            assert_eq!(a, [FREE_FLS]);
+            7u32.into_ret()
+        });
+        let slots = fls_slots.clone();
+        e.register_double(FLS_GET, move |_, a| {
+            slots.borrow().get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        let slots = fls_slots.clone();
+        e.register_double(FLS_SET, move |_, a| {
+            slots.borrow_mut().insert(a[0], a[1]);
+            1u32.into_ret()
+        });
+        e.register(FLS_FREE, |_, _| 1u32.into_ret());
+        e.register(INITP_00EC7AF9, |_, _| 0u32.into_ret());
+        e.register_double(IMPORT_INIT_CRITICAL_SECTION_SPIN, move |_, _| {
+            u32::from(sections_ok).into_ret()
+        });
+        e.register(IMPORT_ENTER_CRITICAL_SECTION, |_, _| 0u32.into_ret());
+        e.register(IMPORT_LEAVE_CRITICAL_SECTION, |_, _| 0u32.into_ret());
+        e.register(ADD_LOCALE_REF, |_, _| 0u32.into_ret());
+        e.register(MT_DELETE_LOCKS, |_, _| 0u32.into_ret());
+        e.register(IMPORT_SLEEP, |_, _| 0u32.into_ret());
+        e.register(FF_MSGBANNER, |_, _| 0u32.into_ret());
+        e.register(NMSG_WRITE, |_, _| 0u32.into_ret());
+        e.register(EXIT, |_, _| 0u32.into_ret());
+        e.register(GETPTD_NOEXIT, |_, _| 0u32.into_ret());
+        for number in [0xa, 0xc, 0xd] {
+            e.mem.set_u32(LOCK_TABLE + number * 8 + 4, 1);
+        }
+        e.mem.set_u32(LOCKS_READY, 1);
+        e.mem.set_u32(FLS_INDEX, u32::MAX);
+        e.mem.set_u32(TLS_INDEX, u32::MAX);
+        (e, tls, fls_slots)
+    }
+
+    #[test]
+    fn mtinit_sets_up_fls_locks_and_the_first_thread_block() {
+        let (mut e, tls, fls) = engine(true, true);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_1327, &[]).u32(), 1);
+        assert_eq!(e.mem.u32(TLS_INDEX), 5);
+        assert_eq!(tls.borrow()[&5], FLS_GET);
+        assert_eq!(e.mem.u32(FLS_INDEX), 7);
+        // The four FLS pointers are kept encoded.
+        assert_eq!(e.mem.u32(FLS_ALLOC_POINTER), FLS_ALLOC ^ KEY);
+        assert_eq!(e.mem.u32(FLS_GET_VALUE_POINTER), FLS_GET ^ KEY);
+        assert_eq!(e.mem.u32(FLS_SET_VALUE_POINTER), FLS_SET ^ KEY);
+        assert_eq!(e.mem.u32(FLS_FREE_POINTER), FLS_FREE ^ KEY);
+        // __init_pointers: the encoded null everywhere, the exit routine.
+        assert_eq!(e.mem.u32(0x0127_072c), KEY);
+        assert_eq!(e.mem.u32(0x0127_071c), KEY);
+        assert_eq!(e.mem.u32(0x0126_fe10), 0x00ed_14b4 ^ KEY);
+        assert_eq!(e.mem.u32(ENCODED_EXIT), 0x00ec_cedb ^ KEY);
+        assert_eq!(calls_to(&e, INITP_00EC7AF9), vec![vec![KEY]]);
+        // The locks of kind 1 got the static sections in order.
+        assert_eq!(e.mem.u32(LOCK_TABLE + 0xa * 8), STATIC_LOCKS);
+        assert_eq!(e.mem.u32(LOCK_TABLE + 0xc * 8), STATIC_LOCKS + 0x18);
+        assert_eq!(e.mem.u32(LOCK_TABLE + 0xd * 8), STATIC_LOCKS + 0x30);
+        // The thread block.
+        let block = fls.borrow()[&7];
+        assert_eq!(e.mem.u32(block), crate::units::platform::MAIN_THREAD_ID);
+        assert_eq!(e.mem.u32(block + 4), u32::MAX);
+        assert_eq!(e.mem.u32(block + 0x5c), 0x010f_dca0);
+        assert_eq!(e.mem.u32(block + 0x14), 1);
+        assert_eq!(e.mem.u32(block + 0x1f8), ENCODE);
+        assert_eq!(e.mem.u32(block + 0x1fc), DECODE);
+        assert_eq!(e.mem.u32(block + 0x70), 1);
+        assert_eq!(e.mem.u8(block + 0xc8), 0x43);
+        assert_eq!(e.mem.u8(block + 0x14b), 0x43);
+        assert_eq!(e.mem.u32(block + 0x68), INITIAL_MBC_INFO);
+        assert_eq!(
+            calls_to(&e, IMPORT_ENTER_CRITICAL_SECTION),
+            vec![vec![STATIC_LOCKS + 0x30], vec![STATIC_LOCKS + 0x18]]
+        );
+        assert_eq!(
+            calls_to(&e, IMPORT_LEAVE_CRITICAL_SECTION),
+            vec![vec![STATIC_LOCKS + 0x30], vec![STATIC_LOCKS + 0x18]]
+        );
+        assert!(calls_to(&e, MT_DELETE_LOCKS).is_empty());
+        // Afterwards the pointers decode through the thread block.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_0f92, &[0x1234 ^ KEY]).u32(), 0x1234);
+        assert!(calls_to(&e, IMPORT_GET_PROC_ADDRESS).is_empty());
+        assert_eq!(e.call(0x00ed_100d, &[]).u32(), FLS_GET);
+    }
+
+    #[test]
+    fn mtinit_falls_back_to_tls_and_stops_on_failures() {
+        let (mut e, tls, _) = engine(false, true);
+        e.mem.set_u32(IMPORT_TLS_GET_VALUE, 0x0077_2044);
+        e.mem.set_u32(IMPORT_TLS_SET_VALUE, 0x0077_204c);
+        e.mem.set_u32(IMPORT_TLS_FREE, 0x0077_2050);
+        // The FLS stand-ins: __crtTlsAlloc, then the import table's words.
+        e.register(0x0077_204c, |_, _| 1u32.into_ret());
+        e.register(0x0077_2044, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_1327, &[]).u32(), 1);
+        assert_eq!(e.mem.u32(FLS_ALLOC_POINTER), CRT_TLS_ALLOC ^ KEY);
+        assert_eq!(e.mem.u32(FLS_GET_VALUE_POINTER), 0x0077_2044 ^ KEY);
+        assert_eq!(e.mem.u32(FLS_SET_VALUE_POINTER), 0x0077_204c ^ KEY);
+        assert_eq!(e.mem.u32(FLS_FREE_POINTER), 0x0077_2050 ^ KEY);
+        assert_eq!(tls.borrow()[&5], 0x0077_2044);
+        // __crtTlsAlloc gave the FLS slot through TlsAlloc.
+        assert_eq!(e.mem.u32(FLS_INDEX), 5);
+        assert_eq!(calls_to(&e, 0x0077_204c).len(), 1);
+
+        // TlsAlloc fails: 0 without __mtterm.
+        let (mut e, _, _) = engine(true, true);
+        e.register(IMPORT_TLS_ALLOC, |_, _| u32::MAX.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_1327, &[]).u32(), 0);
+        assert!(calls_to(&e, MT_DELETE_LOCKS).is_empty());
+
+        // A lock that cannot be initialized: __mtterm frees the TLS slot.
+        let (mut e, _, _) = engine(true, false);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ed_1327, &[]).u32(), 0);
+        assert_eq!(e.mem.u32(LOCK_TABLE + 0xa * 8), 0);
+        assert_eq!(calls_to(&e, IMPORT_TLS_FREE), vec![vec![5]]);
+        assert_eq!(e.mem.u32(TLS_INDEX), u32::MAX);
+        assert_eq!(calls_to(&e, MT_DELETE_LOCKS).len(), 1);
+    }
+
+    #[test]
+    fn mtterm_frees_the_slots_that_are_set() {
+        let (mut e, _, _) = engine(true, true);
+        e.mem.set_u32(FLS_INDEX, 7);
+        e.mem.set_u32(TLS_INDEX, 5);
+        e.mem.set_u32(FLS_FREE_POINTER, FLS_FREE ^ KEY);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_1041, &[]);
+        assert_eq!(calls_to(&e, FLS_FREE), vec![vec![7]]);
+        assert_eq!(calls_to(&e, IMPORT_TLS_FREE), vec![vec![5]]);
+        assert_eq!(e.mem.u32(FLS_INDEX), u32::MAX);
+        assert_eq!(e.mem.u32(TLS_INDEX), u32::MAX);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_1041, &[]);
+        assert!(calls_to(&e, FLS_FREE).is_empty());
+        assert!(calls_to(&e, IMPORT_TLS_FREE).is_empty());
+        assert_eq!(calls_to(&e, MT_DELETE_LOCKS).len(), 1);
+    }
+
+    #[test]
+    fn locks_are_made_on_first_use_and_failures_exit() {
+        let (mut e, _, _) = engine(true, true);
+        // Lock 0xA (which __mtinitlocks sets up) guards the set-up.
+        e.mem.set_u32(LOCK_TABLE + 0xa * 8, 0x0055_0100);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_df39, &[3]);
+        let section = e.mem.u32(LOCK_TABLE + 3 * 8);
+        assert_ne!(section, 0);
+        assert_eq!(
+            calls_to(&e, IMPORT_INIT_CRITICAL_SECTION_SPIN),
+            vec![vec![section, 0xfa0]]
+        );
+        let lock_a = 0x0055_0100;
+        assert_eq!(
+            calls_to(&e, IMPORT_ENTER_CRITICAL_SECTION),
+            vec![vec![lock_a], vec![section]]
+        );
+        e.call(0x00ed_de5f, &[3]);
+        assert_eq!(
+            calls_to(&e, IMPORT_LEAVE_CRITICAL_SECTION).last().unwrap(),
+            &vec![section]
+        );
+        // Initialization fails: ENOMEM and _amsg_exit(0x11) through the
+        // decoded exit routine.
+        let (mut e, _, _) = engine(true, false);
+        e.mem.set_u32(LOCK_TABLE + 0xa * 8, 0x0055_0000);
+        e.mem.set_u32(ENCODED_EXIT, EXIT ^ KEY);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_df39, &[4]);
+        assert_eq!(e.mem.u32(LOCK_TABLE + 4 * 8), 0);
+        assert_eq!(e.mem.u32(ERRNO_FALLBACK), 0xc);
+        assert_eq!(calls_to(&e, NMSG_WRITE), vec![vec![0x11]]);
+        assert_eq!(calls_to(&e, EXIT), vec![vec![0xff]]);
+        // Too early in start-up: banner, message 0x1E, exit 0xFF.
+        let (mut e, _, _) = engine(true, true);
+        e.mem.set_u32(LOCKS_READY, 0);
+        e.mem.set_u32(LOCK_TABLE + 0xa * 8, 0x0055_0100);
+        e.register(0x00ec_cca9, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_de76, &[6]);
+        assert_eq!(calls_to(&e, NMSG_WRITE), vec![vec![0x1e]]);
+        assert_eq!(calls_to(&e, 0x00ec_cca9), vec![vec![0xff]]);
+    }
+
+    #[test]
+    fn waiting_for_a_module_sleeps_longer_each_time() {
+        let (mut e, _, _) = engine(true, true);
+        e.register(IMPORT_GET_MODULE_HANDLE_W, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_cc25, &[KERNEL32_NAME]).u32(), 0);
+        let sleeps = calls_to(&e, IMPORT_SLEEP);
+        assert_eq!(sleeps.len(), 60);
+        assert_eq!(sleeps[0], vec![1000]);
+        assert_eq!(sleeps[59], vec![60000]);
+        // Without the module the pointers pass unchanged.
+        assert_eq!(e.call(0x00ed_0f17, &[0x99]).u32(), 0x99);
+    }
+
+    #[test]
+    fn locale_info_update_swaps_references() {
+        let (mut e, _, _) = engine(true, true);
+        e.register(REMOVE_LOCALE_REF, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            0u32.into_ret()
+        });
+        e.register(FREE_TLOCINFO, |_, _| 0u32.into_ret());
+        let slot = e.mem.alloc(4);
+        let old = e.mem.alloc(4);
+        e.mem.set_u32(slot, old);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_f704, &[slot, 0x0066_0000]).u32(), 0x0066_0000);
+        assert_eq!(e.mem.u32(slot), 0x0066_0000);
+        assert_eq!(calls_to(&e, ADD_LOCALE_REF), vec![vec![0x0066_0000]]);
+        assert_eq!(calls_to(&e, REMOVE_LOCALE_REF), vec![vec![old]]);
+        assert_eq!(calls_to(&e, FREE_TLOCINFO), vec![vec![old]]);
+        // The same info, or a null argument: nothing changes.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_f704, &[slot, 0x0066_0000]).u32(), 0x0066_0000);
+        assert_eq!(e.call(0x00ec_f704, &[0, 0x0066_0000]).u32(), 0);
+        assert_eq!(e.call(0x00ec_f704, &[slot, 0]).u32(), 0);
+        assert!(calls_to(&e, ADD_LOCALE_REF).is_empty());
+    }
+
+    /// The locale object for the string types: code page 1252 at info +4,
+    /// locale id 0x409 at +0x14.
+    fn string_locale(e: &mut Engine) -> u32 {
+        let info = e.mem.alloc(0x20);
+        e.mem.set_u32(info + 4, 1252);
+        e.mem.set_u32(info + 0x14, 0x409);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, info);
+        object
+    }
+
+    #[test]
+    fn string_types_go_through_the_wide_api_when_it_works() {
+        let (mut e, _, _) = engine(true, true);
+        let locale = string_locale(&mut e);
+        e.register(IMPORT_GET_STRING_TYPE_W, |e, a| {
+            if a[1] != EMPTY_WIDE_STRING {
+                assert_eq!(e.mem.u16(a[1]), u16::from(b'h'));
+                e.mem.set_u16(a[3], 0x0102);
+            }
+            1u32.into_ret()
+        });
+        e.register(IMPORT_MULTI_BYTE_TO_WIDE_CHAR, |e, a| {
+            if a[4] != 0 {
+                for i in 0..a[3] {
+                    let c = e.mem.u8(a[2] + i);
+                    e.mem.set_u16(a[4] + i * 2, u16::from(c));
+                }
+            }
+            a[3].into_ret()
+        });
+        e.register(FREEA, |_, _| 0u32.into_ret());
+        let text = e.mem.alloc(4);
+        e.mem.write(text, b"hi");
+        let types = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let args = [locale, 1, text, 2, types, 0, 0, 1];
+        assert_eq!(e.call(0x00ee_11e9, &args).u32(), 1);
+        assert_eq!(e.mem.u32(STRING_TYPE_MODE), 1);
+        assert_eq!(e.mem.u16(types), 0x0102);
+        let conversions = calls_to(&e, IMPORT_MULTI_BYTE_TO_WIDE_CHAR);
+        assert_eq!(conversions[0], vec![1252, 9, text, 2, 0, 0]);
+        assert_eq!(conversions[1][..4], [1252, 1, text, 2]);
+        assert_eq!(calls_to(&e, FREEA).len(), 1);
+        // A long text takes a _malloc'd buffer (marked 0xDDDD).
+        let long = e.mem.alloc(0x300);
+        e.mem.write(long, &[b'h'; 0x300]);
+        e.register(MALLOC_BODY, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.call_log = Some(vec![]);
+        let args = [locale, 1, long, 0x300, types, 0, 0, 0];
+        assert_eq!(e.call(0x00ee_11e9, &args).u32(), 1);
+        let block = calls_to(&e, MALLOC_BODY);
+        assert_eq!(block, vec![vec![0x300 * 2 + 8]]);
+        let freed = calls_to(&e, FREEA)[0][0];
+        assert_eq!(e.mem.u32(freed - 8), 0xdddd);
+        // A failed conversion gives 0.
+        e.register(IMPORT_MULTI_BYTE_TO_WIDE_CHAR, |_, _| 0u32.into_ret());
+        assert_eq!(
+            e.call(0x00ee_11e9, &[locale, 1, text, 2, types, 0, 0, 0])
+                .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn string_types_fall_back_to_the_ansi_api() {
+        let (mut e, _, _) = engine(true, true);
+        let locale = string_locale(&mut e);
+        e.register(IMPORT_GET_STRING_TYPE_W, |e, _| {
+            e.call(IMPORT_SET_LAST_ERROR, &[0x78]);
+            0u32.into_ret()
+        });
+        e.register(ANSI_CODE_PAGE, |_, a| {
+            assert_eq!(a[0], 0x409);
+            1250u32.into_ret()
+        });
+        e.register(CONVERT_CODE_PAGE, |e, a| {
+            assert_eq!(a[..2], [1252, 1250]);
+            e.mem.set_u32(a[3], 5);
+            e.mem.alloc(8).into_ret()
+        });
+        e.register(IMPORT_GET_STRING_TYPE_A, |_, _| 7u32.into_ret());
+        let types = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let args = [locale, 1, 0x0055_0000, 3, types, 0, 0, 0];
+        assert_eq!(e.call(0x00ee_11e9, &args).u32(), 7);
+        assert_eq!(e.mem.u32(STRING_TYPE_MODE), 2);
+        let converted = calls_to(&e, CONVERT_CODE_PAGE);
+        let ansi = calls_to(&e, IMPORT_GET_STRING_TYPE_A);
+        assert_eq!(ansi.len(), 1);
+        assert_eq!(ansi[0][0], 0x409);
+        assert_eq!(ansi[0][3], 5);
+        assert_ne!(ansi[0][2], 0x0055_0000);
+        assert_eq!(converted.len(), 1);
+        // The same code page: no conversion; an unknown locale: 0.
+        e.call_log = Some(vec![]);
+        let args = [locale, 1, 0x0055_0000, 3, types, 1250, 0, 0];
+        assert_eq!(e.call(0x00ee_11e9, &args).u32(), 7);
+        assert!(calls_to(&e, CONVERT_CODE_PAGE).is_empty());
+        assert_eq!(calls_to(&e, IMPORT_GET_STRING_TYPE_A)[0][2], 0x0055_0000);
+        e.register(ANSI_CODE_PAGE, |_, _| u32::MAX.into_ret());
+        assert_eq!(e.call(0x00ee_11e9, &args).u32(), 0);
     }
 }
