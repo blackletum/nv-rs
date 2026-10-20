@@ -4,57 +4,69 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-/// The object at `+0x1c` whose slot `+0x90` takes the update over, and the plain update.
-const UPDATE_OWNER: u32 = 0x1c;
-const OWNER_UPDATE_SLOT: u32 = 0x90;
-const UPDATE_WORLD_TRANSFORM: u32 = 0x00a6_8bf0;
+use crate::types::NiAVObject;
 
-// Translated from 00a68c60 (disassembled, FalloutNV.exe 1.4.0.525)
-/// `NiAVObject::UpdateWorldData` (engine map; `thiscall`, one stack word, `RET 4`): with an
-/// object at `+0x1c`, a tail jump to its slot `+0x90` (on it, with the same word); otherwise
-/// the world transform from the parent (`00a68bf0`, which takes no words; the word is
-/// dropped by this function's `RET 4`).
-pub fn ni_av_object_update_world_data(e: &mut Engine, this: Ptr, data: u32) {
-    let owner = e.mem.u32(this.addr() + UPDATE_OWNER);
-    if owner != 0 {
-        e.vcall(owner, OWNER_UPDATE_SLOT, &args![data]);
-    } else {
-        e.call(UPDATE_WORLD_TRANSFORM, &args![this]);
+/// The collision object's virtual +0x90 (`__thiscall`, one word), which updates the world
+/// data in place of the object's own update.
+const COLLISION_UPDATE_WORLD_DATA_SLOT: u32 = 0x90;
+/// `00a68bf0` (`__thiscall`, no words; `NiMain/run_00a68bf0`): the object's own world data
+/// update.
+const UPDATE_WORLD_DATA_BODY: u32 = 0x00a6_8bf0;
+
+// Translated from 00a68c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAVObject::UpdateWorldData` (Xbox PDB; `__thiscall`, one word): with a collision object
+/// (`m_spCollisionObject`, +0x1c) the work goes to its virtual +0x90 with the same word (a
+/// tail jump); otherwise `00a68bf0` runs on the object (it takes no words).
+pub fn ni_av_object_update_world_data(e: &mut Engine, this: Ptr<NiAVObject>, update: u32) {
+    let collision = e.get(this, NiAVObject::m_spCollisionObject);
+    if collision != 0 {
+        e.vcall(collision, COLLISION_UPDATE_WORLD_DATA_SLOT, &args![update]);
+        return;
     }
+    e.call(UPDATE_WORLD_DATA_BODY, &args![this]);
 }
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![entry!(
-        0x00a6_8c60,
-        ni_av_object_update_world_data(Ptr, u32)
+        0x00a68c60,
+        ni_av_object_update_world_data(Ptr<NiAVObject>, u32)
     )]
 }
 
 #[cfg(test)]
-mod tests {
+mod b007_tests {
     use super::*;
 
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    const COLLISION_DOUBLE: u32 = 0x0070_2000;
+
     #[test]
-    fn the_owner_takes_the_update_or_the_transform_is_updated() {
+    fn ni_av_object_update_world_data_prefers_the_collision_object() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 0x1000);
-        e.register(UPDATE_WORLD_TRANSFORM, |e, a| {
-            e.mem.set_u32(0x1800, a[0]);
-            Ret::default()
-        });
-        e.call(0x00a6_8c60, &args![0x1000u32, 7u32]);
-        assert_eq!(e.mem.u32(0x1800), 0x1000);
-        e.put_vtable(0x0300_0000, &[0; 0x25]);
-        e.mem.set_u32(0x0300_0000 + OWNER_UPDATE_SLOT, 0x00ab_0000);
-        e.mem.set_u32(0x1100, 0x0300_0000);
-        e.mem.set_u32(0x1000 + UPDATE_OWNER, 0x1100);
-        e.register(0x00ab_0000, |e, a| {
-            e.mem.set_u32(0x1804, a[0]);
-            e.mem.set_u32(0x1808, a[1]);
-            Ret::default()
-        });
-        e.call(0x00a6_8c60, &args![0x1000u32, 7u32]);
-        assert_eq!((e.mem.u32(0x1804), e.mem.u32(0x1808)), (0x1100, 7));
+        e.register(UPDATE_WORLD_DATA_BODY, |_, _| Ret::default());
+        e.register(COLLISION_DOUBLE, |_, _| Ret::default());
+        let object = e.mem.alloc(0x9c);
+        e.call_log = Some(vec![]);
+        e.call(0x00a68c60, &args![object, 7u32]);
+        assert_eq!(calls_to(&e, UPDATE_WORLD_DATA_BODY), vec![vec![object]]);
+        let collision = e.mem.alloc(8);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(collision, vtable);
+        e.mem
+            .set_u32(vtable + COLLISION_UPDATE_WORLD_DATA_SLOT, COLLISION_DOUBLE);
+        e.mem.set_u32(object + 0x1c, collision);
+        e.call(0x00a68c60, &args![object, 7u32]);
+        assert_eq!(calls_to(&e, COLLISION_DOUBLE), vec![vec![collision, 7]]);
+        assert_eq!(calls_to(&e, UPDATE_WORLD_DATA_BODY).len(), 1);
     }
 }

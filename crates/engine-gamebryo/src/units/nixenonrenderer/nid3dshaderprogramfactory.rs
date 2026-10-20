@@ -154,12 +154,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00e9_3df0, fn_00e93df0()),
         entry!(0x00e9_3e70, ni_d3d_shader_program_factory_register_shader_creator(Ptr, u32) -> bool),
-        entry!(0x00e9_3470, fn_00e93470(Ptr, u32, u32, u32)),
-        entry!(0x00e9_35b0, fn_00e935b0(Ptr, u32)),
         entry!(
             0x00b7_1300,
             ni_t_pointer_list_base_remove_all(Ptr<crate::types::NiTPointerList>)
         ),
+        entry!(0x00e9_3470, fn_00e93470(Ptr, u32, u32, u32)),
+        entry!(0x00e9_35b0, fn_00e935b0(Ptr, u32)),
     ]
 }
 

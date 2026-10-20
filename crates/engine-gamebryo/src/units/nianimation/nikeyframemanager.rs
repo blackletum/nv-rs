@@ -13,28 +13,24 @@ pub fn ni_keyframe_manager_get_rtti(_e: &mut Engine) -> Ptr {
     Ptr::new(NI_KEYFRAME_MANAGER_RTTI)
 }
 
-// Translated from 00a4d6d0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (unit `nikeyframemanager.cpp` by the map; `thiscall`, one stack
-/// word, `RET 4`; a string map's hash, which `NiStream`'s loader map reaches through its
-/// `SetAt` `00a642a0`): the hash of the C string `key`, `h = h * 33 + c` over its bytes (each
-/// byte sign-extended, `MOVSX`; 32-bit wrap), modulo the table size at `this + 4` (`DIV`, the
-/// remainder). A table size of 0 faults (`#DE`), as the `DIV` does.
-pub fn fn_00a4d6d0(e: &mut Engine, this: Ptr, key: Ptr) -> u32 {
-    let mut hash: u32 = 0;
-    let mut at = key.addr();
+// Translated from 00a4d6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A string hash for a table whose bucket count is the word at +4 (thiscall, `RET 4`):
+/// `h = h * 33 + c` over the bytes of `name` (each sign-extended), then `h % buckets`
+/// (unsigned).
+pub fn fn_00a4d6d0(e: &mut Engine, this: Ptr, name: Ptr) -> u32 {
+    let mut hash = 0u32;
+    let mut p = name.addr();
     loop {
-        let c = e.mem.u8(at);
+        let c = e.mem.u8(p);
         if c == 0 {
             break;
         }
-        hash = (c as i8 as i32 as u32).wrapping_add(hash.wrapping_shl(5).wrapping_add(hash));
-        at = at.wrapping_add(1);
+        hash = (hash << 5)
+            .wrapping_add(hash)
+            .wrapping_add(c as i8 as i32 as u32);
+        p += 1;
     }
-    let size = e.mem.u32(this.addr() + 4);
-    if size == 0 {
-        panic!("divide error (#DE) in 00a4d6d0: table size 0");
-    }
-    hash % size
+    hash % e.mem.u32(this.addr() + 4)
 }
 
 /// This unit's translated functions, by exe address.
@@ -57,34 +53,23 @@ mod tests {
 }
 
 #[cfg(test)]
-mod hash_tests {
+mod b004_tests {
     use super::*;
 
-    /// `h * 33 + c` over the bytes (sign-extended), modulo the size at `+4`.
     #[test]
-    fn hashes_the_string_modulo_the_table_size() {
+    fn string_hash_modulo_the_bucket_count() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 0x100);
-        e.mem.set_u32(0x1004, 37);
-        for (i, b) in b"NiNode\0".iter().enumerate() {
-            e.mem.set_u8(0x1010 + i as u32, *b);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 37);
+        let name = e.mem.alloc(8);
+        for (i, b) in [b'a', b'b', 0xe9u8].iter().enumerate() {
+            e.mem.set_u8(name + i as u32, *b);
         }
-        let mut h: u32 = 0;
-        for &b in b"NiNode" {
-            h = h.wrapping_mul(33).wrapping_add(b as u32);
-        }
-        assert_eq!(
-            e.call(0x00a4_d6d0, &args![0x1000u32, 0x1010u32]).u32(),
-            h % 37
-        );
-        // A byte above 0x7f counts negative; the empty string hashes to 0.
-        e.mem.set_u8(0x1020, 0x80);
-        e.mem.set_u8(0x1021, 0);
-        let expected = (0u32.wrapping_sub(0x80)) % 37;
-        assert_eq!(
-            e.call(0x00a4_d6d0, &args![0x1000u32, 0x1020u32]).u32(),
-            expected
-        );
-        assert_eq!(e.call(0x00a4_d6d0, &args![0x1000u32, 0x1021u32]).u32(), 0);
+        // 0xe9 is a negative char: -23.
+        let hash = (u32::from(b'a') * 33 + u32::from(b'b')) * 33;
+        let want = hash.wrapping_sub(23) % 37;
+        assert_eq!(e.call(0x00a4_d6d0, &args![this, name]).u32(), want);
+        let empty = e.mem.alloc(1);
+        assert_eq!(e.call(0x00a4_d6d0, &args![this, empty]).u32(), 0);
     }
 }

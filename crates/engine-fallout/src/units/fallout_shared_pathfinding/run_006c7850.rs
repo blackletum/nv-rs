@@ -4,79 +4,84 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-/// The object's virtual table (`0106c800`) and its base's (`0106c814`).
-const VTABLE: u32 = 0x0106_c800;
-const BASE_VTABLE: u32 = 0x0106_c814;
-/// The constructor of the member at `+0x10` (`0044dee0`, `thiscall`).
+/// `BSTaskletData` vtable (RTTI).
+const VTABLE_TASKLET_DATA: u32 = 0x0106_c814;
+/// `BSWin32TaskletData` vtable (RTTI).
+const VTABLE_WIN32_TASKLET_DATA: u32 = 0x0106_c800;
+/// The constructor of the member at +0x10 (`0044dee0`, thiscall, no stack words).
 const MEMBER_CONSTRUCTOR: u32 = 0x0044_dee0;
 
+// Translated from 006c78d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTaskletData` constructor (class by the vtable's RTTI): stores the vtable and clears the
+/// byte at +4. Returns `this`.
+pub fn bs_tasklet_data_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_TASKLET_DATA);
+    e.mem.set_u8(this.addr() + 4, 0);
+    this
+}
+
 // Translated from 006c7850 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A constructor (`thiscall`, no stack words; the engine map has no name for it; the process
-/// lists' start-up initializer `00fa9890` reaches it): the base constructor `006c78d0`, then
-/// the virtual table `0106c800`, the word at `+8` cleared, the byte at `+0xc` set to 1 and the
-/// member at `+0x10` constructed (`0044dee0`). Answers `this`.
-// Translation incomplete: 006c7850 - FS:[0] exception frame (handler 00f03d68) not translated.
-pub fn fn_006c7850(e: &mut Engine, this: Ptr) -> Ptr {
-    fn_006c78d0(e, this);
+// Translation incomplete: 006c7850 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f03d68, state variable) is not translated
+/// `BSWin32TaskletData` constructor (class by the vtable's RTTI): runs the `BSTaskletData`
+/// constructor (`006c78d0`), stores its own vtable, clears the word at +8, sets the byte at
+/// +0xc to 1 and constructs the member at +0x10 (`0044dee0`). Returns `this`.
+pub fn bs_win32_tasklet_data_constructor(e: &mut Engine, this: Ptr) -> Ptr {
     let base = this.addr();
-    e.mem.set_u32(base, VTABLE);
+    bs_tasklet_data_constructor(e, this);
+    e.mem.set_u32(base, VTABLE_WIN32_TASKLET_DATA);
     e.mem.set_u32(base + 8, 0);
     e.mem.set_u8(base + 0xc, 1);
     e.call(MEMBER_CONSTRUCTOR, &args![base + 0x10]);
     this
 }
 
-// Translated from 006c78d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// The base constructor (`thiscall`): the virtual table `0106c814` and the byte at `+4`
-/// cleared. Answers `this`. The engine map has no name for it.
-pub fn fn_006c78d0(e: &mut Engine, this: Ptr) -> Ptr {
-    e.mem.set_u32(this.addr(), BASE_VTABLE);
-    e.mem.set_u8(this.addr() + 4, 0);
-    this
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x006c7850, fn_006c7850(Ptr) -> Ptr),
-        entry!(0x006c78d0, fn_006c78d0(Ptr) -> Ptr),
+        entry!(0x006c_78d0, bs_tasklet_data_constructor(Ptr) -> Ptr),
+        entry!(0x006c_7850, bs_win32_tasklet_data_constructor(Ptr) -> Ptr),
     ]
 }
 
 #[cfg(test)]
-mod tests {
+mod b004_tests {
     use super::*;
 
     #[test]
-    fn the_constructor_sets_both_tables_and_its_fields_and_builds_the_member() {
+    fn tasklet_data_constructor_sets_the_vtable_and_clears_the_flag() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 0x20);
-        e.mem.write(0x1000, &[0xaa; 0x20]);
-        e.call_log = Some(vec![]);
-        e.register(MEMBER_CONSTRUCTOR, |_, a| a[0].into_ret());
-        let answer = e.call(0x006c_7850, &args![0x1000u32]).u32();
-        assert_eq!(answer, 0x1000);
-        assert_eq!(e.mem.u32(0x1000), VTABLE);
-        assert_eq!(e.mem.u8(0x1004), 0, "the base cleared its byte");
-        assert_eq!(e.mem.u32(0x1008), 0);
-        assert_eq!(e.mem.u8(0x100c), 1);
-        let log = e.call_log.take().unwrap();
-        let member: Vec<_> = log
-            .iter()
-            .filter(|(a, _)| *a == MEMBER_CONSTRUCTOR)
-            .collect();
-        assert_eq!(member.len(), 1);
-        assert_eq!(member[0].1, [0x1010]);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        assert_eq!(e.call(0x006c_78d0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_TASKLET_DATA);
+        assert_eq!(e.mem.u32(this + 4), 0xffff_ff00);
     }
 
     #[test]
-    fn the_base_constructor_sets_its_table_and_clears_its_byte() {
+    fn win32_tasklet_data_constructor_fills_its_fields_and_constructs_the_member() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 8);
-        e.mem.write(0x1000, &[0xaa; 8]);
-        assert_eq!(e.call(0x006c_78d0, &args![0x1000u32]).u32(), 0x1000);
-        assert_eq!(e.mem.u32(0x1000), BASE_VTABLE);
-        assert_eq!(e.mem.u8(0x1004), 0);
-        assert_eq!(e.mem.bytes(0x1005, 3), [0xaa; 3]);
+        e.register(MEMBER_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], 0x5151);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x20);
+        for i in 0..8 {
+            e.mem.set_u32(this + i * 4, 0xffff_ffff);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006c_7850, &args![this]).u32(), this);
+        let calls: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == MEMBER_CONSTRUCTOR)
+            .collect();
+        assert_eq!(calls, vec![(MEMBER_CONSTRUCTOR, vec![this + 0x10])]);
+        assert_eq!(e.mem.u32(this), VTABLE_WIN32_TASKLET_DATA);
+        assert_eq!(e.mem.u8(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u8(this + 0xc), 1);
+        assert_eq!(e.mem.u32(this + 0x10), 0x5151);
     }
 }

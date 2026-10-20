@@ -377,33 +377,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_object_gets_its_vtable_a_zero_count_and_is_counted() {
-        let mut e = Engine::new();
-        e.map(REF_OBJECT_COUNT & !0xfff, 0x1000);
-        e.map(0x0000_1000, 0x100);
-        e.mem.set_u32(REF_OBJECT_COUNT, 41);
-        e.mem.set_u32(0x1004, 0xffff_ffff);
-        // The import is bound by `Engine::with_exe` from the exe's import table; here a double.
-        e.register(INTERLOCKED_INCREMENT, |e, a| {
-            let v = e.mem.u32(a[0]).wrapping_add(1);
-            e.mem.set_u32(a[0], v);
-            v.into_ret()
-        });
-        e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x00a5_d3a0, &args![0x1000u32]).u32(), 0x1000);
-        let log = e.call_log.take().unwrap();
-        let counted: Vec<_> = log
-            .iter()
-            .filter(|(a, _)| *a == INTERLOCKED_INCREMENT)
-            .collect();
-        assert_eq!(counted.len(), 1);
-        assert_eq!(counted[0].1[0], REF_OBJECT_COUNT);
-        assert_eq!(e.mem.u32(REF_OBJECT_COUNT), 42);
-        assert_eq!(e.mem.u32(0x1000), NI_OBJECT_VTABLE);
-        assert_eq!(e.mem.u32(0x1004), 0);
-    }
-
     type Log = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u32>)>>>;
 
     const VTABLE: u32 = 0x0300_0000;

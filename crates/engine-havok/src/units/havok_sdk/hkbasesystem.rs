@@ -1177,3 +1177,4 @@ mod tests_a01 {
         assert_eq!(e.mem.u32(block), 0x010c_8ed4);
     }
 }
+

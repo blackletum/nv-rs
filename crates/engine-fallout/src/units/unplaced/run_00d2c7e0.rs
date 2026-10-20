@@ -33,29 +33,27 @@ pub fn fn_00d2c8a0(e: &mut Engine) -> u32 {
     RETURNED_ADDRESS_010CE740
 }
 
-/// The object's virtual table (`010cc2fc`) and the constructor of its member at `+0x14`
-/// (`00cb0a70`, `thiscall`, one word).
-const VTABLE_00D2C7E0: u32 = 0x010c_c2fc;
-const MEMBER_CONSTRUCTOR_00CB0A70: u32 = 0x00cb_0a70;
+/// `hkpAction` vtable (RTTI).
+const VTABLE_HKP_ACTION: u32 = 0x010c_c2fc;
+/// `00cb0a70` (unit `Havok SDK/hkstringptr.cpp` in the engine map; thiscall, `RET 4`).
+const STRING_POINTER_INIT: u32 = 0x00cb_0a70;
 
 // Translated from 00d2c7e0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A constructor (`thiscall`, `RET 4`; the engine map has no name for it; `00d2c8a0` builds one
-/// on its stack for a Havok type info's start-up initializer `00fbeb00`): stores the virtual
-/// table `010cc2fc` and constructs the member at `+0x14` with the stack word (`00cb0a70`).
-/// Answers `this`.
-// Translation incomplete: 00d2c7e0 - FS:[0] exception frame (handler 00f34868) not translated.
-pub fn fn_00d2c7e0(e: &mut Engine, this: Ptr, word: u32) -> Ptr {
+// Translation incomplete: 00d2c7e0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f34868, state variable) is not translated
+/// A constructor that stores the `hkpAction` vtable (RTTI) and runs `00cb0a70` on the
+/// member at +0x14 with `argument`. Returns `this`.
+pub fn fn_00d2c7e0(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
     let base = this.addr();
-    e.mem.set_u32(base, VTABLE_00D2C7E0);
-    e.call(MEMBER_CONSTRUCTOR_00CB0A70, &args![base + 0x14, word]);
+    e.mem.set_u32(base, VTABLE_HKP_ACTION);
+    e.call(STRING_POINTER_INIT, &args![base + 0x14, argument]);
     this
 }
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00d2c7e0, fn_00d2c7e0(Ptr, u32) -> Ptr),
         entry!(0x00d2_c8a0, fn_00d2c8a0() -> u32),
+        entry!(0x00d2_c7e0, fn_00d2c7e0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -94,23 +92,29 @@ mod static_init_callee_tests {
             vec![vec![0xdead_beef]]
         );
     }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
 
     #[test]
-    fn the_constructor_stores_its_table_and_builds_its_member() {
+    fn constructor_sets_the_vtable_and_initializes_the_member() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 0x40);
-        e.register(MEMBER_CONSTRUCTOR_00CB0A70, |_, a| a[0].into_ret());
+        e.register(STRING_POINTER_INIT, |e, a| {
+            assert_eq!(e.mem.u32(a[0] - 0x14), VTABLE_HKP_ACTION);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
         e.call_log = Some(vec![]);
-        assert_eq!(
-            e.call(0x00d2_c7e0, &args![0x1000u32, 0x77u32]).u32(),
-            0x1000
-        );
-        assert_eq!(e.mem.u32(0x1000), VTABLE_00D2C7E0);
-        let log = e.call_log.take().unwrap();
-        let member: Vec<_> = log
-            .iter()
-            .filter(|(a, _)| *a == MEMBER_CONSTRUCTOR_00CB0A70)
+        assert_eq!(e.call(0x00d2_c7e0, &args![this, 0x77u32]).u32(), this);
+        let calls: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == STRING_POINTER_INIT)
             .collect();
-        assert_eq!(member[0].1, [0x1014, 0x77]);
+        assert_eq!(calls, vec![(STRING_POINTER_INIT, vec![this + 0x14, 0x77])]);
     }
 }

@@ -11,18 +11,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-/// `00aa1360` (`cdecl`, two words): compares two C strings, 0 when equal.
-const STRING_COMPARE: u32 = 0x00aa_1360;
-
-// Translated from 00b7fce0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map: a string map's key compare (slot `+8` of `NiStream`'s loader
-/// map vtable `0109bf4c`, so `thiscall` with `ECX` unused; two stack words, `RET 8`): the
-/// two keys through `00aa1360`, then `NEG`/`SBB`/`INC`: 1 when it answered 0 (equal), else 0.
-pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> u32 {
-    let order = e.call(STRING_COMPARE, &args![first, second]).u32();
-    u32::from(order == 0)
-}
-
 /// The shader model setting the package index is chosen from (`011f91c0`), and the three
 /// bytes that refine it (`011f94a4`, `011f941e`, `011f941f`).
 const SHADER_SETTING_011F91C0: u32 = 0x011f_91c0;
@@ -239,19 +227,366 @@ pub fn fn_00b7fd50(e: &mut Engine, this: Ptr) -> u32 {
         .u32()
 }
 
+/// The free `00aa10f0` (`cdecl`, block).
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+/// The map's base clean-up `00b7fbe0` (`thiscall`, no stack words).
+const MAP_BASE_CLEAN_UP_00B7FBE0: u32 = 0x00b7_fbe0;
+
+// Translated from 00b7fc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the clean-up of the shader package's string
+/// map (`this` is the package's +8). `thiscall`, no stack words. Sets the map's vtable
+/// `010af6cc`; when the byte at +0x10 (the package's +0x18) is set, walks every bucket of the
+/// array at +8 (count at +4, read again after each bucket) and, for each entry of a
+/// bucket's chain (next entry at +0), frees the entry's word at +4 (`00aa10f0`). Then runs
+/// the base clean-up `00b7fbe0` and answers what it answers (`EAX`).
+// Translation incomplete: 00b7fc50 - the C++ exception frame (FS:[0] chain, unwind state 0 around the walk) is not translated.
+pub fn fn_00b7fc50(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_VTABLE_010AF6CC);
+    if e.mem.u8(base.wrapping_add(0x10)) != 0 && e.mem.u32(base.wrapping_add(4)) != 0 {
+        let mut index = 0u32;
+        loop {
+            let buckets = e.mem.u32(base.wrapping_add(8));
+            let mut entry = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+            while entry != 0 {
+                let key = e.mem.u32(entry.wrapping_add(4));
+                entry = e.mem.u32(entry);
+                e.call(FREE_00AA10F0, &args![key]);
+            }
+            index = index.wrapping_add(1);
+            if index >= e.mem.u32(base.wrapping_add(4)) {
+                break;
+            }
+        }
+    }
+    e.call(MAP_BASE_CLEAN_UP_00B7FBE0, &args![base]).u32()
+}
+
+/// `00aa1360` (`cdecl`, two words): compares two C strings, 0 when equal.
+const STRING_COMPARE: u32 = 0x00aa_1360;
+
+// Translated from 00b7fce0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a string map's key compare (slot `+8` of `NiStream`'s loader
+/// map vtable `0109bf4c`, so `thiscall` with `ECX` unused; two stack words, `RET 8`): the
+/// two keys through `00aa1360`, then `NEG`/`SBB`/`INC`: 1 when it answered 0 (equal), else 0.
+pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> u32 {
+    let order = e.call(STRING_COMPARE, &args![first, second]).u32();
+    u32::from(order == 0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> u32),
         entry!(0x00b7_faf0, fn_00b7faf0() -> u32),
         entry!(0x00b7_ff40, fn_00b7ff40(Ptr, i32) -> Ptr),
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
+        entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
+        entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> u32),
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn settings(e: &mut Engine, setting: u32, a4: u8, e1: u8, f1: u8) -> u32 {
+        e.set_global(SHADER_SETTING_011F91C0, setting);
+        e.set_global(BYTE_SETTING_011F94A4, a4);
+        e.set_global(BYTE_SETTING_011F941E, e1);
+        e.set_global(BYTE_SETTING_011F941F, f1);
+        e.call(0x00b7_faf0, &args![]).u32()
+    }
+
+    #[test]
+    fn fn_00b7faf0_picks_the_package_for_each_setting() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        assert_eq!(settings(&mut e, 0, 1, 1, 1), 0);
+        assert_eq!(settings(&mut e, 1, 1, 1, 1), 1);
+        assert_eq!(settings(&mut e, 2, 1, 1, 1), 2);
+        assert_eq!(settings(&mut e, 3, 1, 1, 1), 5);
+        assert_eq!(settings(&mut e, 4, 1, 1, 1), 8);
+        assert_eq!(settings(&mut e, 5, 0, 0, 1), 3);
+        assert_eq!(settings(&mut e, 5, 0, 1, 0), 0xa);
+        assert_eq!(settings(&mut e, 5, 0, 1, 7), 0xb);
+        assert_eq!(settings(&mut e, 5, 1, 0, 1), 4);
+        assert_eq!(settings(&mut e, 5, 1, 1, 0), 0xc);
+        assert_eq!(settings(&mut e, 5, 1, 1, 1), 0xd);
+        assert_eq!(settings(&mut e, 6, 0, 0, 1), 6);
+        assert_eq!(settings(&mut e, 6, 0, 1, 1), 0xf);
+        assert_eq!(settings(&mut e, 6, 1, 0, 1), 7);
+        assert_eq!(settings(&mut e, 6, 1, 1, 0), 0x10);
+        assert_eq!(settings(&mut e, 6, 1, 1, 1), 0x11);
+        assert_eq!(settings(&mut e, 7, 1, 0, 1), 9);
+        assert_eq!(settings(&mut e, 7, 0, 1, 0), 0x12);
+        assert_eq!(settings(&mut e, 7, 0, 1, 1), 0x13);
+        assert_eq!(settings(&mut e, 8, 1, 1, 1), 0);
+        assert_eq!(settings(&mut e, 0xffff_ffff, 1, 1, 1), 0);
+    }
+
+    fn package_rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_00AA1070, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1].max(1)).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            a[0].into_ret()
+        });
+        // The formatter writes the index as three digits after a short prefix.
+        e.register(FORMAT_00406D00, |e, a| {
+            let text = format!("pkg{:03}", a[3]);
+            e.mem.set_cstr(a[0], text.as_bytes());
+            (text.len() as u32).into_ret()
+        });
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn fn_00b7ff40_sets_up_the_map_and_names_the_package() {
+        let mut e = package_rig();
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1111);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_ff40, &args![this, 7u32]).u32(), this);
+        assert_eq!(calls(&e, ALLOCATE_00AA1070), vec![vec![0x94]]);
+        let buckets = e.mem.u32(this + 0x10);
+        assert_eq!(calls(&e, MEMSET), vec![vec![buckets, 0, 0x94]]);
+        assert_eq!(e.mem.u32(this + 8), MAP_VTABLE_010AF6CC);
+        assert_eq!(e.mem.u32(this + 0xc), 0x25);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u8(this + 0x18), 1);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        let format = calls(&e, FORMAT_00406D00);
+        assert_eq!(format.len(), 1);
+        assert_eq!(&format[0][1..], &[100, PACKAGE_NAME_FORMAT, 7]);
+        // "pkg007" and its NUL.
+        assert_eq!(calls(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 7]]);
+        let name = e.mem.u32(this);
+        assert_eq!(e.mem.cstr(name), b"pkg007".to_vec());
+        assert_eq!(calls(&e, STRCPY_S)[0][..2], [name, 7]);
+    }
+
+    #[test]
+    fn fn_00b7ff40_without_a_positive_index_leaves_no_name() {
+        let mut e = package_rig();
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1111);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_ff40, &args![this, 0u32]);
+        e.call(0x00b7_ff40, &args![this, -3i32]);
+        assert!(calls(&e, FORMAT_00406D00).is_empty());
+        assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(this), 0);
+    }
+
+    /// A file object (vtable with slot 0 and +0x20, the read pointer at +8, position at +4)
+    /// whose header read answers `header_got` bytes of (version, count, size) and whose block
+    /// read answers `block_got`.
+    fn file_rig(version: u32, count: u32, header_got: u32, block_got: u32) -> (Engine, u32) {
+        let mut e = package_rig();
+        let file = e.mem.alloc(0x10);
+        let mut slots = vec![0u32; 9];
+        slots[0] = 0x0f00_3000;
+        slots[8] = 0x0f00_3020;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.mem.set_u32(file, 0x0f00_1000);
+        e.mem.set_u32(file + 4, 0x40);
+        e.mem.set_u32(file + 8, 0x0f00_4000);
+        e.register(0x0f00_3000, |_, _| Ret::default());
+        e.register(0x0f00_3020, |_, _| Ret::default());
+        e.register_double(FILE_FINDER_GET_FILE, move |_, _| file.into_ret());
+        e.register_double(0x0f00_4000, move |e, a| {
+            assert_eq!(a[2], 0xc);
+            assert_eq!(e.mem.u32(a[3]), 1);
+            assert_eq!(a[4], 1);
+            assert_eq!(e.mem.bytes(a[1], 12), vec![0; 12]);
+            e.mem.set_u32(a[1], version);
+            e.mem.set_u32(a[1] + 4, count);
+            e.mem.set_u32(a[1] + 8, 0x20c);
+            header_got.into_ret()
+        });
+        // Two records: the first 4 bytes of text after its 0x104-byte head, then the second.
+        e.register_double(FILE_READ_00462D80, move |e, a| {
+            e.mem.set_u32(a[1] + 0x100, 4);
+            block_got.into_ret()
+        });
+        e.register(SHADER_MAP_SET_AT, |_, _| Ret::default());
+        (e, file)
+    }
+
+    #[test]
+    fn fn_00b7fe40_loads_every_shader_record() {
+        let (mut e, file) = file_rig(100, 2, 12, 0x20c);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, FILE_FINDER_GET_FILE), vec![vec![0x5000, 0, 0]]);
+        assert_eq!(calls(&e, 0x0f00_3020), vec![vec![file, 0, 0]]);
+        assert_eq!(e.mem.u32(file + 4), 0x4c);
+        let contents = e.mem.u32(this + 4);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x20c]]
+        );
+        assert_eq!(
+            calls(&e, FILE_READ_00462D80),
+            vec![vec![file, contents, 0x20c]]
+        );
+        let second = contents + 0x108;
+        assert_eq!(
+            calls(&e, SHADER_MAP_SET_AT),
+            vec![
+                vec![this + 8, contents, contents],
+                vec![this + 8, second, second]
+            ]
+        );
+        assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+    }
+
+    #[test]
+    fn fn_00b7fe40_frees_the_contents_after_a_short_read() {
+        let (mut e, file) = file_rig(100, 2, 12, 0x20b);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, MEMORY_DEALLOCATE).len(), 1);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert!(calls(&e, SHADER_MAP_SET_AT).is_empty());
+        assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+    }
+
+    #[test]
+    fn fn_00b7fe40_with_no_shaders_still_answers_true() {
+        let (mut e, _) = file_rig(100, 0, 12, 0x20c);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert!(calls(&e, SHADER_MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b7fe40_skips_a_bad_header_but_still_deletes_the_file() {
+        for (version, got) in [(99u32, 12u32), (100, 11)] {
+            let (mut e, file) = file_rig(version, 2, got, 0x20c);
+            let this = e.mem.alloc(0x1c);
+            e.call_log = Some(vec![]);
+            assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+            assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+            assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+        }
+    }
+
+    #[test]
+    fn fn_00b7fe40_without_a_name_or_a_file_answers_false() {
+        let mut e = package_rig();
+        e.register(FILE_FINDER_GET_FILE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00b7_fe40, &args![this, 0u32]).bool());
+        assert!(calls(&e, FILE_FINDER_GET_FILE).is_empty());
+        assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, FILE_FINDER_GET_FILE).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b7fd50_frees_what_it_holds_then_cleans_up_the_map() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MAP_CLEAN_UP_00B7FC50, |_, _| 0x99u32.into_ret());
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1000);
+        e.mem.set_u32(this + 4, 0x2000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_fd50, &args![this]).u32(), 0x99);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x1000], vec![MEMORY_MANAGER, 0x2000]]
+        );
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50), vec![vec![this + 8]]);
+
+        // Nothing held: only the map's clean-up.
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fd50, &args![this]);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50).len(), 1);
+    }
+
+    /// A map with three buckets: bucket 0 holds two entries (keys 0x10, 0x11), bucket 1 is
+    /// empty, bucket 2 holds one (key 0x20).
+    fn map_rig(owns: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MAP_BASE_CLEAN_UP_00B7FBE0, |_, _| 0x77u32.into_ret());
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let third = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x10);
+        e.mem.set_u32(second + 4, 0x11);
+        e.mem.set_u32(third + 4, 0x20);
+        e.mem.set_u32(buckets, first);
+        e.mem.set_u32(buckets + 8, third);
+        e.mem.set_u32(map, 0x1234);
+        e.mem.set_u32(map + 4, 3);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u8(map + 0x10, owns);
+        (e, map)
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_every_key_when_the_map_owns_them() {
+        let (mut e, map) = map_rig(1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_fc50, &args![map]).u32(), 0x77);
+        assert_eq!(e.mem.u32(map), MAP_VTABLE_010AF6CC);
+        assert_eq!(
+            calls(&e, FREE_00AA10F0),
+            vec![vec![0x10], vec![0x11], vec![0x20]]
+        );
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0), vec![vec![map]]);
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_nothing_when_the_map_does_not_own_its_keys() {
+        let (mut e, map) = map_rig(0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0).len(), 1);
+        // No buckets: nothing walked either.
+        let (mut e, map) = map_rig(1);
+        e.mem.set_u32(map + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_branch {
     use super::*;
 
     #[test]

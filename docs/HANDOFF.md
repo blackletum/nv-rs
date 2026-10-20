@@ -7,7 +7,95 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-18 evening (current; give this to the next account first)
+### Claude lead, 2026-10-20 night (current; read this first, then 2026-10-19 below)
+
+**The real game was recorded.** The maintainer played a new game with a
+recorder loaded (private `nv-cover`, an INT3 on the first byte of every one of
+the 69,474 ledger functions, first hit only; private script
+`phase0/bin/record-coverage.ps1`, list built by `phase0/bin/mkcover.pl`). It ran
+cleanly for about 8 minutes. 45,329 functions ran; 8,548 of them were
+untranslated. Leaving out the renderer, menus, audio, faces and sky, about 4,900
+of those are the play build's missing code. They are handed out in batches of
+about 120 in the order the game first ran them (private
+`phase0/lists/play/b001..b044`, `assigned.txt`); the tables are in
+`captures/coverage/` (`ran.tsv`: address, size, name, subsystem, unit, ledger
+status, first-run order). Batches b001-b004 and b006 are in this PR.
+
+**Play build priority batches (b000, b000b-b000g):** the callees the start-up
+stops on. Leaving the renderer out was wrong for start-up: Main::Main and
+InitSceneGraph build the renderer's managers (BSShaderManager,
+BSShaderAccumulator, BSBatchRenderer, the texture manager, ShadowSceneNode), so
+those were batched as they were found. The play-build branch now runs NiInit to
+the end, then Main::Main, InitSceneGraph and InitTES's head; it stops in the
+input object's DirectInput8 set-up (a DirectInput8 platform layer is being built
+on the branch, like the Direct3D 9 one).
+
+**Ledger statuses that hide game code:** functions marked `platform` (162 ran,
+mostly BSSystem, BSSystemUtilities, BSMovie) or `library` (CRT, 596 ran) are not
+in the play queue. Some are game code: the tasklet manager (BSSystem) was
+corrected on the play-build branch (ledger `GAME_FUNCS` override). The CRT's
+per-thread data chain (`_LocaleUpdate`, `__getptd`) is being translated because
+strtol needs it. Deciding whether those whole categories need review is the
+maintainer's call.
+
+**PR #200 merged** (contributor's oracle: pointer arguments, per-vector time
+limit, RustStrayRead). Two lead fixes went into it: the engine side runs on a
+256 MB stack, and an exe stack overflow counts as stuck. Its full run found two
+real translation bugs, 00b14230 (an f32 exponent) and 00df2510 (NaN bits), which
+are queued (private `phase0/lists/fix`). The gate now leaves out those two plus
+00dd8e00 (hkSystemClock, reads the clock), 00e2f8c0/00e2f9f0 (the same divide
+fault, worded differently) and 00b15110/00e3ec00 (DataFlowMiss: the list misses
+a recursive pointer walk). The questions are with the contributor on #200.
+
+**Machine:** five translators plus the play-build agent ran overnight with no
+crash under the tightened compile queue (one big compile; one small beside it
+only with 16 GB free) and the watchdog.
+
+### Claude lead, 2026-10-19
+
+**Havok is translated:** all 9,011 Havok functions on the full ledger list
+(Ghidra-gap functions included). 739 of them keep a `Translation incomplete`
+marker, almost all for C++ exception frames (FS:[0]) or the /GS cookie check;
+every branch of their bodies is in. This PR carries the last ones: 00c95a80
+(hkpWorld constructor), 00d1a330, 00d28a30, 00d29bf0, 00d6f460 (all 29 atom
+types), 00d72190, 00d8d030 (hkSolveConstraints, block state machine), 00daf8e0,
+00def570 and the last ten smaller ones, plus the game's Havok glue (120,
+fallout shared/havok) and 009070a0 (LowProcess, a play-build blocker).
+Engine total 28,511 translated (41.0 % of 69,475), 72.3 % covered.
+
+**Notes on these batches:** 00def570 and its sister 00d9f6f0 panic where the
+exe spins forever (commands 4, 0x1c, above 0x1f). 00ca35f5 is a tail of
+getNextKey (00ca35d0) entered by a jump, registered with the registers it
+reads. 00cf9c60's writes to its own argument slots (scratch nobody reads) are
+not reproduced. The solver's `SolverMachine` (hkpsolver.rs) does x87 maths in
+plain f64: identical at the 53-bit precision the Havok thread runs at, except
+for the exponent range; revisit with the x87 helpers.
+
+**Machine:** the PC crashed twice on 2026-10-19 with ten agents running: a
+freeze, then a Windows bug check (0xC2 BAD_POOL_CALLER in audiodg.exe, an
+audio driver; WinDbg read the dump). Since then at most four agents run, the
+compile queue lets only one small compile beside a big one (16 GB free), the
+gate runs with `CARGO_BUILD_JOBS=1`, and a memory watchdog logs low memory.
+
+**Play build (branch `claude/build43-movement`, not pushed):** the Havok step
+runs on AI linear task thread 2 (committed). NiInit now gets past the IO
+thread and through NiMainSDM::Init. The player stage stops in
+MobileObject::InitHavok on the TES object at [011dea10]: TES::TES needs
+00c44980, 004ba280, 0084fc70, 00856380, 00c3da50 (being translated in slots
+a01 and a02).
+
+**Pending outside this PR:** a07's NiCollision batch (75 of 120, commit
+99ed8c98, parked: not Havok or the play build); a06's nv-pure `--fpcw` oracle
+option (3063abd3, branch parked/a06-fpcw-oracle, to land after #200); PR #200
+merged with main and its list regenerated in wt-pr200 (uncommitted), oracle
+check still to run.
+
+**Suggested next step:** record every function the real game runs while
+walking in Doc Mitchell's house (a tracer on the real exe, built on the
+nv-probe hooks) and compare it with the ledger, so the play build's missing
+functions can be handed out at once instead of one stop at a time.
+
+### Claude lead, 2026-10-18 evening
 
 Stopped at 93 % weekly usage (95-96 % rule). Maintainer priority: **finish
 Havok, then only the next play build (the game's own physics and movement in

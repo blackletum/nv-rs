@@ -43,6 +43,24 @@ pub fn allocate(
     Ptr::new(buffer)
 }
 
+// Translated from 00aa22b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSNiAllocator::Deallocate` (engine map; thiscall, `RET 0xc`, `this` and the third word
+/// unread): frees `memory` through the memory manager (`00aa4060` on `011f6238`); for kind 10
+/// the block starts the byte stored just before `memory` earlier (and a null `memory` frees
+/// nothing).
+pub fn deallocate(e: &mut Engine, _this: Ptr, memory: Ptr, kind: u32, _unused_3: u32) {
+    if kind == 10 {
+        if memory.addr() == 0 {
+            return;
+        }
+        let adjustment = u32::from(e.mem.u8(memory.addr().wrapping_sub(1)));
+        let block = memory.addr().wrapping_sub(adjustment);
+        e.call(0x00aa_4060, &args![0x011f_6238u32, block]);
+        return;
+    }
+    e.call(0x00aa_4060, &args![0x011f_6238u32, memory]);
+}
+
 /// The memory manager (`011f6238`) and its free (`00aa4060`, `thiscall`, one word), aligned
 /// reallocate (`00aa4150`, two words) and reallocate (`00aa4200`, five words).
 const MEMORY_MANAGER: u32 = 0x011f_6238;
@@ -68,15 +86,6 @@ fn free_by_kind(e: &mut Engine, block: u32, kind: u32, aligned_kind: u32) {
     } else {
         e.call(MM_FREE, &args![MEMORY_MANAGER, block]);
     }
-}
-
-// Translated from 00aa22b0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// `BSNiAllocator::Deallocate` (engine map; `thiscall`, `ECX` unused, three stack words,
-/// `RET 0xc`: block, kind, size): kind 10 (the aligned blocks `Allocate` makes for kind 7)
-/// frees from the start the adjustment byte before the block gives; others free the block
-/// through the memory manager (`00aa4060`).
-pub fn deallocate(e: &mut Engine, _this: Ptr, block: u32, kind: u32, _size: u32) {
-    free_by_kind(e, block, kind, 10);
 }
 
 // Translated from 00aa23e0 (disassembled, FalloutNV.exe 1.4.0.525)
@@ -161,7 +170,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00aa2240,
             allocate(Ptr, Ptr<u32>, Ptr<u8>, u32, u32, u32, u32, u32) -> Ptr
         ),
-        entry!(0x00aa_22b0, deallocate(Ptr, u32, u32, u32)),
+        entry!(0x00aa_22b0, deallocate(Ptr, Ptr, u32, u32)),
         entry!(0x00aa_23e0, deallocate_external(Ptr, u32, u32, u32)),
         entry!(
             0x00aa_22f0,
@@ -223,6 +232,36 @@ mod tests {
             assert_eq!(e.mem.bytes(result, 5), [0; 5]);
             assert_eq!(e.mem.u8(result + 5), 0xcc);
         }
+    }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
+
+    fn frees(e: &mut Engine, memory: u32, kind: u32) -> Vec<Vec<u32>> {
+        e.register(0x00aa_4060, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_22b0, &args![0x1234u32, memory, kind, 0x40u32]);
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x00aa_4060)
+            .map(|(_, w)| w)
+            .collect()
+    }
+
+    #[test]
+    fn deallocate_frees_through_the_memory_manager() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x20);
+        assert_eq!(frees(&mut e, block, 3), vec![vec![0x011f_6238, block]]);
+        assert_eq!(frees(&mut e, 0, 3), vec![vec![0x011f_6238, 0]]);
+        // Kind 10: the adjustment byte before the memory gives the block's start.
+        e.mem.set_u8(block + 5, 6);
+        assert_eq!(frees(&mut e, block + 6, 10), vec![vec![0x011f_6238, block]]);
+        assert!(frees(&mut e, 0, 10).is_empty());
     }
 }
 
