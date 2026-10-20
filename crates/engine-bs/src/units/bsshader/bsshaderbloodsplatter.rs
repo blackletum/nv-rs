@@ -116,7 +116,7 @@ const OUTPUT_BSF_PSO_010AF6EC: u32 = 0x010a_f6ec;
 const PROFILE_VS_1_1_010A93EC: u32 = 0x010a_93ec;
 const PROFILE_PS_2_A_010A93C4: u32 = 0x010a_93c4;
 
-/// The source blocks of `LoadShaders`' frame (0x33c bytes), in the order the exe fills them.
+/// The source blocks of `LoadShaders`' frame (0x34c bytes up to the return address), in the order the exe fills them.
 const LOAD_SHADERS_SOURCES: [ShaderSource; 4] = [
     ShaderSource {
         offset: 0xa8,
@@ -198,7 +198,7 @@ const LOAD_SHADERS_STEPS: [ShaderCompile; 4] = [
 /// (`00be1750`), the result assigned to the pointer.
 // Translation incomplete: 00b80090 - the /GS stack cookie check (00ec408c) is not translated.
 pub fn bs_shader_blood_splatter_load_shaders(e: &mut Engine, this: Ptr) {
-    e.with_stack(0x33c, |e, frame| {
+    e.with_stack(0x34c, |e, frame| {
         set_up_sources(e, frame.addr(), &LOAD_SHADERS_SOURCES);
         compile_shaders(
             e,

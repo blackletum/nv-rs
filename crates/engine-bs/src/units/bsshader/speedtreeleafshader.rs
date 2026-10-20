@@ -87,9 +87,62 @@ pub fn fn_00bb2a00(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The render-state block release `00e7f6b0` (unnamed, `cdecl`, the block).
+const RELEASE_RENDER_STATES_00E7F6B0: u32 = 0x00e7_f6b0;
+
+/// A new render-state block for the pass (`00e7f5d0`), the old one at +0x30 released through
+/// `00e7f6b0` when it differs.
+fn renew_render_states(e: &mut Engine, pass: u32) {
+    let block = e.call(NEW_RENDER_STATES_00E7F5D0, &args![]).u32();
+    let old = e.mem.u32(pass + 0x30);
+    if old != block {
+        e.call(RELEASE_RENDER_STATES_00E7F6B0, &args![old]);
+    }
+    e.mem.set_u32(pass + 0x30, block);
+}
+
+// Translated from 00bb1d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `speedtreeleafshader.cpp`): the leaf shader's stages and
+/// passes (the creator `00bb2c00` calls it), `thiscall`, no stack words. For the pass pointers
+/// at +0x384 and +0x388 in turn: a new pass (`00e804d0`), a stage made into the same stack
+/// pointer (`CreateNewStage`; the first stage is not dropped before the second is made),
+/// `SetupDefaultStage` index 0 with 1, 2, 1 and no filter mode, `SetStage` with the pass's
+/// word at +0x14, a new render-state block (the old one released when it differs), the
+/// vertex shader (+0x370 for the first pass, +0x378 for the second) assigned to the pass's
+/// +0x5c and the pixel shader +0x380 to its +0x44. Finally the stage reference is dropped.
+// Translation incomplete: 00bb1d40 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00bb1d40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        for (pass_offset, vertex) in [(0x384u32, 0x370u32), (0x388, 0x378)] {
+            let slot = base + pass_offset;
+            e.call(NEW_PASS_00E804D0, &args![slot]);
+            e.call(CREATE_NEW_STAGE, &args![local]);
+            let stage = e.mem.u32(local);
+            e.call(SETUP_DEFAULT_STAGE, &args![stage, 0u32, 1u32, 2u32, 1u32]);
+            let pass = e.mem.u32(slot);
+            let stage = e.mem.u32(local);
+            let position = e.mem.u32(pass + 0x14);
+            e.call(PASS_SET_STAGE, &args![pass, position, stage]);
+            let pass = e.mem.u32(slot);
+            renew_render_states(e, pass);
+            let pass = e.mem.u32(slot);
+            let shader = e.mem.u32(base + vertex);
+            ni_pointer_assign(e, pass + 0x5c, shader);
+            let pass = e.mem.u32(slot);
+            let shader = e.mem.u32(base + 0x380);
+            ni_pointer_assign(e, pass + 0x44, shader);
+        }
+        let stage = e.mem.u32(local);
+        stage_release(e, stage);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_1d40, fn_00bb1d40(Ptr)),
         entry!(0x00bb_2a00, fn_00bb2a00(Ptr) -> Ptr),
         entry!(0x00bb_2c00, fn_00bb2c00() -> Ptr),
     ]
@@ -159,5 +212,52 @@ mod constructor_tests {
             assert_eq!(e.global::<u32>(FLOATS_01200638 + 4 * index), 0x3f80_0000);
             assert_eq!(e.global::<u32>(FLOATS_01200638 + 0x20 + 4 * index), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod stages_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bb1d40_builds_two_passes() {
+        let mut e = pass_rig();
+        e.register(RELEASE_RENDER_STATES_00E7F6B0, |_, _| Ret::default());
+        let this = e.mem.alloc(0x390);
+        let shaders: Vec<u32> = (0..3).map(|_| object(&mut e, 1)).collect();
+        e.mem.set_u32(this + 0x370, shaders[0]);
+        e.mem.set_u32(this + 0x378, shaders[1]);
+        e.mem.set_u32(this + 0x380, shaders[2]);
+        e.call(SHADER_METHOD_00BB1D40, &args![this]);
+        assert_eq!(
+            calls(&e, NEW_PASS_00E804D0),
+            vec![vec![this + 0x384], vec![this + 0x388]]
+        );
+        let first = e.mem.u32(this + 0x384);
+        let second = e.mem.u32(this + 0x388);
+        let setups = calls(&e, SETUP_DEFAULT_STAGE);
+        assert_eq!(setups.len(), 2);
+        for setup in &setups {
+            assert_eq!(setup[1..], [0, 1, 2, 1]);
+        }
+        assert!(calls(&e, SET_FILTER_MODE).is_empty());
+        for pass in [first, second] {
+            assert_ne!(e.mem.u32(pass + 0x30), 0);
+        }
+        // The pass rig's passes start without a block: the null one is released.
+        assert_eq!(
+            calls(&e, RELEASE_RENDER_STATES_00E7F6B0),
+            vec![vec![0], vec![0]]
+        );
+        assert_eq!(e.mem.u32(first + 0x5c), shaders[0]);
+        assert_eq!(e.mem.u32(second + 0x5c), shaders[1]);
+        assert_eq!(e.mem.u32(first + 0x44), shaders[2]);
+        assert_eq!(e.mem.u32(second + 0x44), shaders[2]);
+        assert_eq!(e.mem.u32(shaders[2] + 4), 3);
+        // Only the second stage is dropped: the first keeps its own count and its pass's.
+        let set = calls(&e, PASS_SET_STAGE);
+        assert_eq!(e.mem.u32(set[0][2] + 0x60), 2);
+        assert_eq!(e.mem.u32(set[1][2] + 0x60), 1);
     }
 }

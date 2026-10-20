@@ -50,9 +50,58 @@ pub fn sky_shader_create_shader(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The sky shader's vtable (`010afe18`; no RTTI locator before it).
+const SKY_SHADER_VTABLE_010AFE18: u32 = 0x010a_fe18;
+/// The four words copied (`011a9bd0`) and the seven four-word blocks they go to, in the
+/// exe's order of their first words.
+const COLOR_011A9BD0: u32 = 0x011a_9bd0;
+const COLOR_BLOCKS: [u32; 7] = [
+    0x011f_f910,
+    0x011f_f920,
+    0x011f_f930,
+    0x011f_f8e0,
+    0x011f_f8f0,
+    0x011f_f900,
+    0x011f_f8c8,
+];
+
+// Translated from 00b8a1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SkyShader::SkyShader` (Xbox PDB), `thiscall`, no stack words. Runs `BSShader::BSShader`
+/// (`00be2200`), stores the vtable `010afe18`, constructs the `NiPointer` arrays at +0x6c (0xb,
+/// destructor `00b79930`), +0x98 (0xb) and +0xc4 (8; destructor `00b66f20`), sets +0x68 to
+/// 0xb, copies the four words at `011a9bd0` into each of the blocks at `011ff910`,
+/// `011ff920`, `011ff930`, `011ff8e0`, `011ff8f0`, `011ff900` and `011ff8c8`, and sets the
+/// byte +0x24 to 1. Answers `this`.
+// Translation incomplete: 00b8a1f0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 for the base and the arrays) is not translated.
+pub fn sky_shader_sky_shader(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, SKY_SHADER_VTABLE_010AFE18);
+    construct_pointer_array(e, base + 0x6c, 0xb, DESTRUCT_00B79930);
+    construct_pointer_array(e, base + 0x98, 0xb, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0xc4, 8, DESTRUCT_00B66F20);
+    e.mem.set_u32(base + 0x68, 0xb);
+    let color = [0u32, 4, 8, 0xc].map(|offset| e.global::<u32>(COLOR_011A9BD0 + offset));
+    for block in COLOR_BLOCKS {
+        e.set_global::<u32>(block, color[0]);
+    }
+    for block in COLOR_BLOCKS {
+        for word in 1..4u32 {
+            e.set_global::<u32>(block + 4 * word, color[word as usize]);
+        }
+    }
+    e.mem.set_u8(base + 0x24, 1);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b8_a390, sky_shader_create_shader() -> Ptr)]
+    vec![
+        entry!(0x00b8_a1f0, sky_shader_sky_shader(Ptr) -> Ptr),
+        entry!(0x00b8_a390, sky_shader_create_shader() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -83,5 +132,49 @@ mod tests {
                 (shader_slot(0xc0), vec![SHADER, d]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn sky_shader_constructor_builds_the_shader_and_copies_the_color() {
+        let mut e = rig();
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x011f_f000, 0x1000);
+        for word in 0..4u32 {
+            e.set_global::<u32>(COLOR_011A9BD0 + 4 * word, 0x30 + word);
+        }
+        let this = e.mem.alloc(0xe4);
+        assert_eq!(e.call(CONSTRUCT, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), SKY_SHADER_VTABLE_010AFE18);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 0xb, DESTRUCT_00B79930),
+                pointer_array(this + 0x98, 0xb, DESTRUCT_00B66F20),
+                pointer_array(this + 0xc4, 8, DESTRUCT_00B66F20),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x68), 0xb);
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        for block in [
+            0x011f_f8c8u32,
+            0x011f_f8e0,
+            0x011f_f8f0,
+            0x011f_f900,
+            0x011f_f910,
+            0x011f_f920,
+            0x011f_f930,
+        ] {
+            for word in 0..4u32 {
+                assert_eq!(e.global::<u32>(block + 4 * word), 0x30 + word);
+            }
+        }
+        assert_eq!(e.global::<u32>(0x011f_f8d8), 0);
     }
 }

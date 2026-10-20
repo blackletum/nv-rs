@@ -93,9 +93,43 @@ pub fn fn_00bd2b60(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00bd2d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd2b60`): shader 5's stages and passes (the creator
+/// `00bd2e70` calls it after the vtable slot +0x13c), `thiscall`, no stack words. Gives the
+/// pass pointer at +0x84 a new pass (`00e804d0`); makes one texture stage (`CreateNewStage`
+/// into a stack pointer, `SetupDefaultStage` with index 0 and 3, 2, 1, no filter mode) and puts
+/// it on the pass (`NiD3DPass::SetStage` with the pass's word at +0x14); assigns the shader's
+/// +0x6c to the pass's vertex shader `NiPointer` (+0x5c) and +0x7c to its pixel shader
+/// `NiPointer` (+0x44); then drops the stage reference.
+// Translation incomplete: 00bd2d50 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00bd2d50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let slot = base + 0x84;
+    e.call(NEW_PASS_00E804D0, &args![slot]);
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.call(CREATE_NEW_STAGE, &args![local]);
+        let stage = e.mem.u32(local);
+        e.call(SETUP_DEFAULT_STAGE, &args![stage, 0u32, 3u32, 2u32, 1u32]);
+        let pass = e.mem.u32(slot);
+        let stage = e.mem.u32(local);
+        let position = e.mem.u32(pass + 0x14);
+        e.call(PASS_SET_STAGE, &args![pass, position, stage]);
+        let pass = e.mem.u32(slot);
+        let vertex = e.mem.u32(base + 0x6c);
+        ni_pointer_assign(e, pass + 0x5c, vertex);
+        let pass = e.mem.u32(slot);
+        let pixel = e.mem.u32(base + 0x7c);
+        ni_pointer_assign(e, pass + 0x44, pixel);
+        let stage = e.mem.u32(local);
+        stage_release(e, stage);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bd_2d50, fn_00bd2d50(Ptr)),
         entry!(0x00bd_2b60, fn_00bd2b60(Ptr) -> Ptr),
         entry!(0x00bd_2e70, fn_00bd2e70() -> Ptr),
     ]
@@ -162,5 +196,37 @@ mod constructor_tests {
             assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
         }
         assert_eq!(e.mem.u32(this + 0x68), 8);
+    }
+}
+
+#[cfg(test)]
+mod stages_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bd2d50_builds_one_pass_with_one_stage() {
+        let mut e = pass_rig();
+        let this = e.mem.alloc(0xa8);
+        let vertex = object(&mut e, 1);
+        let pixel = object(&mut e, 1);
+        e.mem.set_u32(this + 0x6c, vertex);
+        e.mem.set_u32(this + 0x7c, pixel);
+        e.call(SHADER_METHOD_00BD2D50, &args![this]);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0), vec![vec![this + 0x84]]);
+        let pass = e.mem.u32(this + 0x84);
+        let set = calls(&e, PASS_SET_STAGE);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0][..2], [pass, 0]);
+        let stage = set[0][2];
+        assert_eq!(
+            calls(&e, SETUP_DEFAULT_STAGE),
+            vec![vec![stage, 0, 3, 2, 1]]
+        );
+        assert!(calls(&e, SET_FILTER_MODE).is_empty());
+        assert_eq!(e.mem.u32(stage + 0x60), 1);
+        assert_eq!(e.mem.u32(pass + 0x5c), vertex);
+        assert_eq!(e.mem.u32(pass + 0x44), pixel);
+        assert_eq!(e.mem.u32(vertex + 4), 2);
     }
 }

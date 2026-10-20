@@ -724,9 +724,190 @@ pub fn fn_00e804d0(e: &mut Engine, slot: Ptr) {
     }
 }
 
+use shader_inline::{
+    compile_shaders, construct_pointer_array, ni_pointer_clear, pass_pointer_clear,
+    release_reference, set_up_sources, ShaderBuffers, ShaderCompile, ShaderSource,
+    BS_SHADER_CONSTRUCT, DESTRUCT_00B66F20, DESTRUCT_00B79930,
+};
+
+/// The geometry decal shader's vtable (`010bb588`; no RTTI locator before it).
+const GEOMETRY_DECAL_VTABLE_010BB588: u32 = 0x010b_b588;
+
+// Translated from 00bcbf00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GeometryDecalShader::GeometryDecalShader` (Xbox PDB), `thiscall`, no stack words. Runs
+/// `BSShader::BSShader` (`00be2200`), stores the vtable `010bb588`, constructs the `NiPointer`
+/// arrays at +0x6c (2, destructor `00b79930`), +0x74 and +0x7c (2 each, destructor
+/// `00b66f20`), clears the words +0x84, +0x88, +0x8c, sets +0x68 to 0xc and the byte +0x24 to
+/// 1, clears (releasing what they hold) the `NiPointer`s at +0x84, +0x88 and +0x8c and the two
+/// pass pointers at +0x6c (their counts at +0x64 dropped, `00e80190` at 0). Answers `this`.
+// Translation incomplete: 00bcbf00 - the C++ exception frame (FS:[0] chain, unwind states 0 to 6 for the base and the arrays) is not translated.
+pub fn geometry_decal_shader_geometry_decal_shader(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, GEOMETRY_DECAL_VTABLE_010BB588);
+    construct_pointer_array(e, base + 0x6c, 2, DESTRUCT_00B79930);
+    construct_pointer_array(e, base + 0x74, 2, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x7c, 2, DESTRUCT_00B66F20);
+    for offset in [0x84u32, 0x88, 0x8c] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u32(base + 0x68, 0xc);
+    e.mem.set_u8(base + 0x24, 1);
+    for offset in [0x84u32, 0x88, 0x8c] {
+        ni_pointer_clear(e, base + offset);
+    }
+    for index in 0..2u32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    this
+}
+
+/// Strings of `LoadShaders` (read in Ghidra): `"lighting\\2x\\v\\decal.v.hlsl"` (`010bb728`),
+/// `"lighting\\2x\\p\\decal.p.hlsl"` (`010bb6d4`), the macros `"DECAL"` (`010bb720`),
+/// `"GEOMDECAL"` (`010bb714`) with `""` (`01011584`), `"MAXDECALS"` (`010bb708`) with `"1"`
+/// (`01063f48`) and `"SKIN"` (`010aec10`) with `""`, the compiled names `"GDECAL.vso"`,
+/// `"GDECALS.vso"`, `"GDECAL.pso"` and the vertex profile `"vs_1_1"` (`010a93ec`).
+const DECAL_VERTEX_SOURCE_010BB728: u32 = 0x010b_b728;
+const DECAL_PIXEL_SOURCE_010BB6D4: u32 = 0x010b_b6d4;
+const MACRO_DECAL_010BB720: u32 = 0x010b_b720;
+const MACRO_GEOMDECAL_010BB714: u32 = 0x010b_b714;
+const MACRO_MAXDECALS_010BB708: u32 = 0x010b_b708;
+const MACRO_SKIN_010AEC10: u32 = 0x010a_ec10;
+const DECAL_EMPTY_STRING_01011584: u32 = 0x0101_1584;
+const DECAL_ONE_STRING_01063F48: u32 = 0x0106_3f48;
+const OUTPUT_GDECAL_VSO_010BB6FC: u32 = 0x010b_b6fc;
+const OUTPUT_GDECALS_VSO_010BB6F0: u32 = 0x010b_b6f0;
+const OUTPUT_GDECAL_PSO_010BB6C8: u32 = 0x010b_b6c8;
+const DECAL_PROFILE_VS_1_1_010A93EC: u32 = 0x010a_93ec;
+/// The pixel profile chooser `00b4f380` (unit `bsshadermanager.cpp`, unnamed; `cdecl`, a
+/// byte).
+const DECAL_PIXEL_PROFILE_00B4F380: u32 = 0x00b4_f380;
+
+/// The source blocks of `LoadShaders`' frame (0x300 bytes up to the return address).
+const DECAL_VERTEX_BLOCK: ShaderSource = ShaderSource {
+    offset: 0xa8,
+    words: &[
+        DECAL_VERTEX_SOURCE_010BB728,
+        MACRO_DECAL_010BB720,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_GEOMDECAL_010BB714,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_MAXDECALS_010BB708,
+        DECAL_ONE_STRING_01063F48,
+        0,
+    ],
+    cleared: 0x2c,
+};
+/// The skinned vertex block: every word stored by `MOV`, the ten after the pairs as zeros.
+const DECAL_SKINNED_VERTEX_BLOCK: ShaderSource = ShaderSource {
+    offset: 0x10,
+    words: &[
+        DECAL_VERTEX_SOURCE_010BB728,
+        MACRO_DECAL_010BB720,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_GEOMDECAL_010BB714,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_MAXDECALS_010BB708,
+        DECAL_ONE_STRING_01063F48,
+        MACRO_SKIN_010AEC10,
+        DECAL_EMPTY_STRING_01011584,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ],
+    cleared: 0,
+};
+const DECAL_PIXEL_BLOCK: ShaderSource = ShaderSource {
+    offset: 0x5c,
+    words: &[
+        DECAL_PIXEL_SOURCE_010BB6D4,
+        MACRO_DECAL_010BB720,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_GEOMDECAL_010BB714,
+        DECAL_EMPTY_STRING_01011584,
+        MACRO_MAXDECALS_010BB708,
+        DECAL_ONE_STRING_01063F48,
+        0,
+    ],
+    cleared: 0x2c,
+};
+const DECAL_LOAD_SHADERS_BUFFERS: ShaderBuffers = ShaderBuffers {
+    name: 0xf4,
+    path: 0x1f8,
+};
+
+// Translated from 00bcb4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GeometryDecalShader::LoadShaders` (Xbox PDB), `thiscall`, no stack words. Fills each source
+/// block on its stack just before its compile (the macros `DECAL`, `GEOMDECAL` = `""` and
+/// `MAXDECALS` = `"1"`): the vertex file `decal.v.hlsl` as `"GDECAL.vso"` (`vs_1_1`) into the
+/// `NiPointer` at +0x74; the same with `SKIN` = `""` as `"GDECALS.vso"` into +0x78; then, with
+/// the pixel profile from `00b4f380(1)`, the pixel file `decal.p.hlsl` as `"GDECAL.pso"` into
+/// +0x7c; finally the `NiPointer` at +0x80 is assigned what +0x7c holds (read again after the
+/// old object's release). Each step: `MakePath`, the name copied by `00406d00`, the compile,
+/// the assignment.
+// Translation incomplete: 00bcb4d0 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn geometry_decal_shader_load_shaders(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(0x300, |e, frame| {
+        let frame = frame.addr();
+        let buffers = &DECAL_LOAD_SHADERS_BUFFERS;
+        set_up_sources(e, frame, &[DECAL_VERTEX_BLOCK]);
+        let vertex = ShaderCompile {
+            source: 0xa8,
+            output: OUTPUT_GDECAL_VSO_010BB6FC,
+            profile: DECAL_PROFILE_VS_1_1_010A93EC,
+            pixel: false,
+            slot: 0x74,
+        };
+        compile_shaders(e, base, frame, buffers, &[vertex]);
+        set_up_sources(e, frame, &[DECAL_SKINNED_VERTEX_BLOCK]);
+        let skinned = ShaderCompile {
+            source: 0x10,
+            output: OUTPUT_GDECALS_VSO_010BB6F0,
+            profile: DECAL_PROFILE_VS_1_1_010A93EC,
+            pixel: false,
+            slot: 0x78,
+        };
+        compile_shaders(e, base, frame, buffers, &[skinned]);
+        let profile = e.call(DECAL_PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        set_up_sources(e, frame, &[DECAL_PIXEL_BLOCK]);
+        let pixel = ShaderCompile {
+            source: 0x5c,
+            output: OUTPUT_GDECAL_PSO_010BB6C8,
+            profile,
+            pixel: true,
+            slot: 0x7c,
+        };
+        compile_shaders(e, base, frame, buffers, &[pixel]);
+    });
+    let old = e.mem.u32(base + 0x80);
+    if old != e.mem.u32(base + 0x7c) {
+        if old != 0 {
+            release_reference(e, old);
+        }
+        let shader = e.mem.u32(base + 0x7c);
+        e.mem.set_u32(base + 0x80, shader);
+        if shader != 0 {
+            e.call(
+                shader_inline::IMPORT_INTERLOCKED_INCREMENT,
+                &args![shader + 4],
+            );
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bc_bf00, geometry_decal_shader_geometry_decal_shader(Ptr) -> Ptr),
+        entry!(0x00bc_b4d0, geometry_decal_shader_load_shaders(Ptr)),
         entry!(0x00e8_04d0, fn_00e804d0(Ptr)),
         entry!(
             0x00bc_c0a0,
@@ -898,5 +1079,102 @@ mod new_pass_tests {
         assert_eq!(e.mem.u32(pass + 0x64), 1);
         assert!(calls(&e, RELEASE_RENDER_STATES_00E7F6B0).is_empty());
         assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod constructor_and_loader_tests {
+    use super::shader_inline::*;
+    use super::shader_test_rig::*;
+    use super::*;
+
+    #[test]
+    fn geometry_decal_shader_constructor_builds_the_shader() {
+        let mut e = rig();
+        let this = e.mem.alloc(0x90);
+        e.mem.write(this, &[0xcc; 0x90]);
+        assert_eq!(e.call(CONSTRUCT, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), GEOMETRY_DECAL_VTABLE_010BB588);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 2, DESTRUCT_00B79930),
+                pointer_array(this + 0x74, 2, DESTRUCT_00B66F20),
+                pointer_array(this + 0x7c, 2, DESTRUCT_00B66F20),
+            ]
+        );
+        for offset in [0x6cu32, 0x70, 0x84, 0x88, 0x8c] {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x68), 0xc);
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
+    }
+
+    #[test]
+    fn geometry_decal_shader_load_shaders_compiles_three_shaders_and_shares_the_pixel_one() {
+        const PROFILE: u32 = 0x0ee0_0000;
+        let mut e = loader_rig();
+        e.register(DECAL_PIXEL_PROFILE_00B4F380, |_, a| {
+            assert_eq!(a[0], 1);
+            PROFILE.into_ret()
+        });
+        let this = e.mem.alloc(0x90);
+        let old = object(&mut e, 1);
+        e.mem.set_u32(this + 0x80, old);
+        e.call(LOAD_SHADERS, &args![this]);
+        let decal = [
+            (MACRO_DECAL_010BB720, DECAL_EMPTY_STRING_01011584),
+            (MACRO_GEOMDECAL_010BB714, DECAL_EMPTY_STRING_01011584),
+            (MACRO_MAXDECALS_010BB708, DECAL_ONE_STRING_01063F48),
+        ];
+        let mut skinned = decal.to_vec();
+        skinned.push((MACRO_SKIN_010AEC10, DECAL_EMPTY_STRING_01011584));
+        let expected = [
+            (
+                0x74u32,
+                DECAL_VERTEX_SOURCE_010BB728,
+                OUTPUT_GDECAL_VSO_010BB6FC,
+                DECAL_PROFILE_VS_1_1_010A93EC,
+                false,
+                macro_words(&decal),
+            ),
+            (
+                0x78,
+                DECAL_VERTEX_SOURCE_010BB728,
+                OUTPUT_GDECALS_VSO_010BB6F0,
+                DECAL_PROFILE_VS_1_1_010A93EC,
+                false,
+                macro_words(&skinned),
+            ),
+            (
+                0x7c,
+                DECAL_PIXEL_SOURCE_010BB6D4,
+                OUTPUT_GDECAL_PSO_010BB6C8,
+                PROFILE,
+                true,
+                macro_words(&decal),
+            ),
+        ];
+        for (slot, file, output, profile, pixel, macros) in expected {
+            let shader = e.mem.u32(this + slot);
+            assert_eq!(
+                compiled(&e, shader),
+                Compiled {
+                    file,
+                    output,
+                    profile,
+                    pixel,
+                    macros
+                }
+            );
+        }
+        let pixel = e.mem.u32(this + 0x7c);
+        assert_eq!(e.mem.u32(this + 0x80), pixel);
+        assert_eq!(e.mem.u32(pixel + 4), 2);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
+        let cleared: Vec<u32> = calls(&e, MEMSET).iter().map(|a| a[2]).collect();
+        assert_eq!(cleared, vec![0x2c, 0x2c]);
     }
 }

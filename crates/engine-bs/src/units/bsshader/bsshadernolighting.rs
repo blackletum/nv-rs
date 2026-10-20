@@ -138,12 +138,83 @@ pub fn bs_shader_no_lighting_create_shader(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The shader's vtable (`010bb230`; no RTTI locator before it).
+const NO_LIGHTING_VTABLE_010BB230: u32 = 0x010b_b230;
+/// The four words copied (`011a9be0` into `01202010`).
+const COLOR_011A9BE0: u32 = 0x011a_9be0;
+const COLOR_01202010: u32 = 0x0120_2010;
+
+// Translated from 00bc8f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderNoLighting::BSShaderNoLighting` (Xbox PDB), `thiscall` with twelve stack words
+/// (`RET 0x30`), the twelve declarations. Runs `BSShader::BSShader` (`00be2200`), stores the
+/// vtable `010bb230`, constructs the `NiPointer` arrays at +0x6c (0x1e, destructor
+/// `00b79930`), +0xe4 (0x1c) and +0x154 (7; destructor `00b66f20`), clears +0x184 to +0x1b0,
+/// sets +0x68 to 0x16, assigns the declarations in order to the `NiPointer`s at +0x184 to
+/// +0x1b0, copies the four words at `011a9be0` to `01202010` and clears +0x170. Answers
+/// `this`.
+// Translation incomplete: 00bc8f80 - the C++ exception frame (FS:[0] chain, unwind states 0 to 0xf for the base and the arrays) is not translated.
+pub fn bs_shader_no_lighting_bs_shader_no_lighting(
+    e: &mut Engine,
+    this: Ptr,
+    declaration_0: Ptr,
+    declaration_1: Ptr,
+    declaration_2: Ptr,
+    declaration_3: Ptr,
+    declaration_4: Ptr,
+    declaration_5: Ptr,
+    declaration_6: Ptr,
+    declaration_7: Ptr,
+    declaration_8: Ptr,
+    declaration_9: Ptr,
+    declaration_10: Ptr,
+    declaration_11: Ptr,
+) -> Ptr {
+    let declarations = [
+        declaration_0,
+        declaration_1,
+        declaration_2,
+        declaration_3,
+        declaration_4,
+        declaration_5,
+        declaration_6,
+        declaration_7,
+        declaration_8,
+        declaration_9,
+        declaration_10,
+        declaration_11,
+    ];
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, NO_LIGHTING_VTABLE_010BB230);
+    construct_pointer_array(e, base + 0x6c, 0x1e, DESTRUCT_00B79930);
+    construct_pointer_array(e, base + 0xe4, 0x1c, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x154, 7, DESTRUCT_00B66F20);
+    for index in 0..12u32 {
+        e.mem.set_u32(base + 0x184 + 4 * index, 0);
+    }
+    e.mem.set_u32(base + 0x68, 0x16);
+    for (index, declaration) in declarations.iter().enumerate() {
+        ni_pointer_assign(e, base + 0x184 + 4 * index as u32, declaration.addr());
+    }
+    for word in [0u32, 8, 4, 0xc] {
+        let value = e.global::<u32>(COLOR_011A9BE0 + word);
+        e.set_global::<u32>(COLOR_01202010 + word, value);
+    }
+    e.mem.set_u32(base + 0x170, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00bc_93c0,
-        bs_shader_no_lighting_create_shader() -> Ptr
-    )]
+    vec![
+        entry!(0x00bc_8f80, bs_shader_no_lighting_bs_shader_no_lighting(Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00bc_93c0,
+            bs_shader_no_lighting_create_shader() -> Ptr
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -235,5 +306,46 @@ mod tests {
         want.push((shader_slot(0x11c), vec![SHADER]));
         want.push((shader_slot(0xc0), vec![SHADER, d(0)]));
         assert_eq!(log, want);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn bs_shader_no_lighting_constructor_keeps_the_twelve_declarations() {
+        let mut e = rig();
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x0120_2000, 0x1000);
+        for index in 0..4u32 {
+            e.set_global::<u32>(COLOR_011A9BE0 + 4 * index, 0x60 + index);
+        }
+        let this = e.mem.alloc(0x1b4);
+        e.mem.write(this, &[0xcc; 0x1b4]);
+        let declarations: Vec<u32> = (0..12).map(|_| object(&mut e, 0)).collect();
+        let mut words = vec![this];
+        words.extend_from_slice(&declarations);
+        assert_eq!(e.call(CONSTRUCT, &words).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), NO_LIGHTING_VTABLE_010BB230);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 0x1e, DESTRUCT_00B79930),
+                pointer_array(this + 0xe4, 0x1c, DESTRUCT_00B66F20),
+                pointer_array(this + 0x154, 7, DESTRUCT_00B66F20),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x68), 0x16);
+        for (index, declaration) in declarations.iter().enumerate() {
+            assert_eq!(e.mem.u32(this + 0x184 + 4 * index as u32), *declaration);
+            assert_eq!(e.mem.u32(declaration + 4), 1);
+        }
+        for index in 0..4u32 {
+            assert_eq!(e.global::<u32>(COLOR_01202010 + 4 * index), 0x60 + index);
+        }
+        assert_eq!(e.mem.u32(this + 0x170), 0);
     }
 }

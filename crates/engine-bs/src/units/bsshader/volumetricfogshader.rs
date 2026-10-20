@@ -43,12 +43,40 @@ pub fn volumetric_fog_shader_create_shader(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The volumetric fog shader's vtable (`010baf60`; no RTTI locator before it).
+const VOLUMETRIC_FOG_VTABLE_010BAF60: u32 = 0x010b_af60;
+
+// Translated from 00bc58a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VolumetricFogShader::VolumetricFogShader` (Xbox PDB), `thiscall`, no stack words. Runs
+/// `BSShader::BSShader` (`00be2200`), stores the vtable `010baf60`, constructs the `NiPointer`
+/// arrays at +0x6c (3, destructor `00b79930`), +0x78 and +0x80 (2 each, destructor
+/// `00b66f20`), stores 0.0 at +0x88 to +0xa4 and sets +0x68 to 0x13. Answers `this`.
+// Translation incomplete: 00bc58a0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 for the base and the arrays) is not translated.
+pub fn volumetric_fog_shader_volumetric_fog_shader(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, VOLUMETRIC_FOG_VTABLE_010BAF60);
+    construct_pointer_array(e, base + 0x6c, 3, DESTRUCT_00B79930);
+    construct_pointer_array(e, base + 0x78, 2, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x80, 2, DESTRUCT_00B66F20);
+    for offset in (0x88u32..=0xa4).step_by(4) {
+        e.mem.set_f32(base + offset, 0.0);
+    }
+    e.mem.set_u32(base + 0x68, 0x13);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00bc_59b0,
-        volumetric_fog_shader_create_shader() -> Ptr
-    )]
+    vec![
+        entry!(0x00bc_58a0, volumetric_fog_shader_volumetric_fog_shader(Ptr) -> Ptr),
+        entry!(
+            0x00bc_59b0,
+            volumetric_fog_shader_create_shader() -> Ptr
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -77,5 +105,33 @@ mod tests {
                 (shader_slot(0xc0), vec![SHADER, d]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn volumetric_fog_shader_constructor_builds_the_shader() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xa8);
+        e.mem.write(this, &[0xcc; 0xa8]);
+        assert_eq!(e.call(CONSTRUCT, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), VOLUMETRIC_FOG_VTABLE_010BAF60);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 3, DESTRUCT_00B79930),
+                pointer_array(this + 0x78, 2, DESTRUCT_00B66F20),
+                pointer_array(this + 0x80, 2, DESTRUCT_00B66F20),
+            ]
+        );
+        for offset in (0x88u32..=0xa4).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x68), 0x13);
     }
 }
