@@ -41,6 +41,27 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    fn GetWindowsDirectoryA(buffer: *mut u8, size: u32) -> u32;
+}
+#[link(name = "shell32")]
+extern "system" {
+    fn SHGetFolderPathA(owner: *mut c_void, folder: i32, token: *mut c_void, flags: u32, path: *mut u8) -> i32;
+}
+
+/// The folders the game asks `SHGetFolderPathA` for (`CSIDL_PERSONAL` 5, `CSIDL_APPDATA` 0x1a,
+/// `CSIDL_LOCAL_APPDATA` 0x1c, `CSIDL_COMMON_APPDATA` 0x23, `CSIDL_COMMON_DOCUMENTS` 0x2e) and
+/// the Windows directory (where profile files named without a path are), as the game's ANSI
+/// strings, hex.
+unsafe fn folders(o: &mut impl Write) {
+    let mut buffer = vec![0u8; 260];
+    let n = GetWindowsDirectoryA(buffer.as_mut_ptr(), 260);
+    writeln!(o, "GetWindowsDirectoryA\t\t{n:x}\t{}", hex(&buffer[..n as usize])).unwrap();
+    for folder in [5, 0x1a, 0x1c, 0x23, 0x2e] {
+        buffer.iter_mut().for_each(|b| *b = 0);
+        let hr = SHGetFolderPathA(std::ptr::null_mut(), folder, std::ptr::null_mut(), 0, buffer.as_mut_ptr());
+        let len = buffer.iter().position(|&b| b == 0).unwrap_or(0);
+        writeln!(o, "SHGetFolderPathA\t{folder:x} 0\t{:x}\t{}", hr as u32, hex(&buffer[..len])).unwrap();
+    }
 }
 
 /// `WNDCLASSA`.
@@ -157,6 +178,7 @@ fn main() {
             writeln!(o, "GetSystemMetrics\t{index:x}\t{:x}", GetSystemMetrics(index) as u32).unwrap();
         }
         windows(&mut o);
+        folders(&mut o);
         let d3d = Direct3DCreate9(32);
         assert!(!d3d.is_null());
         let vt = *d3d;

@@ -6794,8 +6794,86 @@ pub fn flsbuf(e: &mut Engine, character: u32, stream: Ptr) -> i32 {
     (character & 0xff) as i32
 }
 
+/// `GetFileAttributesA` (KERNEL32 import slot `00fdf160`).
+const API_GET_FILE_ATTRIBUTES: u32 = 0x00fd_f160;
+/// `GetLastError` (KERNEL32 import slot `00fdf094`).
+const API_GET_LAST_ERROR_SLOT: u32 = 0x00fd_f094;
+
+// Translated from 00ecbe7c (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_access_s` (LIBCMT/access.c, engine map), cdecl: (path, mode). A null path or a mode with
+/// bits other than 2 and 4 sets `_doserrno` 0 and `errno` `EINVAL` (0x16), calls the
+/// invalid-parameter handler (`00ec7c30` with five zeros) and answers 0x16. Otherwise the
+/// path's attributes (`GetFileAttributesA`): none maps the Windows error (`_dosmaperr` of
+/// `GetLastError`) and answers `errno`; a read-only file (attribute 1, not a directory 0x10)
+/// asked for writing (mode bit 2) sets `_doserrno` 5 and `errno` `EACCES` (0xd) and answers
+/// it; anything else answers 0.
+pub fn access_s(e: &mut Engine, path: Ptr, mode: u32) -> u32 {
+    if path.addr() == 0 || mode & 0xffff_fff9 != 0 {
+        let dos = e.call(0x00ec_85f6, &args![]).u32();
+        e.mem.set_u32(dos, 0);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        e.mem.set_u32(error, 0x16);
+        e.call(0x00ec_7c30, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        return 0x16;
+    }
+    let attributes = e.call(API_GET_FILE_ATTRIBUTES, &args![path]).u32();
+    if attributes == 0xffff_ffff {
+        let code = e.call(API_GET_LAST_ERROR_SLOT, &args![]).u32();
+        e.call(0x00ec_8609, &args![code]);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        return e.mem.u32(error);
+    }
+    if attributes & 0x10 == 0 && attributes & 1 != 0 && mode & 2 != 0 {
+        let dos = e.call(0x00ec_85f6, &args![]).u32();
+        e.mem.set_u32(dos, 5);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        e.mem.set_u32(error, 0xd);
+        let error = e.call(0x00ec_85e3, &args![]).u32();
+        return e.mem.u32(error);
+    }
+    0
+}
+
+// Translated from 00ecbf05 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_access` (LIBCMT/access.c, engine map), cdecl: (path, mode): 0 when `_access_s` answers 0,
+/// else -1 (`NEG`/`SBB`).
+pub fn access(e: &mut Engine, path: Ptr, mode: u32) -> i32 {
+    let r = e.call(0x00ec_be7c, &args![path, mode]).u32();
+    if r == 0 {
+        0
+    } else {
+        -1
+    }
+}
+
+// Translated from 00ec6380 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `strcat` (LIBCMT, the word-at-a-time assembly version; the engine map gives no name), cdecl:
+/// (destination, source): appends the source's bytes up to and with its terminating zero at
+/// the destination's terminating zero and answers the destination. The assembly reads both
+/// strings a word at a time (aligned reads that stop at the word holding the zero, never past
+/// it into another page); the bytes it writes are the same.
+pub fn strcat(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
+    let mut at = destination.addr();
+    while e.mem.u8(at) != 0 {
+        at = at.wrapping_add(1);
+    }
+    let mut from = source.addr();
+    loop {
+        let b = e.mem.u8(from);
+        e.mem.set_u8(at, b);
+        if b == 0 {
+            return destination;
+        }
+        at = at.wrapping_add(1);
+        from = from.wrapping_add(1);
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_be7c, access_s(Ptr, u32) -> u32),
+        entry!(0x00ec_bf05, access(Ptr, u32) -> i32),
+        entry!(0x00ec_6380, strcat(Ptr, Ptr) -> Ptr),
         entry!(0x00401000, operator_new(u32) -> Ptr),
         entry!(0x00401460, memcpy_wrapper(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00403d30, memset_wrapper(Ptr, i32, u32) -> Ptr),

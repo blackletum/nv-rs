@@ -3,10 +3,14 @@
 //! `fopen`/`fclose`/`fwrite` uses them: `__tsopen_nolock`, `_lseek`, `_write`, `_close`), with
 //! the documented Win32 semantics.
 //!
-//! Every file lives in [`Disk`], in engine-side memory: nothing the game writes reaches the
-//! player's disk (the game's own files are read through the archive layer, not here). A file the
-//! game did not make in this run (an open of an existing file it never wrote) is not provided:
-//! the call stops the run (a panic the run records), as other platform calls not provided do.
+//! Also the file system around them: `GetFileAttributesA`, `CreateDirectoryA`, `DeleteFileA`,
+//! `CopyFileA` and `SHGetFolderPathA`.
+//!
+//! Every file the game makes, changes, copies or deletes lives in [`Disk`], in engine-side
+//! memory: nothing reaches the player's disk. The player's own files are read only: opened, they
+//! are read into the run's copy; deleted, they are only gone for the game. An open of a file
+//! that exists nowhere with a disposition that needs one stops the run (a panic the run
+//! records), as other platform calls not provided do.
 
 use super::KernelObject;
 use crate::{Engine, Ptr};
@@ -41,6 +45,187 @@ pub const ERROR_ALREADY_EXISTS: u32 = 183;
 #[derive(Debug, Default)]
 pub struct Disk {
     pub files: BTreeMap<Vec<u8>, Vec<u8>>,
+    /// Files the game deleted in this run (the player's files stay where they are).
+    pub deleted: std::collections::BTreeSet<Vec<u8>>,
+    /// Directories the game made in this run (nothing is made on the player's disk).
+    pub directories: std::collections::BTreeSet<Vec<u8>>,
+}
+
+/// Files the game deleted in this run (the player's own files stay where they are) and the
+/// directories it made (nothing is made on the player's disk) are in [`Disk`].
+/// `FILE_ATTRIBUTE_DIRECTORY`, `FILE_ATTRIBUTE_ARCHIVE` and `INVALID_FILE_ATTRIBUTES`.
+pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
+pub const INVALID_FILE_ATTRIBUTES: u32 = 0xffff_ffff;
+
+/// Whether `name` is a full path (a drive letter and a separator, or `\\` for a network path).
+pub fn is_full_path(name: &[u8]) -> bool {
+    matches!(name, [d, b':', b'\\' | b'/', ..] if d.is_ascii_alphabetic())
+        || name.starts_with(b"\\\\")
+}
+
+/// `name` as a full path: a relative name is in the current directory
+/// (`Kernel::current_directory`).
+pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
+    if is_full_path(name) {
+        return name.to_vec();
+    }
+    let mut path = e.kernel.current_directory.clone();
+    if !path.ends_with(b"\\") && !path.is_empty() {
+        path.push(b'\\');
+    }
+    path.extend_from_slice(name.strip_prefix(b".\\").unwrap_or(name));
+    path
+}
+
+fn real_path(path: &[u8]) -> std::path::PathBuf {
+    std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+}
+
+/// The bytes of the file at the full path `path`: as the game made it in this run, else the
+/// player's file (read only); `None` when the game deleted it or there is none.
+pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
+    let k = key(path);
+    if let Some(data) = e.kernel.disk.files.get(&k) {
+        return Some(data.clone());
+    }
+    if e.kernel.disk.deleted.contains(&k) {
+        return None;
+    }
+    std::fs::read(real_path(path)).ok()
+}
+
+/// The attributes of the full path `path` as Windows reports them: a file or directory the game
+/// made in this run, else the player's (`FILE_ATTRIBUTE_*` as the file system keeps them);
+/// `None` when there is none.
+fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
+    let k = key(path);
+    let trimmed = key(path.strip_suffix(b"\\").unwrap_or(path));
+    if e.kernel.disk.files.contains_key(&k) {
+        return Some(FILE_ATTRIBUTE_ARCHIVE);
+    }
+    if e.kernel.disk.directories.contains(&trimmed) {
+        return Some(FILE_ATTRIBUTE_DIRECTORY);
+    }
+    if e.kernel.disk.deleted.contains(&k) {
+        return None;
+    }
+    let meta = std::fs::metadata(real_path(path)).ok()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Some(meta.file_attributes())
+    }
+    #[cfg(not(windows))]
+    {
+        Some(if meta.is_dir() {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_ARCHIVE
+        })
+    }
+}
+
+// Platform: replaces KERNEL32.DLL GetFileAttributesA (import)
+/// `GetFileAttributesA(name)`: the file's or directory's attributes ([`attributes`]), or
+/// `INVALID_FILE_ATTRIBUTES` with `ERROR_FILE_NOT_FOUND`.
+pub fn get_file_attributes_a(e: &mut Engine, name: Ptr) -> u32 {
+    let path = full_path(e, &e.mem.cstr(name.addr()));
+    match attributes(e, &path) {
+        Some(a) => a,
+        None => {
+            e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+            INVALID_FILE_ATTRIBUTES
+        }
+    }
+}
+
+// Platform: replaces KERNEL32.DLL CreateDirectoryA (import)
+/// `CreateDirectoryA(name, security)`: false with `ERROR_ALREADY_EXISTS` when a file or
+/// directory of that name exists ([`attributes`]); otherwise the directory is recorded as made
+/// (in engine memory: nothing is made on the player's disk) and true.
+pub fn create_directory_a(e: &mut Engine, name: Ptr, _security: u32) -> u32 {
+    let path = full_path(e, &e.mem.cstr(name.addr()));
+    if attributes(e, &path).is_some() {
+        e.kernel.last_error = ERROR_ALREADY_EXISTS;
+        return 0;
+    }
+    let trimmed = key(path.strip_suffix(b"\\").unwrap_or(&path));
+    e.kernel.disk.directories.insert(trimmed);
+    e.kernel.last_error = ERROR_SUCCESS;
+    1
+}
+
+// Platform: replaces KERNEL32.DLL DeleteFileA (import)
+/// `DeleteFileA(name)`: a file the game made goes; a file of the player's is from then on gone
+/// for the game (recorded, never deleted on disk); true. False with `ERROR_FILE_NOT_FOUND` when
+/// there is none, `ERROR_ACCESS_DENIED` for a directory.
+pub fn delete_file_a(e: &mut Engine, name: Ptr) -> u32 {
+    let path = full_path(e, &e.mem.cstr(name.addr()));
+    match attributes(e, &path) {
+        None => {
+            e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+            0
+        }
+        Some(a) if a & FILE_ATTRIBUTE_DIRECTORY != 0 => {
+            e.kernel.last_error = ERROR_ACCESS_DENIED;
+            0
+        }
+        Some(_) => {
+            let k = key(&path);
+            e.kernel.disk.files.remove(&k);
+            e.kernel.disk.deleted.insert(k);
+            e.kernel.last_error = ERROR_SUCCESS;
+            1
+        }
+    }
+}
+
+// Platform: replaces KERNEL32.DLL CopyFileA (import)
+/// `CopyFileA(source, target, fail if exists)`: the source's bytes ([`read_whole`]) become the
+/// target, a file of this run (engine memory, never on disk); false with `ERROR_FILE_NOT_FOUND`
+/// without a source, `ERROR_FILE_EXISTS` when the target exists and `fail if exists` is set.
+pub fn copy_file_a(e: &mut Engine, source: Ptr, target: Ptr, fail_if_exists: u32) -> u32 {
+    let from = full_path(e, &e.mem.cstr(source.addr()));
+    let to = full_path(e, &e.mem.cstr(target.addr()));
+    let Some(data) = read_whole(e, &from) else {
+        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+        return 0;
+    };
+    if fail_if_exists != 0 && attributes(e, &to).is_some() {
+        e.kernel.last_error = ERROR_FILE_EXISTS;
+        return 0;
+    }
+    let k = key(&to);
+    e.kernel.disk.deleted.remove(&k);
+    e.kernel.disk.files.insert(k, data);
+    e.kernel.last_error = ERROR_SUCCESS;
+    1
+}
+
+// Platform: replaces SHELL32.DLL SHGetFolderPathA (import)
+/// `SHGetFolderPathA(owner, folder, token, flags, path)`: the player's folder for that CSIDL as
+/// the player's table recorded it (`d3d9::folder_path`), copied into `path`, with its result. A
+/// folder the table doesn't have, or `CSIDL_FLAG_CREATE`, is not provided.
+pub fn sh_get_folder_path_a(
+    e: &mut Engine,
+    _owner: u32,
+    folder: u32,
+    _token: u32,
+    flags: u32,
+    path: Ptr,
+) -> u32 {
+    assert!(
+        folder & 0x8000 == 0,
+        "SHGetFolderPathA with CSIDL_FLAG_CREATE is not provided"
+    );
+    let Some((hr, text)) = super::d3d9::folder_path(e, folder) else {
+        panic!(
+            "SHGetFolderPathA({folder:#x}, flags {flags:#x}) was not captured in the adapter table: not provided"
+        );
+    };
+    e.mem.set_cstr(path.addr(), &text);
+    hr
 }
 
 /// An open file handle's state ([`KernelObject::File`]).
@@ -85,8 +270,14 @@ pub fn create_file_a(
     _attributes: u32,
     _template: u32,
 ) -> u32 {
-    let name = e.mem.cstr(path.addr());
+    let name = full_path(e, &e.mem.cstr(path.addr()));
     let path = key(&name);
+    // A file of the player's is read into the run's copy when it is opened.
+    if !e.kernel.disk.files.contains_key(&path) && matches!(disposition, OPEN_EXISTING | OPEN_ALWAYS) {
+        if let Some(data) = read_whole(e, &name) {
+            e.kernel.disk.files.insert(path.clone(), data);
+        }
+    }
     let exists = e.kernel.disk.files.contains_key(&path);
     let fail = |e: &mut Engine, code: u32| {
         e.kernel.last_error = code;
@@ -361,5 +552,47 @@ mod tests {
     fn opening_a_file_the_game_did_not_make_stops() {
         let (mut e, name) = engine();
         create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+    }
+
+    #[test]
+    fn directories_copies_and_deletes_stay_in_the_run() {
+        let (mut e, name) = engine();
+        let dir = e.mem.alloc(0x40);
+        e.mem.set_cstr(dir, br"Q:\nv-rs-test-dir");
+        assert_eq!(get_file_attributes_a(&mut e, Ptr::new(dir)), INVALID_FILE_ATTRIBUTES);
+        assert_eq!(create_directory_a(&mut e, Ptr::new(dir), 0), 1);
+        assert_eq!(get_file_attributes_a(&mut e, Ptr::new(dir)), FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(create_directory_a(&mut e, Ptr::new(dir), 0), 0);
+        assert_eq!(e.kernel.last_error, ERROR_ALREADY_EXISTS);
+        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0);
+        let buffer = e.mem.alloc(4);
+        e.mem.write(buffer, b"ab");
+        write_file(&mut e, h, Ptr::new(buffer), 2, Ptr::new(0), 0);
+        let copy = e.mem.alloc(0x40);
+        e.mem.set_cstr(copy, br"Q:\nv-rs-test-dir\copy.txt");
+        assert_eq!(copy_file_a(&mut e, Ptr::new(name), Ptr::new(copy), 1), 1);
+        assert_eq!(copy_file_a(&mut e, Ptr::new(name), Ptr::new(copy), 1), 0);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_EXISTS);
+        assert_eq!(
+            read_whole(&e, br"q:\NV-RS-TEST-DIR\copy.txt"),
+            Some(b"ab".to_vec())
+        );
+        assert_eq!(delete_file_a(&mut e, Ptr::new(copy)), 1);
+        assert_eq!(delete_file_a(&mut e, Ptr::new(copy)), 0);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        assert_eq!(delete_file_a(&mut e, Ptr::new(dir)), 0);
+        assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
+    }
+
+    #[test]
+    fn relative_names_are_in_the_current_directory() {
+        let mut e = Engine::new();
+        e.kernel.current_directory = br"C:\Games\FNV".to_vec();
+        assert_eq!(
+            full_path(&e, b"Warnings.txt"),
+            br"C:\Games\FNV\Warnings.txt".to_vec()
+        );
+        assert_eq!(full_path(&e, br"D:\x"), br"D:\x".to_vec());
+        assert!(is_full_path(br"\\server\share"));
     }
 }

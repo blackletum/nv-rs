@@ -101,6 +101,9 @@ pub struct Adapter {
     window_styles: HashMap<(u32, u32), (u32, u32)>,
     /// `AdjustWindowRectEx`'s border by (style, menu, extended style): left, top, right, bottom.
     borders: HashMap<(u32, u32, u32), [i32; 4]>,
+    /// The Windows directory and the folders by CSIDL (`SHGetFolderPathA`: result, path).
+    windows_directory: Vec<u8>,
+    folders: HashMap<u32, (u32, Vec<u8>)>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -142,6 +145,10 @@ impl Adapter {
                 }
                 "GetDeviceCaps" => {
                     a.caps.insert(words(f[1])[1], (hex(2), bytes(f[3])));
+                }
+                "GetWindowsDirectoryA" => a.windows_directory = bytes(f[3]),
+                "SHGetFolderPathA" => {
+                    a.folders.insert(words(f[1])[0], (hex(2), bytes(f[3])));
                 }
                 "CreateWindowStyle" => {
                     let w = words(f[1]);
@@ -233,6 +240,22 @@ fn not_captured(kind: &str, words: &[u32]) -> ! {
 /// child window), if the capture has them.
 pub fn window_style(e: &mut Engine, style: u32, child: u32) -> Option<(u32, u32)> {
     adapter(e).window_styles.get(&(style, child)).copied()
+}
+
+/// The player's Windows directory, from the table (where profile files named without a path
+/// are).
+pub fn windows_directory(e: &mut Engine) -> Vec<u8> {
+    let dir = adapter(e).windows_directory.clone();
+    assert!(
+        !dir.is_empty(),
+        "the adapter table has no Windows directory: {CAPTURE_HINT}"
+    );
+    dir
+}
+
+/// The player's folder for a CSIDL (`SHGetFolderPathA`'s result and path), if the table has it.
+pub fn folder_path(e: &mut Engine, csidl: u32) -> Option<(u32, Vec<u8>)> {
+    adapter(e).folders.get(&csidl).cloned()
 }
 
 /// The border `AdjustWindowRectEx` adds for `style`, `menu` (0 or 1) and `ex_style`, if the

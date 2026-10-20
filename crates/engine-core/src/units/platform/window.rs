@@ -124,6 +124,31 @@ pub fn shell_execute_a(e: &mut Engine, _w: u32, _op: u32, file: Ptr, _p: u32, _d
     panic!("ShellExecuteA({file:?}) is not provided")
 }
 
+// Platform: replaces ADVAPI32.DLL GetUserNameA (import)
+/// `GetUserNameA(buffer, size)`: the player's user name (the `USERNAME` the process runs with),
+/// zero-terminated, with `*size` set to its length plus one; false with
+/// `ERROR_INSUFFICIENT_BUFFER` (122) and the size needed when it doesn't fit.
+pub fn get_user_name_a(e: &mut Engine, buffer: Ptr, size: Ptr) -> u32 {
+    let name = std::env::var("USERNAME").unwrap_or_default().into_bytes();
+    let needed = name.len() as u32 + 1;
+    let room = e.mem.u32(size.addr());
+    e.mem.set_u32(size.addr(), needed);
+    if room < needed {
+        last_error(e, 122);
+        return 0;
+    }
+    e.mem.set_cstr(buffer.addr(), &name);
+    1
+}
+
+// Platform: replaces STEAM_API.DLL SteamAPI_Init (import)
+/// `SteamAPI_Init()`: false, the answer when no Steam client runs: the Steam client is not
+/// provided, and the game's own code goes on without it (`006ff690` keeps the false at +0x3c of
+/// its Steam object and skips `SteamUtils`/`SteamUserStats`).
+pub fn steam_api_init(_e: &mut Engine) -> u32 {
+    0
+}
+
 // Platform: replaces KERNEL32.DLL IsDebuggerPresent (import)
 /// `IsDebuggerPresent()`: no debugger.
 pub fn is_debugger_present(_e: &mut Engine) -> u32 {

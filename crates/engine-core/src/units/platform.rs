@@ -596,8 +596,49 @@ fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// The text of the profile file `file` names: a name without a full path is in the Windows
+/// directory, as the profile functions look for it (`d3d9::windows_directory`, from the
+/// player's table); the file as the game made it in this run when it did (`files`), else the
+/// player's file, read only. `None` when there is none.
+fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
+    let name = e.mem.cstr(file.addr());
+    let path = if files::is_full_path(&name) {
+        name
+    } else {
+        let mut path = d3d9::windows_directory(e);
+        path.push(b'\\');
+        path.extend_from_slice(&name);
+        path
+    };
+    files::read_whole(e, &path)
+}
+
+// Platform: replaces KERNEL32.DLL GetPrivateProfileIntA (import)
+/// `GetPrivateProfileIntA(section, key, default, file)`: the key's value as an integer (its
+/// decimal digits, read up to the first other character; no digits: 0), or
+/// `default` when the file, the section or the key isn't there ([`profile_text`]). A negative or
+/// `0x` value is not provided.
+fn get_private_profile_int_a(e: &mut Engine, section: Ptr, key: Ptr, default: u32, file: Ptr) -> u32 {
+    let section = e.mem.cstr(section.addr());
+    let key = e.mem.cstr(key.addr());
+    let Some(value) = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key))
+    else {
+        return default;
+    };
+    let digits = value.as_slice();
+    assert!(
+        !(digits.starts_with(b"-") || digits.starts_with(b"0x") || digits.starts_with(b"0X")),
+        "GetPrivateProfileIntA of a negative or hex value is not provided"
+    );
+    let mut n = 0u32;
+    for &d in digits.iter().take_while(|d| d.is_ascii_digit()) {
+        n = n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'));
+    }
+    n
+}
+
 // Platform: replaces KERNEL32.DLL GetPrivateProfileStringA (import)
-/// The value of `key` in `section` of the INI file `file` on the player's disk (read-only), or
+/// The value of `key` in `section` of the INI file `file` ([`profile_text`]), or
 /// `default` (none: empty) when the file, the section or the key isn't there: copied into
 /// `buffer`, cut to `size - 1` bytes and zero-terminated; answers the bytes copied. Listing a
 /// file's sections or keys (a null section or key) is not provided.
@@ -615,10 +656,7 @@ fn get_private_profile_string_a(
     }
     let section = e.mem.cstr(section.addr());
     let key = e.mem.cstr(key.addr());
-    let path = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
-    let found = std::fs::read(&path)
-        .ok()
-        .and_then(|text| ini_value(&text, &section, &key));
+    let found = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key));
     let value = match found {
         Some(value) => value,
         None if default.is_null() => Vec::new(),
@@ -1788,6 +1826,42 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "USER32.dll",
             "DispatchMessageA",
             entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetPrivateProfileIntA",
+            entry!(0, get_private_profile_int_a(Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "GetFileAttributesA",
+            entry!(0, files::get_file_attributes_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "CreateDirectoryA",
+            entry!(0, files::create_directory_a(Ptr, u32) -> u32).1,
+        ),
+        (k, "DeleteFileA", entry!(0, files::delete_file_a(Ptr) -> u32).1),
+        (
+            k,
+            "CopyFileA",
+            entry!(0, files::copy_file_a(Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "SHELL32.dll",
+            "SHGetFolderPathA",
+            entry!(0, files::sh_get_folder_path_a(u32, u32, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "GetUserNameA",
+            entry!(0, window::get_user_name_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_Init",
+            entry!(0, window::steam_api_init() -> u32).1,
         ),
         (
             "ADVAPI32.dll",
