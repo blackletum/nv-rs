@@ -105,6 +105,46 @@ pub fn ni_d3d_shader_program_factory_register_shader_creator(
     true
 }
 
+/// `00aa1070` (`cdecl`, one word): allocates a block of that size; `00aa10f0` (`cdecl`, one
+/// word) frees one; `00ec65a6` (`strcpy_s`, `cdecl`: destination, size, source).
+const STRING_ALLOCATE: u32 = 0x00aa_1070;
+const STRING_FREE: u32 = 0x00aa_10f0;
+const STRCPY_S: u32 = 0x00ec_65a6;
+
+// Translated from 00e93470 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a string map's node assignment (slot `+0xc` of `NiStream`'s
+/// loader map vtable `0109bf4c`; `thiscall`, three stack words, `RET 0xc`: node, key, value).
+/// With the map's copy-keys byte (`+0x10`) set, the key is copied: a block of its length plus
+/// one (`00aa1070`) becomes the node's key (`+4`, stored before the copy) and `strcpy_s`
+/// (`00ec65a6`) fills it; otherwise the key pointer itself goes to `+4`. The value goes to `+8`.
+pub fn fn_00e93470(e: &mut Engine, this: Ptr, node: u32, key: u32, value: u32) {
+    if e.mem.u8(this.addr() + 0x10) == 0 {
+        e.mem.set_u32(node + 4, key);
+        e.mem.set_u32(node + 8, value);
+        return;
+    }
+    let mut end = key;
+    while e.mem.u8(end) != 0 {
+        end = end.wrapping_add(1);
+    }
+    let size = end.wrapping_sub(key).wrapping_add(1);
+    let block = e.call(STRING_ALLOCATE, &args![size]).u32();
+    e.mem.set_u32(node + 4, block);
+    e.call(STRCPY_S, &args![block, size, key]);
+    e.mem.set_u32(node + 8, value);
+}
+
+// Translated from 00e935b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a string map's node clean-up (slot `+0x10` of the loader map
+/// vtable `0109bf4c`; `thiscall`, one stack word, `RET 4`: the node): with the copy-keys byte
+/// (`+0x10`) set, frees the node's key (`00aa10f0` on the word at `+4`).
+pub fn fn_00e935b0(e: &mut Engine, this: Ptr, node: u32) {
+    if e.mem.u8(this.addr() + 0x10) != 0 {
+        let key = e.mem.u32(node + 4);
+        e.call(STRING_FREE, &args![key]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -114,6 +154,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00e9_3df0, fn_00e93df0()),
         entry!(0x00e9_3e70, ni_d3d_shader_program_factory_register_shader_creator(Ptr, u32) -> bool),
+        entry!(0x00e9_3470, fn_00e93470(Ptr, u32, u32, u32)),
+        entry!(0x00e9_35b0, fn_00e935b0(Ptr, u32)),
     ]
 }
 
@@ -202,5 +244,46 @@ mod start_up_tests {
     fn refuses_a_null_name() {
         let mut e = engine();
         assert!(!e.call(0x00e9_3e70, &args![0u32, 1u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod string_map_tests {
+    use super::*;
+
+    /// Without copy-keys the key pointer is stored; with it a block of length + 1 is taken,
+    /// stored as the key and filled by `strcpy_s`; the clean-up frees it only then.
+    #[test]
+    fn assigns_and_frees_keys_by_the_copy_flag() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        let (map, node, key) = (0x1000u32, 0x1100u32, 0x1200u32);
+        for (i, b) in b"NiNode\0".iter().enumerate() {
+            e.mem.set_u8(key + i as u32, *b);
+        }
+        e.register(STRING_ALLOCATE, |_, a| {
+            assert_eq!(a[0], 7);
+            0x1300u32.into_ret()
+        });
+        e.register(STRCPY_S, |_, _| Ret::default());
+        e.register(STRING_FREE, |_, _| Ret::default());
+        e.call(0x00e9_3470, &args![map, node, key, 0x55u32]);
+        assert_eq!((e.mem.u32(node + 4), e.mem.u32(node + 8)), (key, 0x55));
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_35b0, &args![map, node]);
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|(a, _)| *a == STRING_FREE));
+        e.mem.set_u8(map + 0x10, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3470, &args![map, node, key, 0x66u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!((e.mem.u32(node + 4), e.mem.u32(node + 8)), (0x1300, 0x66));
+        let copies: Vec<_> = log.iter().filter(|(a, _)| *a == STRCPY_S).collect();
+        assert_eq!(copies[0].1, [0x1300, 7, key]);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_35b0, &args![map, node]);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log.iter().filter(|(a, _)| *a == STRING_FREE).collect();
+        assert_eq!(frees[0].1, [0x1300]);
     }
 }
