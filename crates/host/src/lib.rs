@@ -67,6 +67,9 @@ impl Host {
         let mut engine = Engine::with_exe(&exe)?;
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         let mut movement = player_move::PlayerMovement::default();
+        // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `NiInit` is a probe run too
+        // (it goes on past misses with zero results and records them all).
+        movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
         let ni_init = start_ni(&mut engine, &mut movement);
         start_renderer_fpu(&mut engine);
         start_game_objects(&mut engine);
