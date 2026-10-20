@@ -4,6 +4,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod dinput;
+
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
 pub const MEMORY_MANAGER: u32 = 0x011f_6238;
@@ -393,6 +395,17 @@ pub const DEFAULT_DOUBLE_CLICK_TIME: u32 = 500;
 /// `HKCU\Control Panel\Mouse` values Windows starts with, the ones a key here answers.
 const MOUSE_VALUES: [(&[u8], &[u8]); 1] = [(b"MouseSensitivity", b"10")];
 
+/// `ERROR_DEVICE_NOT_CONNECTED`.
+const ERROR_DEVICE_NOT_CONNECTED: u32 = 0x48f;
+
+// Platform: replaces XINPUT1_3.DLL XInputGetState (import by ordinal 2; `Controls::Poll`
+// `00a23010` calls it through the thunk `009f996e`)
+/// No controller is connected (the platform offers no XInput pad): `ERROR_DEVICE_NOT_CONNECTED`
+/// for every user index, the state left as it is.
+fn xinput_get_state(_e: &mut Engine, _user: u32, _state: Ptr) -> u32 {
+    ERROR_DEVICE_NOT_CONNECTED
+}
+
 // Platform: replaces USER32.DLL GetActiveWindow (import)
 /// The game's main window ([`create_window`]), 0 before there is one.
 fn get_active_window(e: &mut Engine) -> u32 {
@@ -697,6 +710,8 @@ pub struct Kernel {
     pub main_window: u32,
     /// Whether `SwapMouseButton` swapped the buttons.
     mouse_buttons_swapped: bool,
+    /// The DirectInput 8 objects and the keyboard and mouse state behind them ([`dinput`]).
+    pub input: dinput::Input,
 }
 
 impl Kernel {
@@ -1557,6 +1572,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "ADVAPI32.dll",
             "RegCloseKey",
             entry!(0, reg_close_key(u32) -> u32).1,
+        ),
+        (
+            "DINPUT8.dll",
+            "DirectInput8Create",
+            entry!(0, dinput::direct_input8_create(u32, u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "XINPUT1_3.dll",
+            "#2",
+            entry!(0, xinput_get_state(u32, Ptr) -> u32).1,
         ),
         (
             k,
