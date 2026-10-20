@@ -12,9 +12,73 @@ pub fn fn_00aea210(e: &mut Engine, this: Ptr) {
     e.call(0x00ad_7000, &args![this]);
 }
 
+/// `00aea020`'s function-local static: its guard word (`011f7124`, bit 0), the object
+/// (`011f7080`), its `_atexit` destructor (`00fdbfe0`) and the global that points at it
+/// (`011f6d98`).
+const AUDIO_GUARD: u32 = 0x011f_7124;
+const AUDIO_OBJECT: u32 = 0x011f_7080;
+const AUDIO_DESTRUCTOR: u32 = 0x00fd_bfe0;
+const AUDIO_POINTER: u32 = 0x011f_6d98;
+/// `_atexit` (`00ec658f`, `cdecl`, one word), `memset` (`00ec61c0`, `cdecl`, three words) and
+/// the import slot of KERNEL32 `GetTickCount` (`stdcall`, no words).
+const ATEXIT: u32 = 0x00ec_658f;
+const MEMSET: u32 = 0x00ec_61c0;
+const GET_TICK_COUNT: u32 = 0x00fd_f060;
+/// The base constructor `00ad6f40` (`thiscall`, no stack words).
+const AUDIO_BASE_CONSTRUCT: u32 = 0x00ad_6f40;
+
+// Translated from 00aea020 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00aea020 - the FS:[0] exception frame (the unwind of the static's
+// construction) is not modeled.
+/// Unnamed in the engine map (`cdecl`, no arguments, plain `RET`; `Main::Main`'s audio set-up
+/// `0086ce40` calls it): the first time (bit 0 of `011f7124` clear) sets the bit, constructs the
+/// object at `011f7080` (`00aea1b0`) and gives its destructor `00fdbfe0` to `_atexit`; then, every
+/// time, points `011f6d98` at it.
+pub fn fn_00aea020(e: &mut Engine) {
+    if e.mem.u32(AUDIO_GUARD) & 1 == 0 {
+        let guard = e.mem.u32(AUDIO_GUARD);
+        e.mem.set_u32(AUDIO_GUARD, guard | 1);
+        e.call(0x00ae_a1b0, &args![AUDIO_OBJECT]);
+        e.call(ATEXIT, &args![AUDIO_DESTRUCTOR]);
+    }
+    e.mem.set_u32(AUDIO_POINTER, AUDIO_OBJECT);
+}
+
+// Translated from 00aea1b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`): the base constructor
+/// `00ad6f40`, the vtable `010a39d8` (RTTI `.?AVBSWin32Audio@@`), `+0x38`, `+0x3c` and `+0xa0`
+/// cleared and the 0x60 bytes from `+0x40` zeroed (`memset`). Answers `this`.
+pub fn fn_00aea1b0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(AUDIO_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(base, 0x010a_39d8);
+    e.mem.set_u32(base + 0x38, 0);
+    e.mem.set_u32(base + 0x3c, 0);
+    e.mem.set_u32(base + 0xa0, 0);
+    e.call(MEMSET, &args![base + 0x40, 0u32, 0x60u32]);
+    this
+}
+
+// Translated from 00aea0a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`): `+8` cleared, `+0` set to
+/// 600000 (0x927C0) and `+4` to `GetTickCount()`. Answers `this`.
+pub fn fn_00aea0a0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 8, 0);
+    e.mem.set_u32(base, 0x0009_27c0);
+    let ticks = e.call(GET_TICK_COUNT, &args![]).u32();
+    e.mem.set_u32(base + 4, ticks);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ae_a210, fn_00aea210(Ptr))]
+    vec![
+        entry!(0x00ae_a210, fn_00aea210(Ptr)),
+        entry!(0x00ae_a020, fn_00aea020()),
+        entry!(0x00ae_a1b0, fn_00aea1b0(Ptr) -> Ptr),
+        entry!(0x00ae_a0a0, fn_00aea0a0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +110,57 @@ mod tests {
             0x010a_39d8,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod audio_static_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == callee)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// The first call constructs the static and registers its destructor; every call points
+    /// `011f6d98` at it.
+    #[test]
+    fn the_static_is_made_once_and_pointed_at() {
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x2000);
+        for f in [0x00ae_a1b0, ATEXIT] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_a020, &args![]);
+        e.call(0x00ae_a020, &args![]);
+        assert_eq!(calls(&e, 0x00ae_a1b0), [vec![AUDIO_OBJECT]]);
+        assert_eq!(calls(&e, ATEXIT), [vec![AUDIO_DESTRUCTOR]]);
+        assert_eq!(e.mem.u32(AUDIO_GUARD) & 1, 1);
+        assert_eq!(e.mem.u32(AUDIO_POINTER), AUDIO_OBJECT);
+    }
+
+    #[test]
+    fn the_constructor_and_the_timer_set_their_fields() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x200);
+        for i in 0..0x50u32 {
+            e.mem.set_u32(0x1000 + 4 * i, 0xffff_ffff);
+        }
+        e.register(AUDIO_BASE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(GET_TICK_COUNT, |_, _| 1234u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ae_a1b0, &args![0x1000u32]).u32(), 0x1000);
+        assert_eq!(e.mem.u32(0x1000), 0x010a_39d8);
+        assert_eq!([0x38, 0x3c, 0xa0].map(|o| e.mem.u32(0x1000 + o)), [0, 0, 0]);
+        assert_eq!(calls(&e, MEMSET), [vec![0x1040, 0, 0x60]]);
+        assert_eq!(e.call(0x00ae_a0a0, &args![0x1100u32]).u32(), 0x1100);
+        assert_eq!([0, 4, 8].map(|o| e.mem.u32(0x1100 + o)), [600_000, 1234, 0]);
     }
 }

@@ -361,6 +361,23 @@ fn sleep(e: &mut Engine, _ms: u32) {
     crate::thread_host::host().sleep(e, signalled);
 }
 
+/// The exception code of the debugger thread-naming convention (`SetThreadName`, `00aa2740`).
+pub const MS_VC_EXCEPTION: u32 = 0x406d_1388;
+
+// Platform: replaces KERNEL32.DLL RaiseException (import)
+/// `RaiseException(code, flags, argument count, arguments)` with no debugger attached. The game
+/// raises only [`MS_VC_EXCEPTION`] (`SetThreadName` `00aa2740`, inside its own `__try`, whose
+/// handler takes it and goes on): that one comes back at once, as the handler would make it.
+/// Any other code stops the engine (structured exceptions are not provided).
+fn raise_exception(_e: &mut Engine, code: u32, flags: u32, count: u32, _arguments: Ptr) {
+    if code != MS_VC_EXCEPTION {
+        panic!(
+            "RaiseException(code {code:#x}, flags {flags:#x}, {count} arguments): \
+             structured exceptions are not provided"
+        );
+    }
+}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_ms
@@ -1288,6 +1305,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (k, "Sleep", entry!(0, sleep(u32)).1),
         (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
+        (
+            k,
+            "RaiseException",
+            entry!(0, raise_exception(u32, u32, u32, Ptr)).1,
+        ),
         ("WINMM.dll", "timeGetTime", entry!(0, tick_count() -> u32).1),
         (
             k,
