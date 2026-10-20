@@ -960,8 +960,9 @@ mod solve_tests {
         solve(&mut r, 1.0, 0);
         let turns = calls(&r.seen, SET_AXIS_ANGLE);
         assert_eq!(turns.len(), 2);
-        // The swing is nothing (the direction is the forward axis).
-        assert_eq!(f32::from_bits(turns[0][2]), 0.0);
+        // The swing is nothing (the direction is the forward axis). Near nothing: the
+        // `RSQRTSS` estimate differs between CPU makers, so the cosine can land an ulp below 1.
+        assert!(f32::from_bits(turns[0][2]).abs() < 1e-3);
         // The roll: distance 3 (squared 9), ratio 1 (squared 1), s = sqrt(8), the polynomial
         // with a zero first factor gives 83 and `acos(ratio / (sqrt(83) / s))` is the angle.
         let roots = calls(&r.seen, CRT_SQUARE_ROOT);
