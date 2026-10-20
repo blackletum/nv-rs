@@ -33,7 +33,19 @@ each function belongs to.
 - **Classes**: `layout!` declares a class marker with its PC size and the
   fields used so far (`e.get(p, Class::field)`, `e.set(...)`).
 - **Platform**: the allocator (`MemoryManager::Allocate`/`Deallocate`) is
-  `Mem`'s heap; threads are one thread (`e.tls()` is the TLS block).
+  `Mem`'s heap. The game's threads run under the thread host
+  (`engine_core::thread_host`): each `CreateThread` gets an OS thread used
+  strictly as a coroutine (it holds the engine, a baton, only while it runs;
+  exactly one thread runs at a time), with its own TLS block and call stack
+  in `GameThread` (the per-thread x87 control word goes there too). Switch
+  points are fixed: a wait on an unsignalled event or semaphore, and
+  `Sleep`; the main thread's wait runs the runnable threads in creation
+  order until its object is signalled, a game thread's wait hands back to
+  the main thread, `SetEvent`/`ReleaseSemaphore` wake waiters, and a wait no
+  thread can satisfy stops the run naming the object. So runs are
+  deterministic (for one processor count, which `iNumHWThreads` follows).
+  This avoids unsafe stack switching; it costs an OS thread per game thread
+  and a channel round trip per switch.
   Functions replaced this way are marked
   `// Platform: replaces <addr> (...)`; the ledger counts them as
   `platform`.
@@ -417,14 +429,19 @@ game calls it when the reference's queued 3D task is unpacked,
 jumping not connected (a jump frame goes to `crates/physics`).
 
 The loose objects can move by the game's whole Havok world too
-(`--physics engine`; the default `old` keeps `crates/physics`):
-`Host::step_world` runs, in the AI stage where the viewer stepped its own
-bodies, `bhkWorld::SetDeltaTime` (`00c66760`, as `Main::OnIdle_UpdateTimer`
-calls it) and, as `TES::UpdateCellAnimations` (`00453550`) does for an
-interior, the frame's seconds added to `011c3c08` and
-`TESObjectCELL::UpdateManagedNodes` (`00551890`): the world's step
-(`bhkWorld::Update`, `hkpWorld::stepDeltaTime` until the frame's marker) and
-the scene-graph update that copies each moving body's transform to its node.
+(`--physics engine`; the default `old` keeps `crates/physics`), stepped
+where the game steps it, on AI linear task thread 2. The stage `threads`
+(after `havok` and `player`) sets `iNumHWThreads` from the processor count
+(1 made 2) and runs `AILinearTaskThreadManager::CreateThreads` (`008c7290`)
+as `main` does. Each frame `Host::run_ai_threads`, in the AI stage where the
+viewer stepped its own bodies, stands in for the frame timer (the viewer's
+seconds to `bhkWorld::SetDeltaTime` `00c66760` and to `011dea30`) and runs
+`008c80e0(1)`, `StartThreads` (`008c78c0`) and `WaitForThreads` (`008c7990`)
+as `Main::OnIdle` does: the wait runs threads 1 (`008c7da0`) and 2
+(`008c7f50`) through their stage events, and thread 2 runs
+`TES::UpdateCellAnimations` (`00453550`): the cell's `UpdateManagedNodes`
+(`00551890`, `bhkWorld::Update`, `hkpWorld::stepDeltaTime`) and the
+scene-graph update that copies each moving body's transform to its node.
 The viewer then draws each placed object where its root node has moved; a
 frame that stops (recorded under the stage `world`) goes back to
 `crates/physics`, and a stopped step isn't tried again in that cell.

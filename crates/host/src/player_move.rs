@@ -27,14 +27,19 @@
 //!    +0x2A8), its angle (`TESObjectREFR::SetAngleOnReference`, `0086d490`)
 //!    and `InitItem` (vtable +0x88). `InitTES`'s `Actor::CastPermanentMagic`
 //!    is left out (no movement state).
-//! 3. `cell`: the player's cell, loaded as the game loads a form (below),
+//! 3. `threads`: the AI linear task threads, as `main` makes them after
+//!    `InitTES` (`0086b117`..`0086b12d`, `AILinearTaskThreadManager::CreateThreads`
+//!    `008c7290`), run by the thread host (`engine::thread_host`). Each frame
+//!    [`PlayerMovement::run_ai_threads`] starts and waits for them as
+//!    `Main::OnIdle` does; AI thread 2 (`008c7f50`) steps the Havok world.
+//! 4. `cell`: the player's cell, loaded as the game loads a form (below),
 //!    its temporary references by `TESObjectCELL::LoadTempDataFromFile`
 //!    (`00550500`, the file standing at the cell's record), their base forms
 //!    first; then its 3D by `TESObjectCELL::Load3D` (`00545cf0`, which makes
 //!    the cell's `bhkWorld` in `00552dc0`) and each reference's by
 //!    `TESObjectREFR::Load3D` (`0056b2d0`), which adds its collision to the
 //!    cell's world.
-//! 4. `controller`: the player in the cell: `TESObjectREFR::SetParentCell`
+//! 5. `controller`: the player in the cell: `TESObjectREFR::SetParentCell`
 //!    (`00575bb0`), `PlayerCharacter::Load3D` (`0094e1d0`) and
 //!    `MobileObject::InitHavok` (`00930c70`, which constructs the
 //!    `bhkCharacterController` and its proxy, `00c741e0`).
@@ -121,16 +126,36 @@ const HEADER_SIZE: usize = 0x18;
 /// `bhkWorld::AddObjects`, world vtable +0xD0) and `Get3D` (+0x1D0).
 const REFERENCE_INIT_HAVOK: u32 = 0x1c4;
 const GET_3D: u32 = 0x1d0;
-/// `bhkWorld::SetDeltaTime(seconds, mode 4, force)` (`00c66760`, as
-/// `Main::OnIdle_UpdateTimer` `0086f260` calls it each frame).
+/// `bhkWorld::SetDeltaTime(seconds, flag, mode 4)` (`00c66760`, as
+/// `Main::OnIdle_UpdateTimer` `0086f260` calls it each frame), the flag
+/// `00525420` answers (the byte at `011dea2a`).
 const SET_DELTA_TIME: u32 = 0x00c6_6760;
-/// `TESObjectCELL::UpdateManagedNodes(time, 0)` (`00551890`): the cell's
-/// world step (vtable +0xC4, `bhkWorld::Update`) and the managed references'
-/// scene-graph update that brings the bodies' transforms to their nodes.
-const UPDATE_MANAGED_NODES: u32 = 0x0055_1890;
-/// The time `TES::UpdateCellAnimations` (`00453550`) adds each frame's
-/// seconds to and passes to `UpdateManagedNodes` (float, `011c3c08`).
-const CELL_ANIMATION_TIME: u32 = 0x011c_3c08;
+const HAVOK_STEP_FLAG: u32 = 0x0052_5420;
+/// The frame's seconds `0086f260` keeps for the AI threads' world step
+/// (`011dea30`: the seconds times the float setting at `011c5724`, 0 in a
+/// menu), read by `00453850`.
+const FRAME_SECONDS: u32 = 0x011d_ea30;
+const TIME_MULTIPLIER: u32 = 0x011c_5724;
+/// `0043d4d0` / `00403e20`: the address of an integer / float setting's value
+/// (`thiscall` on the setting).
+const SETTING_INT_PTR: u32 = 0x0043_d4d0;
+const SETTING_FLOAT_PTR: u32 = 0x0040_3e20;
+/// `iNumHWThreads:General` (`011c3ea4`): `main` sets it to the processor
+/// count (`GetSystemInfo`, import slot `00fdf0f8`; `SYSTEM_INFO` is 0x24
+/// bytes, `dwNumberOfProcessors` at +0x14), 1 made 2.
+const NUM_HW_THREADS: u32 = 0x011c_3ea4;
+const GET_SYSTEM_INFO: u32 = 0x00fd_f0f8;
+const SYSTEM_INFO_SIZE: u32 = 0x24;
+const SYSTEM_INFO_PROCESSORS: u32 = 0x14;
+/// The AI linear task thread manager (`00713d80` answers it) and its
+/// `CreateThreads` (`008c7290`), `StartThreads` (`008c78c0`) and
+/// `WaitForThreads` (`008c7990`); `008c80e0(1)`, which `Main::OnIdle`
+/// (`0086e650`) calls before starting them.
+const AI_THREAD_MANAGER: u32 = 0x0071_3d80;
+const CREATE_AI_THREADS: u32 = 0x008c_7290;
+const START_AI_THREADS: u32 = 0x008c_78c0;
+const WAIT_FOR_AI_THREADS: u32 = 0x008c_7990;
+const AI_THREADS_RENDER_SAFE: u32 = 0x008c_80e0;
 /// `NiAVObject` world rotation (`NiMatrix3`, rows) and translation, PC
 /// offsets (`bhkCollisionObject::hktoNiTransform` `00c65a80` reads them).
 const WORLD_ROTATION: u32 = 0x68;
@@ -239,8 +264,11 @@ pub struct PlayerMovement {
     in_step: bool,
     /// The references of the made cell whose 3D loaded, by form id.
     cell_refs: Vec<(FormId, u32)>,
-    /// Frames the game's world step ran, and frames it didn't
-    /// ([`PlayerMovement::step_world`]).
+    /// The AI linear task thread manager once its threads are made
+    /// (`threads`, after `havok` as in the game).
+    threads: Stage<u32>,
+    /// Frames the AI threads (and the world step on thread 2) ran, and
+    /// frames they didn't ([`PlayerMovement::run_ai_threads`]).
     pub world_frames: u64,
     pub world_fallback_frames: u64,
     /// The world step stopped once; it isn't tried again in this cell.
@@ -264,6 +292,7 @@ impl Default for PlayerMovement {
             forms: HashMap::new(),
             in_step: false,
             cell_refs: Vec::new(),
+            threads: Stage::NotTried,
             world_frames: 0,
             world_fallback_frames: 0,
             world_failed: None,
@@ -389,6 +418,12 @@ impl PlayerMovement {
             let made = self.make_player(e, order, input);
             self.player = match made {
                 Ok(p) => Stage::Done(p),
+                Err(why) => Stage::Failed(why),
+            };
+        }
+        if self.threads == Stage::NotTried && self.havok.done().is_some() {
+            self.threads = match self.guarded(e, "threads", start_ai_threads) {
+                Ok(manager) => Stage::Done(manager),
                 Err(why) => Stage::Failed(why),
             };
         }
@@ -715,25 +750,32 @@ impl PlayerMovement {
         }
     }
 
-    /// The frame's Havok world through the game's code (`--physics engine`):
-    /// the frame timer's `bhkWorld::SetDeltaTime` (as `0086f260` calls it),
-    /// then, as `TES::UpdateCellAnimations` (`00453550`) does for an
-    /// interior, the frame's seconds added to its time (`011c3c08`) and
-    /// `TESObjectCELL::UpdateManagedNodes` (`00551890`) on the cell: the
-    /// world's step (`bhkWorld::Update`, batched adds, `hkpWorld::stepDeltaTime`
-    /// until the frame's marker) and the scene-graph update that copies each
-    /// moving body's transform to its node (`bhkCollisionObject::UpdateWorldData`).
-    /// Returns every loaded reference's root node where it is now, or `None`
-    /// when the world isn't made or the step stopped (the misses are
-    /// recorded under `world`; a stopped step isn't tried again in the cell)
-    /// and the viewer steps its own bodies.
+    /// The frame's AI linear task threads through the game's code
+    /// (`--physics engine`), where the game steps its Havok world: as
+    /// `Main::OnIdle` (`0086e650`) runs them with more than one processor,
+    /// `008c80e0(1)` and `StartThreads` (`008c78c0`), then `WaitForThreads`
+    /// (`008c7990`). Waiting, the main thread hands the engine to the game
+    /// threads ([`engine::thread_host`]): thread 1 (`008c7da0`) and thread 2
+    /// (`008c7f50`) step through their stage events, and thread 2, once
+    /// thread 1 is past its stage 4, runs `TES::UpdateCellAnimations`
+    /// (`00453550`) with `00453850`'s seconds: the cell's `UpdateManagedNodes`
+    /// (`00551890`, the world's `bhkWorld::Update`) and the scene-graph update
+    /// that copies each moving body's transform to its node. Returns every
+    /// loaded reference's root node where it is now, or `None` when the
+    /// threads or the cell aren't made or the frame stopped (the misses are
+    /// recorded under `world`, those of the game threads with their own
+    /// callers; a stopped frame isn't tried again in the cell) and the viewer
+    /// steps its own bodies.
     ///
-    /// Bridged: the rest of `0086f260` and `00453550` (the wind, the sky,
-    /// `LockHavokUpdateMT`, which is a critical section only with more than
-    /// one thread) doesn't run; the cell is the one the stages made.
-    pub fn step_world(&mut self, e: &mut Engine, seconds: f32) -> Option<Vec<BodyPose>> {
-        let cell = match (&self.havok, &self.cell, &self.world_failed) {
-            (Stage::Done(()), Some((_, Stage::Done(cell))), None) => *cell,
+    /// Stand-in for the frame timer (`Main::OnIdle_UpdateTimer`, `0086f260`):
+    /// the viewer's seconds instead of the game's timer, given to
+    /// `bhkWorld::SetDeltaTime` (`00c66760`, with `00525420`'s flag; the
+    /// menu mode isn't consulted, so not mode 4) and kept at `011dea30`
+    /// times the setting at `011c5724`. The rest of `0086e650` (what the main
+    /// thread does while the threads run) doesn't run.
+    pub fn run_ai_threads(&mut self, e: &mut Engine, seconds: f32) -> Option<Vec<BodyPose>> {
+        let manager = match (&self.threads, &self.cell, &self.world_failed) {
+            (Stage::Done(manager), Some((_, Stage::Done(_))), None) => *manager,
             _ => {
                 self.world_fallback_frames += 1;
                 return None;
@@ -741,10 +783,14 @@ impl PlayerMovement {
         };
         let refs = self.cell_refs.clone();
         let out = self.guarded(e, "world", |e| {
-            e.call(SET_DELTA_TIME, &[seconds.to_bits(), 0, 0]);
-            let time = e.mem.f32(CELL_ANIMATION_TIME) + seconds;
-            e.mem.set_f32(CELL_ANIMATION_TIME, time);
-            e.call(UPDATE_MANAGED_NODES, &[cell, time.to_bits(), 0]);
+            let flag = e.call(HAVOK_STEP_FLAG, &[]).u8() as u32;
+            e.call(SET_DELTA_TIME, &[seconds.to_bits(), flag, 0]);
+            let multiplier = e.call(SETTING_FLOAT_PTR, &[TIME_MULTIPLIER]).u32();
+            let scaled = (e.mem.f32(multiplier) as f64 * seconds as f64) as f32;
+            e.mem.set_f32(FRAME_SECONDS, scaled);
+            e.call(AI_THREADS_RENDER_SAFE, &[1]);
+            e.call(START_AI_THREADS, &[manager]);
+            e.call(WAIT_FOR_AI_THREADS, &[manager]);
             let mut poses = Vec::with_capacity(refs.len());
             for &(reference, made) in &refs {
                 let root = e.vcall(made, GET_3D, &[]).u32();
@@ -794,18 +840,21 @@ impl PlayerMovement {
         };
         let mut line = format!(
             "Game's movement: {} frames moved by the game's code, {} by crates/physics; \
-             havok {}; player {}; cell {cell}; controller {}; {} untranslated addresses reached.",
+             havok {}; player {}; AI threads {}; cell {cell}; controller {}; {} untranslated \
+             addresses reached.",
             self.engine_frames,
             self.fallback_frames,
             word(&self.havok),
             word(&self.player),
+            word(&self.threads),
             word(&self.controller),
             self.misses.len()
         );
         if self.world_frames + self.world_fallback_frames > 0 {
             let _ = write!(
                 line,
-                " Game's physics: {} world steps by the game's code, {} by crates/physics{}.",
+                " Game's physics: {} world steps by the game's code (AI thread 2), {} by \
+                 crates/physics{}.",
                 self.world_frames,
                 self.world_fallback_frames,
                 match &self.world_failed {
@@ -866,10 +915,11 @@ impl crate::Host {
         self.movement.step(&mut self.engine, order, cell, input)
     }
 
-    /// The frame's Havok world step through the game's code
-    /// ([`PlayerMovement::step_world`]); `None`: the caller steps its own.
-    pub fn step_world(&mut self, seconds: f32) -> Option<Vec<BodyPose>> {
-        self.movement.step_world(&mut self.engine, seconds)
+    /// The frame's AI linear task threads, with the Havok world step on
+    /// thread 2, through the game's code ([`PlayerMovement::run_ai_threads`]);
+    /// `None`: the caller steps its own bodies.
+    pub fn run_ai_threads(&mut self, seconds: f32) -> Option<Vec<BodyPose>> {
+        self.movement.run_ai_threads(&mut self.engine, seconds)
     }
 
     /// The static initializers start-up skipped (`static_init` in
@@ -906,6 +956,34 @@ impl crate::Host {
         }
         out
     }
+}
+
+/// The AI linear task threads as `main` makes them (the module, stage
+/// `threads`): `iNumHWThreads` set from `GetSystemInfo`'s processor count,
+/// 1 made 2 (`0086a950`..`0086a990`; `main`'s INI path set-up `00876ad0`
+/// between them doesn't run), then, with more than one, the manager
+/// (`00713d80`) and its `CreateThreads` (`008c7290`, `0086b117`..`0086b12d`):
+/// its stage events and, with three or more, threads 1 and 2 (else the one
+/// combined thread `008c7bd0`), each a `BSThread` the thread host runs
+/// ([`engine::thread_host`]). Answers the manager (0 when no threads).
+fn start_ai_threads(e: &mut Engine) -> Result<u32, String> {
+    let processors = e.with_stack(SYSTEM_INFO_SIZE, |e, info| {
+        e.call(GET_SYSTEM_INFO, &[info.addr()]);
+        e.mem.u32(info.addr() + SYSTEM_INFO_PROCESSORS)
+    });
+    let setting = e.call(SETTING_INT_PTR, &[NUM_HW_THREADS]).u32();
+    e.mem.set_u32(setting, processors);
+    let setting = e.call(SETTING_INT_PTR, &[NUM_HW_THREADS]).u32();
+    if e.mem.i32(setting) == 1 {
+        e.mem.set_u32(setting, 2);
+    }
+    let setting = e.call(SETTING_INT_PTR, &[NUM_HW_THREADS]).u32();
+    if e.mem.i32(setting) <= 1 {
+        return Ok(0);
+    }
+    let manager = e.call(AI_THREAD_MANAGER, &[]).u32();
+    e.call(CREATE_AI_THREADS, &[manager]);
+    Ok(manager)
 }
 
 /// The game's `SetPosition` (vtable +0x2A8) with a point on the game's stack.
@@ -981,36 +1059,64 @@ mod tests {
         assert_eq!(m.misses.len(), 2);
     }
 
-    /// Without the havok and cell stages the world step doesn't run and the
+    /// Without the threads and cell stages the AI threads don't run and the
     /// frame is counted as the viewer's.
     #[test]
-    fn the_world_step_waits_for_its_stages() {
+    fn the_ai_threads_wait_for_their_stages() {
         let mut e = Engine::new();
         let mut m = PlayerMovement::default();
-        assert_eq!(m.step_world(&mut e, 0.016), None);
+        assert_eq!(m.run_ai_threads(&mut e, 0.016), None);
         assert_eq!((m.world_frames, m.world_fallback_frames), (0, 1));
-        assert!(m
-            .summary()
-            .contains("0 world steps by the game's code, 1 by crates/physics"));
+        assert!(m.summary().contains(
+            "0 world steps by the game's code (AI thread 2), 1 by crates/physics"
+        ));
     }
 
-    /// The world step runs the frame timer and the cell's managed-node
-    /// update with the frame's time added, and reads each reference's root
-    /// node; a stop is recorded under `world` and not tried again.
+    /// `threads`: `iNumHWThreads` from the processor count (1 made 2), then
+    /// the manager's `CreateThreads`.
     #[test]
-    fn the_world_step_runs_the_cells_update_and_reads_the_nodes() {
+    fn the_threads_stage_sets_the_thread_count_and_creates_the_threads() {
+        for (processors, threads) in [(1u32, 2u32), (8, 8)] {
+            let mut e = Engine::new();
+            e.mem.map(NUM_HW_THREADS & !0xfff, 0x1000);
+            e.mem.map(0x2000, 0x1000);
+            e.mem.set_u32(0x2000, processors);
+            e.register(GET_SYSTEM_INFO, |e, a| {
+                let processors = e.mem.u32(0x2000);
+                e.mem.set_u32(a[0] + SYSTEM_INFO_PROCESSORS, processors);
+                Ret::default()
+            });
+            e.register(SETTING_INT_PTR, |_, a| engine::abi::RetVal::into_ret(a[0]));
+            e.register(AI_THREAD_MANAGER, |_, _| engine::abi::RetVal::into_ret(0x2100u32));
+            e.register(CREATE_AI_THREADS, |e, a| {
+                e.mem.set_u32(0x2004, a[0]);
+                Ret::default()
+            });
+            assert_eq!(start_ai_threads(&mut e), Ok(0x2100));
+            assert_eq!(e.mem.u32(NUM_HW_THREADS), threads);
+            assert_eq!(e.mem.u32(0x2004), 0x2100);
+        }
+    }
+
+    /// A frame: the timer's stand-in (`SetDeltaTime`, the scaled seconds at
+    /// `011dea30`), `008c80e0(1)`, `StartThreads` and `WaitForThreads` on the
+    /// manager, in that order; then each reference's root node is read. A
+    /// stop is recorded under `world` and not tried again.
+    #[test]
+    fn a_frame_starts_and_waits_for_the_ai_threads_and_reads_the_nodes() {
         let mut e = Engine::new();
-        e.mem.map(CELL_ANIMATION_TIME & !0xfff, 0x1000);
-        e.mem.set_f32(CELL_ANIMATION_TIME, 1.0);
+        e.mem.map(FRAME_SECONDS & !0xfff, 0x1000);
+        e.mem.map(0x2000, 0x1000);
+        e.mem.set_f32(0x2008, 2.0);
+        e.register(HAVOK_STEP_FLAG, |_, _| Ret::default());
         e.register(SET_DELTA_TIME, |e, a| {
             e.mem.set_u32(0x0000_2000, a[0]);
             Ret::default()
         });
-        e.register(UPDATE_MANAGED_NODES, |e, a| {
-            e.mem.set_u32(0x0000_2004, a[1]);
-            Ret::default()
-        });
-        e.mem.map(0x2000, 0x1000);
+        e.register(SETTING_FLOAT_PTR, |_, _| engine::abi::RetVal::into_ret(0x2008u32));
+        for f in [AI_THREADS_RENDER_SAFE, START_AI_THREADS, WAIT_FOR_AI_THREADS] {
+            e.register(f, |_, _| Ret::default());
+        }
         // A reference whose Get3D (+0x1D0) answers a root node at 0x2400.
         let vtable = 0x2100;
         e.mem.set_u32(0x2200, vtable);
@@ -1024,25 +1130,40 @@ mod tests {
         }
         e.mem.set_f32(0x2400 + WORLD_TRANSLATION, 5.0);
         let mut m = PlayerMovement {
-            havok: Stage::Done(()),
+            threads: Stage::Done(0x2600),
             cell: Some((FormId(0x1234), Stage::Done(0x3000))),
             cell_refs: vec![(FormId(0x99), 0x2200)],
             ..PlayerMovement::default()
         };
-        let poses = m.step_world(&mut e, 0.5).expect("ran");
+        e.call_log = Some(vec![]);
+        let poses = m.run_ai_threads(&mut e, 0.5).expect("ran");
+        let log = e.call_log.take().unwrap();
+        let order: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|(a, _)| {
+                [AI_THREADS_RENDER_SAFE, START_AI_THREADS, WAIT_FOR_AI_THREADS].contains(a)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (AI_THREADS_RENDER_SAFE, vec![1]),
+                (START_AI_THREADS, vec![0x2600]),
+                (WAIT_FOR_AI_THREADS, vec![0x2600]),
+            ]
+        );
         assert_eq!(e.mem.f32(0x2000), 0.5);
-        assert_eq!(e.mem.f32(0x2004), 1.5);
-        assert_eq!(e.mem.f32(CELL_ANIMATION_TIME), 1.5);
+        assert_eq!(e.mem.f32(FRAME_SECONDS), 1.0);
         assert_eq!(poses.len(), 1);
         assert_eq!(poses[0].reference, FormId(0x99));
         assert_eq!(poses[0].translation, [5.0, 0.0, 0.0]);
         assert_eq!(poses[0].rotation[1], [0.0, 1.0, 0.0]);
         assert_eq!(m.world_frames, 1);
-        // A stop: recorded, and the step isn't tried again.
-        e.register(UPDATE_MANAGED_NODES, |e, _| e.call(0x00ab_cdef, &[]));
-        assert_eq!(m.step_world(&mut e, 0.5), None);
+        // A stop: recorded, and the frame isn't tried again.
+        e.register(WAIT_FOR_AI_THREADS, |e, _| e.call(0x00ab_cdef, &[]));
+        assert_eq!(m.run_ai_threads(&mut e, 0.5), None);
         assert_eq!(m.misses[&0x00ab_cdef].stage, "world");
-        assert_eq!(m.step_world(&mut e, 0.5), None);
+        assert_eq!(m.run_ai_threads(&mut e, 0.5), None);
         assert_eq!(m.misses[&0x00ab_cdef].count, 1);
         assert_eq!(m.world_fallback_frames, 2);
     }

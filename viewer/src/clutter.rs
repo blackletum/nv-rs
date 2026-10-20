@@ -243,8 +243,8 @@ fn setting(game: &cellview::Game, section: &str, name: &str) -> Option<f32> {
 }
 
 /// `--physics engine`: the loose objects moved by the game's own Havok world
-/// (`host::Host::step_world`: `bhkWorld::SetDeltaTime`, then
-/// `TESObjectCELL::UpdateManagedNodes` with the world's step), the viewer
+/// (`host::Host::run_ai_threads`: the frame's AI linear task threads, AI
+/// thread 2 stepping the world in `TES::UpdateCellAnimations`), the viewer
 /// only drawing where the game's nodes are. A frame the game's code can't
 /// run, the viewer's own bodies step as before.
 #[derive(Resource, Default)]
@@ -295,7 +295,7 @@ fn step_engine_world(
     let Some(mut host) = host else {
         return;
     };
-    let Some(poses) = host.step_world(havok.dt) else {
+    let Some(poses) = host.run_ai_threads(havok.dt) else {
         return;
     };
     engine.ran = true;

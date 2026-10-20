@@ -348,7 +348,8 @@ pub enum PhysicsMode {
     /// `crates/physics`.
     #[default]
     Old,
-    /// The game's own Havok world (`host::player_move::PlayerMovement::step_world`),
+    /// The game's own Havok world, stepped on its AI thread 2
+    /// (`host::player_move::PlayerMovement::run_ai_threads`),
     /// `crates/physics` for a frame it can't run.
     Engine,
 }
