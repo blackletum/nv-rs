@@ -52,8 +52,8 @@ const LIST_CONSTRUCT_00B998E0: u32 = 0x00b9_98e0;
 const LIST_DESTRUCT_00B5C7C0: u32 = 0x00b5_c7c0;
 /// `NiTPointerListBase<..>::RemoveAll` (engine map, `00e74d40`, `thiscall` on a list).
 const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
-/// The texture query `00b6c2c0` (`thiscall`, eight stack words: the renderer, a texture kind
-/// and six out-parameter addresses).
+/// The texture query `00b6c2c0` (`stdcall`, `RET 0x20`: eight stack words, the renderer, a
+/// texture kind and six out-parameter addresses; it does not read `ECX`).
 const TEXTURE_QUERY_00B6C2C0: u32 = 0x00b6_c2c0;
 /// The object at `011f4748` whose vtable slot +0x94 (three words) the code calls.
 const OBJECT_011F4748: u32 = 0x011f_4748;
@@ -136,7 +136,6 @@ pub fn fn_00b6dd80(e: &mut Engine, this: Ptr) -> Ptr {
         e.call(
             TEXTURE_QUERY_00B6C2C0,
             &args![
-                this,
                 renderer,
                 0x2bu32,
                 local(LOCAL_1C),
@@ -200,7 +199,6 @@ pub fn fn_00b6dd80(e: &mut Engine, this: Ptr) -> Ptr {
             e.call(
                 TEXTURE_QUERY_00B6C2C0,
                 &args![
-                    this,
                     renderer,
                     4u32,
                     local(LOCAL_2C),
@@ -697,14 +695,14 @@ mod tests {
         e.register(FORMAT_SLOT_94, |_, a| (a[1] + 0x100).into_ret());
         e.register_double(TEXTURE_QUERY_00B6C2C0, move |e, a| {
             // (kind 0x2b: 1000 x 500; kind 4: 700 x 900), the format word last.
-            let (width, height) = if a[2] == 0x2b {
+            let (width, height) = if a[1] == 0x2b {
                 (1000, 500)
             } else {
                 (700, 900)
             };
-            e.mem.set_u32(a[3], width);
-            e.mem.set_u32(a[4], height);
-            e.mem.set_u32(a[8], format);
+            e.mem.set_u32(a[2], width);
+            e.mem.set_u32(a[3], height);
+            e.mem.set_u32(a[7], format);
             Ret::default()
         });
         e.register_double(MAKE_00A9FE90, |e, a| {
@@ -749,7 +747,8 @@ mod tests {
         );
         let query = calls(&e, TEXTURE_QUERY_00B6C2C0);
         assert_eq!(query.len(), 1);
-        assert_eq!(&query[0][..3], &[this, renderer, 0x2b]);
+        assert_eq!(query[0].len(), 8);
+        assert_eq!(&query[0][..2], &[renderer, 0x2b]);
         // Width max(1000, 800), height max(500, 600), format word 0x15 + 0x100.
         assert_eq!(
             calls(&e, MAKE_00A9FE90),
@@ -783,7 +782,8 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0xa8), 0x0bf0_0000);
         let query = calls(&e, TEXTURE_QUERY_00B6C2C0);
         assert_eq!(query.len(), 2);
-        assert_eq!(query[1][2], 4);
+        assert_eq!(query[1].len(), 8);
+        assert_eq!(query[1][1], 4);
     }
 
     #[test]
