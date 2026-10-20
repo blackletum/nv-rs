@@ -303,9 +303,67 @@ pub fn bs_file_open(e: &mut Engine, this: Ptr<BSFile>, _unused_1: u32, text: boo
     e.get(file, NiFile::m_bGood) != 0
 }
 
+/// `NiFile`'s base constructor (`00aa14b0`, `thiscall`), `strlen` (`00ec6130`), `strcpy_s`
+/// (`00ec65a6`), `BSFile::Open` (`00aff300`, `thiscall`, two words) and `BSFile::Exist`
+/// (`00affc60`, `thiscall`, answers `AL`).
+const NI_FILE_CONSTRUCT: u32 = 0x00aa_14b0;
+const STRLEN: u32 = 0x00ec_6130;
+const STRCPY_S: u32 = 0x00ec_65a6;
+const BS_FILE_OPEN: u32 = 0x00af_f300;
+const BS_FILE_EXIST: u32 = 0x00af_fc60;
+
+// Translated from 00b00260 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b00260 - the SEH frame (FS:[0] handler 00f23868, state 0 after the base constructor) is not translated.
+/// `BSFile::BSFile` (engine map; unit `BSSystem/bsfile_xenon.cpp`; `thiscall`, four words,
+/// `RET 0x10`: path, mode, buffer size, a byte for `Open`): `NiFile`'s constructor, the vtable
+/// `010a4764`, no byte swapping (`00aff990(0)`), the mode at +0x28 and the buffer size at +0x10;
+/// +0x14, +0x18, +0x20, +0x24, +0x150, +0x14c, +0x148, +0x154, +0x34, +0x3c and +0x40 cleared,
+/// the byte +0x30 cleared and +0x38 set to -1. A path of 0x104 characters or more leaves the name
+/// at +0x44 empty; a shorter one is copied there (`strcpy_s` into 0x104 bytes) and, for mode 1,
+/// the file is opened (`BSFile::Open(0, byte)`). For mode 0 the byte +0x2c is set to whether
+/// the file exists (`BSFile::Exist`). Answers `this`.
+pub fn bs_file_bs_file(
+    e: &mut Engine,
+    this: Ptr<BSFile>,
+    path: Ptr,
+    mode: u32,
+    buffer_size: u32,
+    open_byte: u8,
+) -> Ptr<BSFile> {
+    let t = this.addr();
+    e.call(NI_FILE_CONSTRUCT, &args![t]);
+    e.mem.set_u32(t, BSFILE_VTABLE);
+    e.call(0x00af_f990, &args![t, 0u32]);
+    e.mem.set_u32(t + 0x28, mode);
+    e.mem.set_u32(t + 0x10, buffer_size);
+    for offset in [0x14u32, 0x18, 0x20, 0x24, 0x150, 0x14c, 0x148, 0x154] {
+        e.mem.set_u32(t + offset, 0);
+    }
+    e.mem.set_u8(t + 0x30, 0);
+    e.mem.set_u32(t + 0x34, 0);
+    e.mem.set_u32(t + 0x38, 0xffff_ffff);
+    e.mem.set_u32(t + 0x3c, 0);
+    e.mem.set_u32(t + 0x40, 0);
+    let length = e.call(STRLEN, &args![path]).u32();
+    if length >= 0x104 {
+        e.mem.set_u8(t + 0x44, 0);
+    } else {
+        e.call(STRCPY_S, &args![t + 0x44, 0x104u32, path]);
+        if mode == 1 {
+            e.call(BS_FILE_OPEN, &args![t, 0u32, u32::from(open_byte)]);
+        }
+    }
+    if mode == 0 {
+        let exists = e.call(BS_FILE_EXIST, &args![t]).u8();
+        e.mem.set_u8(t + 0x2c, exists);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_0260, bs_file_bs_file(Ptr<BSFile>, Ptr, u32, u32, u8) -> Ptr<BSFile>),
         entry!(0x00af_f990, fn_00aff990(Ptr<BSFile>, bool)),
         entry!(0x00af_f9d0, fn_00aff9d0(Ptr, Ptr, u32) -> u32),
         entry!(0x00af_f9f0, fn_00aff9f0(Ptr, Ptr, u32) -> u32),
@@ -667,5 +725,57 @@ mod tests {
         opens(&mut e, &[0]);
         assert!(!e.call(0x00af_f300, &args![this, 0u32, false]).bool());
         assert_eq!(calls_to(&e, FOPEN_S).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    fn engine() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        for f in [NI_FILE_CONSTRUCT, 0x00af_f990, BS_FILE_OPEN] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(BS_FILE_EXIST, |_, _| 1u32.into_ret());
+        let file = e.mem.alloc(0x158);
+        let path = e.mem.alloc(0x200);
+        e.mem.set_cstr(path, b"Data.txt");
+        (e, file, path)
+    }
+
+    #[test]
+    fn mode_0_copies_the_name_and_asks_whether_it_exists() {
+        let (mut e, file, path) = engine();
+        e.call_log = Some(vec![]);
+        let made = e.call(0x00b0_0260, &args![file, path, 0u32, 0x4000u32, 1u32]).u32();
+        assert_eq!(made, file);
+        assert_eq!(e.mem.u32(file), BSFILE_VTABLE);
+        assert_eq!(e.mem.u32(file + 0x10), 0x4000);
+        assert_eq!(e.mem.u32(file + 0x38), 0xffff_ffff);
+        assert_eq!(e.mem.cstr(file + 0x44), b"Data.txt".to_vec());
+        assert_eq!(e.mem.u8(file + 0x2c), 1);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != BS_FILE_OPEN));
+    }
+
+    #[test]
+    fn mode_1_opens_and_a_long_name_stays_empty() {
+        let (mut e, file, path) = engine();
+        e.call_log = Some(vec![]);
+        e.call(0x00b0_0260, &args![file, path, 1u32, 0u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let opens: Vec<_> = log.iter().filter(|c| c.0 == BS_FILE_OPEN).collect();
+        assert_eq!(opens[0].1, vec![file, 0, 1]);
+        let long = vec![b'a'; 0x104];
+        e.mem.set_cstr(path, &long);
+        e.call(0x00b0_0260, &args![file, path, 1u32, 0u32, 1u32]);
+        assert_eq!(e.mem.u8(file + 0x44), 0);
     }
 }
