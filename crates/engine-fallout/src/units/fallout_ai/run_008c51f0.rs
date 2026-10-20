@@ -21,9 +21,23 @@ pub fn fn_008c5e20(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 008c5e70 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; `008d0640`
+/// calls it): when the object at `+4` is set, calls its virtual slot 0 with 1 (the shape of a
+/// deleting destructor call). `+4` is left as it is.
+pub fn fn_008c5e70(e: &mut Engine, this: Ptr) {
+    let object = e.mem.u32(this.addr() + 4);
+    if object != 0 {
+        e.vcall(object, 0, &args![1u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x008c_5e20, fn_008c5e20(Ptr) -> Ptr)]
+    vec![
+        entry!(0x008c_5e20, fn_008c5e20(Ptr) -> Ptr),
+        entry!(0x008c_5e70, fn_008c5e70(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -47,5 +61,32 @@ mod movement_path_tests {
                 (0x14, 4, 0),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    /// The object at `+4` gets its slot-0 call with 1; with none, nothing is called.
+    #[test]
+    fn fn_008c5e70_deletes_the_object_at_4() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        e.mem.set_u32(0x1004, 0x1100);
+        e.mem.set_u32(0x1100, 0x1200);
+        e.mem.set_u32(0x1200, 0x00ab_0000);
+        e.register(0x00ab_0000, |e, a| {
+            e.mem.set_u32(0x1800, a[0]);
+            e.mem.set_u32(0x1804, a[1]);
+            Ret::default()
+        });
+        e.call(0x008c_5e70, &args![0x1000u32]);
+        assert_eq!((e.mem.u32(0x1800), e.mem.u32(0x1804)), (0x1100, 1));
+        assert_eq!(e.mem.u32(0x1004), 0x1100);
+        e.mem.set_u32(0x1004, 0);
+        e.mem.set_u32(0x1800, 0);
+        e.call(0x008c_5e70, &args![0x1000u32]);
+        assert_eq!(e.mem.u32(0x1800), 0);
     }
 }

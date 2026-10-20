@@ -96,6 +96,78 @@ pub fn fn_00937160(e: &mut Engine, this: Ptr<ModifierList>, source: Ptr<Modifier
     }
 }
 
+/// `operator delete` (`00401030`, `cdecl`, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `0063f7b0` (`thiscall`, plain `RET`): removes the first node of a `BSSimpleList`, the
+/// next one's item moving into the head.
+const REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// The slot count of a fast-modifier collection (`0x011e0750`, an `int`).
+const FAST_MODIFIER_SLOTS: u32 = 0x011e_0750;
+/// `00937130` (`thiscall`, `RET 4`): the fast-modifier collection's deleting destructor.
+const FAST_MODIFIERS_DELETE: u32 = 0x0093_7130;
+/// `00937f40` (`thiscall`, plain `RET`): the fast-modifier collection's destructor.
+const FAST_MODIFIERS_DESTRUCT: u32 = 0x0093_7f40;
+
+// Translated from 009370b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::DeleteAllModifiers` (Ghidra name; `thiscall`, no stack words, plain `RET`):
+/// while the list's head item (`006815c0` answers the head, the item is its first word) is
+/// not null, deletes the item (`operator delete`) and removes the head node (`0063f7b0`);
+/// then, when `+0xc` (the fast-modifier collection) is set, deletes it with its deleting
+/// destructor (`00937130` with 1) and clears `+0xc`.
+pub fn fn_009370b0(e: &mut Engine, this: Ptr) {
+    loop {
+        let head = e.call(NODE_ITEM_ADDRESS, &args![this]).u32();
+        let item = e.mem.u32(head);
+        if item == 0 {
+            break;
+        }
+        e.call(OPERATOR_DELETE, &args![item]);
+        e.call(REMOVE_HEAD, &args![this]);
+    }
+    if e.mem.u32(this.addr() + 0xc) != 0 {
+        let fast = e.mem.u32(this.addr() + 0xc);
+        if fast != 0 {
+            e.call(FAST_MODIFIERS_DELETE, &args![fast, 1u32]);
+        }
+        e.mem.set_u32(this.addr() + 0xc, 0);
+    }
+}
+
+// Translated from 00937130 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The fast-modifier collection's deleting destructor (`thiscall`, one stack word, `RET 4`;
+/// unnamed in the engine map): its destructor (`00937f40`), then, with bit 0 of `flags`,
+/// `operator delete` on `this`. Answers `this`.
+pub fn fn_00937130(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(FAST_MODIFIERS_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this.addr()
+}
+
+// Translated from 00937f40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The fast-modifier collection's destructor (`thiscall`, no stack words, plain `RET`; unnamed
+/// in the engine map): when the slot count at `011e0750` is not 0 and the array (`+0`) is set,
+/// deletes every set slot (`operator delete`), the count read again each step and compared
+/// signed (`JGE`), then the array itself, and clears `+0`.
+pub fn fn_00937f40(e: &mut Engine, this: Ptr) {
+    if e.mem.u32(FAST_MODIFIER_SLOTS) == 0 || e.mem.u32(this.addr()) == 0 {
+        return;
+    }
+    let mut i: i32 = 0;
+    while i < e.mem.i32(FAST_MODIFIER_SLOTS) {
+        let array = e.mem.u32(this.addr());
+        let slot = e.mem.u32(array.wrapping_add((i as u32).wrapping_mul(4)));
+        if slot != 0 {
+            e.call(OPERATOR_DELETE, &args![slot]);
+        }
+        i = i.wrapping_add(1);
+    }
+    let array = e.mem.u32(this.addr());
+    e.call(OPERATOR_DELETE, &args![array]);
+    e.mem.set_u32(this.addr(), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -105,6 +177,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0093_7b30, fn_00937b30(Ptr)),
         entry!(0x009373f0, fn_009373f0(Ptr) -> u8),
+        entry!(0x0093_70b0, fn_009370b0(Ptr)),
+        entry!(0x0093_7130, fn_00937130(Ptr, u32) -> u32),
+        entry!(0x0093_7f40, fn_00937f40(Ptr)),
     ]
 }
 
@@ -285,5 +360,73 @@ mod copy_tests {
         assert!(calls_to(&log, MODIFIER_COPY).is_empty());
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(calls_to(&log, ADD_MODIFIER), [vec![this, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod delete_all_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Two items in the list, then the fast collection: each item deleted and its head removed,
+    /// then the collection's deleting destructor with 1, and `+0xc` cleared.
+    #[test]
+    fn deletes_every_item_and_the_fast_collection() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        let list = 0x1000u32;
+        e.mem.set_u32(list, 0x1100);
+        e.mem.set_u32(list + 0xc, 0x1200);
+        e.register(NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        // The head takes the next item: 0x1100, then 0x1104, then none.
+        e.register(REMOVE_HEAD, |e, a| {
+            let next = if e.mem.u32(a[0]) == 0x1100 { 0x1104 } else { 0 };
+            e.mem.set_u32(a[0], next);
+            Ret::default()
+        });
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(FAST_MODIFIERS_DELETE, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0093_70b0, &args![list]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), [vec![0x1100], vec![0x1104]]);
+        assert_eq!(calls_to(&e, REMOVE_HEAD).len(), 2);
+        assert_eq!(calls_to(&e, FAST_MODIFIERS_DELETE), [vec![0x1200, 1]]);
+        assert_eq!(e.mem.u32(list + 0xc), 0);
+    }
+
+    /// The deleting destructor frees itself only with bit 0; the destructor frees the set
+    /// slots of the array (count at `011e0750`), then the array, and clears it.
+    #[test]
+    fn the_fast_collection_frees_its_slots_and_itself() {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        e.map(FAST_MODIFIER_SLOTS & !0xfff, 0x1000);
+        e.mem.set_u32(FAST_MODIFIER_SLOTS, 3);
+        let fast = 0x1000u32;
+        e.mem.set_u32(fast, 0x1100);
+        e.mem.set_u32(0x1100, 0x1200);
+        e.mem.set_u32(0x1104, 0);
+        e.mem.set_u32(0x1108, 0x1300);
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0093_7130, &args![fast, 2u32]).u32(), fast);
+        assert_eq!(
+            calls_to(&e, OPERATOR_DELETE),
+            [vec![0x1200], vec![0x1300], vec![0x1100]]
+        );
+        assert_eq!(e.mem.u32(fast), 0);
+        // Already cleared: nothing more; bit 0 deletes the collection itself.
+        e.call_log = Some(vec![]);
+        e.call(0x0093_7130, &args![fast, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), [vec![fast]]);
     }
 }
