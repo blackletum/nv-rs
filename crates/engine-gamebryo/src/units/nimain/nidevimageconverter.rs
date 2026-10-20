@@ -94,6 +94,30 @@ pub fn ni_dev_image_converter_ni_dev_image_converter(e: &mut Engine, this: Ptr) 
     this
 }
 
+/// `NiPixelFormat` (Xbox PDB) as `00a77980` reads it: `m_akComponents` from +0x14, four
+/// entries of 0xc bytes, each the component kind word at +0 and its bit count byte at +8.
+const PIXEL_FORMAT_COMPONENTS: u32 = 0x14;
+const PIXEL_FORMAT_COMPONENT_SIZE: u32 = 0xc;
+const PIXEL_FORMAT_COMPONENT_BITS: u32 = 0x8;
+
+// Translated from 00a77980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nidevimageconverter.cpp` range), `thiscall` on an
+/// `NiPixelFormat` with one word (a component kind; the shape of `NiPixelFormat::GetBits`,
+/// unconfirmed): the bit count byte of the first of the four components whose kind is the word,
+/// 0 when none is (only `AL` is set; the rest of `EAX` is not part of the answer).
+pub fn fn_00a77980(e: &mut Engine, this: Ptr, kind: u32) -> u8 {
+    let format = this.addr();
+    for index in 0..4u32 {
+        let entry = format
+            .wrapping_add(PIXEL_FORMAT_COMPONENTS)
+            .wrapping_add(index * PIXEL_FORMAT_COMPONENT_SIZE);
+        if e.mem.u32(entry) == kind {
+            return e.mem.u8(entry.wrapping_add(PIXEL_FORMAT_COMPONENT_BITS));
+        }
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -102,6 +126,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a7_b110,
             ni_dev_image_converter_ni_dev_image_converter(Ptr) -> Ptr
         ),
+        entry!(0x00a7_7980, fn_00a77980(Ptr, u32) -> u8),
     ]
 }
 
@@ -217,5 +242,29 @@ mod b000s_tests {
         let middle = e.mem.u32(head);
         assert_eq!(e.mem.u32(middle + 8), 0);
         assert_eq!(e.mem.u32(this + READERS + 8), 3);
+    }
+}
+
+#[cfg(test)]
+mod b000y_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00a77980_answers_the_first_matching_components_bits() {
+        let mut e = Engine::new();
+        let format = e.mem.alloc(0x44);
+        for (index, (kind, bits)) in [(0x11u32, 5u8), (0x12, 6), (0x12, 9), (0x13, 0)]
+            .iter()
+            .enumerate()
+        {
+            let entry = format + 0x14 + 0xc * index as u32;
+            e.mem.set_u32(entry, *kind);
+            e.mem.set_u8(entry + 8, *bits);
+        }
+        let bits = |e: &mut Engine, kind: u32| e.call(0x00a7_7980, &args![format, kind]).u8();
+        assert_eq!(bits(&mut e, 0x11), 5);
+        assert_eq!(bits(&mut e, 0x12), 6);
+        assert_eq!(bits(&mut e, 0x13), 0);
+        assert_eq!(bits(&mut e, 0x14), 0);
     }
 }
