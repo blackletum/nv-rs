@@ -2258,6 +2258,16 @@ pub fn pow(_e: &mut Engine, x: f64, y: f64) -> f64 {
     x.powf(y)
 }
 
+// Platform: replaces 00eca590 (tan, LIBCMT)
+/// `tan` (`cdecl`, one double on the stack, the result in `ST0`): with `__use_sse2_mathfcns`
+/// (`01270a64`) set and every MXCSR and x87 exception masked it jumps to the SSE2 body
+/// (`00edb898`), otherwise it loads the argument (`00ed27c5`) and runs the x87 body (`FPTAN`,
+/// `00eca628`). Both give the tangent; the error handling for NaN and infinite arguments is not
+/// modelled.
+pub fn tan(_e: &mut Engine, x: f64) -> f64 {
+    x.tan()
+}
+
 // Platform: replaces 00eca1d0 (acos, LIBCMT)
 pub fn acos(_e: &mut Engine, x: f64) -> f64 {
     x.acos()
@@ -4266,6 +4276,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca1d0, acos(f64) -> f64),
         entry!(0x00ec9ac0, pow_cdecl(f64, f64) -> f64),
         entry!(0x00eca190, acos_cdecl(f64) -> f64),
+        entry!(0x00ec_a590, tan(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec9050, ci_atan(f64) -> f64),
         entry!(0x00ec9760, atan2(f64, f64) -> f64),
@@ -7374,5 +7385,17 @@ mod runtime_support_tests {
         e.call_log = Some(vec![]);
         e.call(0x00ed_11f8, &[0]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tan_tests {
+    use super::*;
+
+    #[test]
+    fn tan_takes_one_double() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ec_a590, &args![1.0f64]).f64(), 1.0f64.tan());
+        assert_eq!(e.call(0x00ec_a590, &args![0.0f64]).f64(), 0.0);
     }
 }
