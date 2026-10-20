@@ -1067,9 +1067,9 @@ mod tests {
         let mut m = PlayerMovement::default();
         assert_eq!(m.run_ai_threads(&mut e, 0.016), None);
         assert_eq!((m.world_frames, m.world_fallback_frames), (0, 1));
-        assert!(m.summary().contains(
-            "0 world steps by the game's code (AI thread 2), 1 by crates/physics"
-        ));
+        assert!(m
+            .summary()
+            .contains("0 world steps by the game's code (AI thread 2), 1 by crates/physics"));
     }
 
     /// `threads`: `iNumHWThreads` from the processor count (1 made 2), then
@@ -1087,7 +1087,9 @@ mod tests {
                 Ret::default()
             });
             e.register(SETTING_INT_PTR, |_, a| engine::abi::RetVal::into_ret(a[0]));
-            e.register(AI_THREAD_MANAGER, |_, _| engine::abi::RetVal::into_ret(0x2100u32));
+            e.register(AI_THREAD_MANAGER, |_, _| {
+                engine::abi::RetVal::into_ret(0x2100u32)
+            });
             e.register(CREATE_AI_THREADS, |e, a| {
                 e.mem.set_u32(0x2004, a[0]);
                 Ret::default()
@@ -1113,8 +1115,14 @@ mod tests {
             e.mem.set_u32(0x0000_2000, a[0]);
             Ret::default()
         });
-        e.register(SETTING_FLOAT_PTR, |_, _| engine::abi::RetVal::into_ret(0x2008u32));
-        for f in [AI_THREADS_RENDER_SAFE, START_AI_THREADS, WAIT_FOR_AI_THREADS] {
+        e.register(SETTING_FLOAT_PTR, |_, _| {
+            engine::abi::RetVal::into_ret(0x2008u32)
+        });
+        for f in [
+            AI_THREADS_RENDER_SAFE,
+            START_AI_THREADS,
+            WAIT_FOR_AI_THREADS,
+        ] {
             e.register(f, |_, _| Ret::default());
         }
         // A reference whose Get3D (+0x1D0) answers a root node at 0x2400.
@@ -1141,7 +1149,12 @@ mod tests {
         let order: Vec<(u32, Vec<u32>)> = log
             .into_iter()
             .filter(|(a, _)| {
-                [AI_THREADS_RENDER_SAFE, START_AI_THREADS, WAIT_FOR_AI_THREADS].contains(a)
+                [
+                    AI_THREADS_RENDER_SAFE,
+                    START_AI_THREADS,
+                    WAIT_FOR_AI_THREADS,
+                ]
+                .contains(a)
             })
             .collect();
         assert_eq!(

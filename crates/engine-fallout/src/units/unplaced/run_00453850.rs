@@ -111,7 +111,9 @@ mod tests {
         let mut e = lock_engine(1);
         e.call(0x0045_3860, &args![0u32, 1u8]);
         let log = e.call_log.take().unwrap();
-        assert!(!log.iter().any(|(a, _)| *a == 0x0045_38a0 || *a == 0x0045_38c0));
+        assert!(!log
+            .iter()
+            .any(|(a, _)| *a == 0x0045_38a0 || *a == 0x0045_38c0));
     }
 
     #[test]

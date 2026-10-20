@@ -44,7 +44,12 @@ fn read_capture(path: &Path) -> Vec<Frame> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut lines = text.lines().filter(|l| !l.starts_with('#'));
     let header: Vec<&str> = lines.next().expect("header").split('\t').collect();
-    let col = |name: &str| header.iter().position(|h| *h == name).unwrap_or_else(|| panic!("column {name}"));
+    let col = |name: &str| {
+        header
+            .iter()
+            .position(|h| *h == name)
+            .unwrap_or_else(|| panic!("column {name}"))
+    };
     let (keys, dt, z, rot, vz, hs, mode) = (
         col("keys"),
         col("dt"),
@@ -123,7 +128,10 @@ fn the_games_movement_code_against_the_captured_game() {
         }
         let cap_start = frames.first().map_or(0.0, |f| f.z);
         let cap_speeds: Vec<f32> = frames.iter().map(|f| f.hspeed).collect();
-        let cap_rise = frames.iter().map(|f| f.z - cap_start).fold(0.0f32, f32::max);
+        let cap_rise = frames
+            .iter()
+            .map(|f| f.z - cap_start)
+            .fold(0.0f32, f32::max);
         let cap_up = frames.iter().map(|f| f.vz).fold(0.0f32, f32::max);
         println!(
             "{name}\t{moved}/{}\t{:.2}/{:.2}\t{:.2}/{:.2}\t{:.2}/{:.2}",

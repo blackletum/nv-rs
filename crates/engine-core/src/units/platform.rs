@@ -1780,7 +1780,10 @@ mod tests {
         e.mem.set_u32(0x2f00, ev);
         let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0100, 0, 0, 0]);
         let done = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
-        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]), WAIT_TIMEOUT);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[done, 0]),
+            WAIT_TIMEOUT
+        );
         assert_eq!(e.mem.u32(0x2100), 0x027f);
         assert_eq!(f64::from_bits(e.mem.u64(0x2108)), 1.0 / 3.0);
         // Back on the main thread: 24-bit.
