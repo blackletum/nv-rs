@@ -284,6 +284,25 @@ pub fn fn_00b7fbe0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(FREE_00AA10F0, &args![buckets]).u32()
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::pass_render_state;
+
+// Translated from 00b80040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): a pass's blend setter, `thiscall` with three
+/// stack words (`RET 0xc`), the third not read. Sets the render states 0x13 and 0x14 (the
+/// source and destination blend in Direct3D 9's numbering) to the two words: for each, the
+/// pass's render-state block (+0x30) is made first (`00e7f5d0`) when it is null, then
+/// `00e7f430` sets the state on it with the value and 1.
+pub fn fn_00b80040(
+    e: &mut Engine,
+    this: Ptr,
+    source_blend: u32,
+    destination_blend: u32,
+    _unused_3: u32,
+) {
+    pass_render_state(e, this.addr(), 0x13, source_blend);
+    pass_render_state(e, this.addr(), 0x14, destination_blend);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -293,6 +312,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
         entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
+        entry!(0x00b8_0040, fn_00b80040(Ptr, u32, u32, u32)),
     ]
 }
 
@@ -624,5 +644,29 @@ mod base_clean_up_tests {
         let freed: Vec<_> = log.iter().filter(|c| c.0 == FREE_00AA10F0).collect();
         assert_eq!(freed.len(), 1);
         assert_eq!(freed[0].1, vec![0x0e60_0000]);
+    }
+}
+
+#[cfg(test)]
+mod blend_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_inline::{
+        NEW_RENDER_STATES_00E7F5D0, SET_RENDER_STATE_00E7F430,
+    };
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00b80040_sets_both_blend_states() {
+        let mut e = pass_rig();
+        let pass = e.mem.alloc(0x68);
+        e.call(0x00b8_0040, &args![pass, 5u32, 6u32, 0u32]);
+        assert_eq!(render_states(&e, pass), vec![(0x13, 5), (0x14, 6)]);
+        assert_eq!(calls(&e, NEW_RENDER_STATES_00E7F5D0).len(), 1);
+        // A block already there is kept.
+        let block = e.mem.u32(pass + 0x30);
+        e.call(0x00b8_0040, &args![pass, 2u32, 1u32, 9u32]);
+        assert_eq!(e.mem.u32(pass + 0x30), block);
+        assert_eq!(calls(&e, NEW_RENDER_STATES_00E7F5D0).len(), 1);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00E7F430).len(), 4);
     }
 }

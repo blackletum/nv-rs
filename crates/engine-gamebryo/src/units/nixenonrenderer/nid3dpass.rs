@@ -43,11 +43,199 @@ pub fn fn_00e80620(e: &mut Engine) {
     e.call(NEXT_STEP, &args![]);
 }
 
+layout! {
+    /// `NiD3DPass` (Xbox PDB), 0x68 bytes; the offsets match the PC code's.
+    pub struct NiD3DPass: 0x68 {
+        /// `m_uiCurrentStage` (Xbox PDB).
+        0x14 m_uiCurrentStage: u32,
+        /// `m_uiStageCount` (Xbox PDB).
+        0x18 m_uiStageCount: u32,
+        /// `m_uiTexturesPerPass` (Xbox PDB).
+        0x1c m_uiTexturesPerPass: u32,
+        /// `m_kStages.m_pBase` (Xbox PDB): the stage array of the `NiTObjectArray` at +0x20.
+        0x24 m_kStages_m_pBase: u32,
+        /// `m_kStages.m_usMaxSize` (Xbox PDB).
+        0x28 m_kStages_m_usMaxSize: u16,
+        /// `m_kStages.m_usGrowBy` (Xbox PDB).
+        0x2e m_kStages_m_usGrowBy: u16,
+        /// `m_pkRenderStateGroup` (Xbox PDB).
+        0x30 m_pkRenderStateGroup: u32,
+        /// `m_bSoftwareVP` (Xbox PDB).
+        0x60 m_bSoftwareVP: u8,
+        /// `m_bRendererOwned` (Xbox PDB).
+        0x61 m_bRendererOwned: u8,
+    }
+}
+
+/// Imported `InterlockedDecrement` (import slot).
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// The render-state block release `00e7f6b0` (unnamed, `cdecl`, the block), the string free
+/// `00aa10f0` (unnamed, `cdecl`, one word), the stage array's clear `00e7fc30` (unit
+/// `nid3dpass.cpp`, unnamed; `thiscall` on the array, no stack words) and
+/// `NiTPrimitiveSet<..>::AddUnique` (`00e7ec00`, `thiscall` on the set, the address of the
+/// element; the engine map names it `NiControllerSequence::SetState`), which gives the pass
+/// back to the pass pool (`0126f72c`).
+const RELEASE_RENDER_STATES_00E7F6B0: u32 = 0x00e7_f6b0;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+const STAGES_CLEAR_00E7FC30: u32 = 0x00e7_fc30;
+const POOL_ADD_UNIQUE_00E7EC00: u32 = 0x00e7_ec00;
+const PASS_POOL_0126F72C: u32 = 0x0126_f72c;
+
+/// `NiPointer<T>` cleared as the code expands it: when it holds an object, the object's count
+/// at +4 goes down (`InterlockedDecrement`; deleted through vtable slot +4 at 0) and the
+/// pointer is cleared.
+fn clear_pointer(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 00e80190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): the pass delete that runs when a pass's
+/// count at +0x64 reaches 0, `thiscall`, no stack words. A pass the renderer does not own
+/// (`m_bRendererOwned`, +0x61, clear) is deleted through its vtable slot 0 with 1. Otherwise
+/// the pass is reset for the pass pool: the `NiPointer`s `m_spPixelConstantMap` (+0x34),
+/// `m_spPixelShader` (+0x44), `m_spVertexConstantMap` (+0x48) and `m_spVertexShader` (+0x5c)
+/// are cleared, the render-state group (+0x30) released (`00e7f6b0`) and cleared, the six
+/// program strings (+0x38, +0x3c, +0x40, +0x50, +0x54, +0x58) freed (`00aa10f0`) and cleared
+/// (each word cleared just after the next one is read), the stage array (+0x20) cleared
+/// (`00e7fc30`), the current stage, stage count and textures per pass (+0x14 to +0x1c) and
+/// `m_bSoftwareVP` (+0x60) cleared, and the pass given back to the pass pool (`00e7ec00` on
+/// the pool at `0126f72c`, the pass in the stack word the function saved `ECX` in).
+pub fn fn_00e80190(e: &mut Engine, this: Ptr<NiD3DPass>) {
+    let base = this.addr();
+    if e.get(this, NiD3DPass::m_bRendererOwned) == 0 {
+        e.vcall(base, 0, &args![1u32]);
+        return;
+    }
+    for offset in [0x34u32, 0x44, 0x48, 0x5c] {
+        clear_pointer(e, base + offset);
+    }
+    let group = e.get(this, NiD3DPass::m_pkRenderStateGroup);
+    e.call(RELEASE_RENDER_STATES_00E7F6B0, &args![group]);
+    let mut cleared = 0x30u32;
+    for offset in [0x38u32, 0x3c, 0x40, 0x50, 0x54, 0x58] {
+        let text = e.mem.u32(base + offset);
+        e.mem.set_u32(base + cleared, 0);
+        e.call(FREE_00AA10F0, &args![text]);
+        cleared = offset;
+    }
+    e.mem.set_u32(base + cleared, 0);
+    e.call(STAGES_CLEAR_00E7FC30, &args![base + 0x20]);
+    e.set(this, NiD3DPass::m_uiCurrentStage, 0);
+    e.set(this, NiD3DPass::m_uiStageCount, 0);
+    e.set(this, NiD3DPass::m_uiTexturesPerPass, 0);
+    e.set(this, NiD3DPass::m_bSoftwareVP, 0);
+    let pool = e.global::<u32>(PASS_POOL_0126F72C);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), base);
+        e.call(POOL_ADD_UNIQUE_00E7EC00, &args![pool, slot]);
+    });
+}
+
+/// The two stage limits `SetStage` compares the index with (`011bf560`: at or above it the
+/// call fails; `011bf558`: at or above it the stage array may grow first).
+const STAGE_LIMIT_011BF560: u32 = 0x011b_f560;
+const GROWING_STAGES_011BF558: u32 = 0x011b_f558;
+/// The stage array's set-size `00e7fd20` (`thiscall` on the array, one word), its set-at
+/// `00e7fb80` (`thiscall` on the array: index, address of the stage pointer) and the stage
+/// delete `00e7ecd0` (unnamed; `thiscall`, no stack words).
+const STAGES_SET_SIZE_00E7FD20: u32 = 0x00e7_fd20;
+const STAGES_SET_AT_00E7FB80: u32 = 0x00e7_fb80;
+const STAGE_DELETE_00E7ECD0: u32 = 0x00e7_ecd0;
+
+// Translated from 00e802b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DPass::SetStage` (engine map), `thiscall` with two stack words: the index and the
+/// stage. Answers 1 when the index is at or above the limit at `011bf560`. Otherwise the stage
+/// is held (count at +0x60 up, when not null), the stage array (+0x20) grows first to the
+/// index plus its grow-by (`00e7fd20`) when the index is at or above the word at `011bf558`
+/// and at or above the array's max size, and `00e7fb80` stores the stage (through the
+/// argument's own stack word) at the index. With a stage: the hold is dropped (`00e7ecd0` at
+/// 0), the stage's +4 takes the index, the current stage (+0x14) moves past it when equal, the
+/// stage count (+0x18) goes up, and the textures per pass (+0x1c) too when the stage's +8 is
+/// set. Without one, when the current stage is the index plus one (and not 0) and the array's
+/// element before it is null, the current stage goes down by one. Answers 0.
+pub fn ni_d3d_pass_set_stage(e: &mut Engine, this: Ptr<NiD3DPass>, index: u32, stage: Ptr) -> u32 {
+    let base = this.addr();
+    if index >= e.global::<u32>(STAGE_LIMIT_011BF560) {
+        return 1;
+    }
+    let stage = stage.addr();
+    let growing = index >= e.global::<u32>(GROWING_STAGES_011BF558);
+    if stage != 0 {
+        let held = e.mem.u32(stage + 0x60).wrapping_add(1);
+        e.mem.set_u32(stage + 0x60, held);
+    }
+    if growing && index >= u32::from(e.get(this, NiD3DPass::m_kStages_m_usMaxSize)) {
+        let grow_by = u32::from(e.get(this, NiD3DPass::m_kStages_m_usGrowBy));
+        e.call(
+            STAGES_SET_SIZE_00E7FD20,
+            &args![base + 0x20, grow_by.wrapping_add(index)],
+        );
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), stage);
+        e.call(STAGES_SET_AT_00E7FB80, &args![base + 0x20, index, slot]);
+    });
+    if stage != 0 {
+        let left = e.mem.u32(stage + 0x60).wrapping_sub(1);
+        e.mem.set_u32(stage + 0x60, left);
+        if left == 0 {
+            e.call(STAGE_DELETE_00E7ECD0, &args![stage]);
+        }
+        e.mem.set_u32(stage + 4, index);
+        let current = e.get(this, NiD3DPass::m_uiCurrentStage);
+        if current == index {
+            e.set(this, NiD3DPass::m_uiCurrentStage, current.wrapping_add(1));
+        }
+        let count = e.get(this, NiD3DPass::m_uiStageCount).wrapping_add(1);
+        e.set(this, NiD3DPass::m_uiStageCount, count);
+        if e.mem.u32(stage + 8) != 0 {
+            let textures = e.get(this, NiD3DPass::m_uiTexturesPerPass).wrapping_add(1);
+            e.set(this, NiD3DPass::m_uiTexturesPerPass, textures);
+        }
+        return 0;
+    }
+    let current = e.get(this, NiD3DPass::m_uiCurrentStage);
+    if current == index.wrapping_add(1) && current != 0 {
+        let array = e.get(this, NiD3DPass::m_kStages_m_pBase);
+        let last = e
+            .mem
+            .u32(array.wrapping_add(current.wrapping_mul(4)).wrapping_sub(4));
+        // `TEST ECX,ECX / JZ / TEST EAX,EAX / JNZ` back to the first test: with the element
+        // set (and the current stage not 0) the exe spins here for good. `00e7fb80` has just
+        // stored the null stage at that index, so the element is null whenever the store
+        // succeeded.
+        loop {
+            if last == 0 {
+                e.set(this, NiD3DPass::m_uiCurrentStage, current.wrapping_sub(1));
+                return 0;
+            }
+            if current == 0 {
+                return 0;
+            }
+        }
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e8_0150, fn_00e80150()),
         entry!(0x00e8_0620, fn_00e80620()),
+        entry!(0x00e8_0190, fn_00e80190(Ptr<NiD3DPass>)),
+        entry!(
+            0x00e8_02b0,
+            ni_d3d_pass_set_stage(Ptr<NiD3DPass>, u32, Ptr) -> u32
+        ),
     ]
 }
 
@@ -90,5 +278,197 @@ mod start_up_tests {
         e.register(MEMORY_MANAGER_ALLOCATE, |_, _| 0u32.into_ret());
         e.call(0x00e8_0150, &args![]);
         assert_eq!(e.mem.u32(0x0126_f72c), 0);
+    }
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::*;
+
+    const IMPORT_INTERLOCKED: u32 = IMPORT_INTERLOCKED_DECREMENT;
+    const OBJECT_DELETE: u32 = 0x0e70_0004;
+    const OBJECT_VTABLE: u32 = 0x0e71_0000;
+    const PASS_DELETE: u32 = 0x0e72_0000;
+    const PASS_VTABLE: u32 = 0x0e73_0000;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(0x011b_f000, 0x1000);
+        e.register(IMPORT_INTERLOCKED, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.put_vtable(OBJECT_VTABLE, &[0, OBJECT_DELETE]);
+        e.put_vtable(PASS_VTABLE, &[PASS_DELETE]);
+        for target in [
+            OBJECT_DELETE,
+            PASS_DELETE,
+            RELEASE_RENDER_STATES_00E7F6B0,
+            FREE_00AA10F0,
+            STAGES_CLEAR_00E7FC30,
+            STAGES_SET_SIZE_00E7FD20,
+            STAGE_DELETE_00E7ECD0,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        // The add-unique double notes the element its slot holds in the pool's first word.
+        e.register(POOL_ADD_UNIQUE_00E7EC00, |e, a| {
+            let element = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], element);
+            Ret::default()
+        });
+        // The set-at double stores the stage its slot holds into the array.
+        e.register(STAGES_SET_AT_00E7FB80, |e, a| {
+            let stage = e.mem.u32(a[2]);
+            let array = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(array + 4 * a[1], stage);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn object(e: &mut Engine, count: u32) -> u32 {
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, OBJECT_VTABLE);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    #[test]
+    fn fn_00e80190_resets_an_owned_pass_for_the_pool() {
+        let mut e = engine();
+        let pool = e.mem.alloc(4);
+        e.set_global(PASS_POOL_0126F72C, pool);
+        let pass = e.mem.alloc(0x68);
+        e.mem.write(pass, &[0x11; 0x68]);
+        e.mem.set_u32(pass, PASS_VTABLE);
+        let kept = object(&mut e, 2);
+        let dropped = object(&mut e, 1);
+        e.mem.set_u32(pass + 0x34, kept);
+        e.mem.set_u32(pass + 0x44, dropped);
+        e.mem.set_u32(pass + 0x48, 0);
+        e.mem.set_u32(pass + 0x5c, 0);
+        e.mem.set_u32(pass + 0x30, 0x0e74_0000);
+        let strings = [0x38u32, 0x3c, 0x40, 0x50, 0x54, 0x58];
+        for (index, offset) in strings.iter().enumerate() {
+            e.mem.set_u32(pass + offset, 0x0e75_0000 + index as u32);
+        }
+        e.mem.set_u8(pass + 0x61, 1);
+        e.call(0x00e8_0190, &args![pass]);
+        assert_eq!(e.mem.u32(kept + 4), 1);
+        assert_eq!(calls(&e, OBJECT_DELETE), vec![vec![dropped]]);
+        for offset in [0x30u32, 0x34, 0x44, 0x38, 0x3c, 0x40, 0x50, 0x54, 0x58] {
+            assert_eq!(e.mem.u32(pass + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(
+            calls(&e, RELEASE_RENDER_STATES_00E7F6B0),
+            vec![vec![0x0e74_0000]]
+        );
+        let freed: Vec<Vec<u32>> = (0..6).map(|i| vec![0x0e75_0000 + i]).collect();
+        assert_eq!(calls(&e, FREE_00AA10F0), freed);
+        assert_eq!(calls(&e, STAGES_CLEAR_00E7FC30), vec![vec![pass + 0x20]]);
+        assert_eq!(e.mem.bytes(pass + 0x14, 0xc), vec![0; 0xc]);
+        assert_eq!(e.mem.u8(pass + 0x60), 0);
+        assert_eq!(e.mem.u8(pass + 0x61), 1);
+        assert_eq!(e.mem.u32(pool), pass);
+        assert!(calls(&e, PASS_DELETE).is_empty());
+    }
+
+    #[test]
+    fn fn_00e80190_deletes_a_pass_the_renderer_does_not_own() {
+        let mut e = engine();
+        let pass = e.mem.alloc(0x68);
+        e.mem.set_u32(pass, PASS_VTABLE);
+        e.call(0x00e8_0190, &args![pass]);
+        assert_eq!(calls(&e, PASS_DELETE), vec![vec![pass, 1]]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+    }
+
+    /// A pass whose stage array has room for 4 stages (grow-by 2), the limits 8 and 2.
+    fn pass(e: &mut Engine) -> u32 {
+        e.set_global::<u32>(STAGE_LIMIT_011BF560, 8);
+        e.set_global::<u32>(GROWING_STAGES_011BF558, 2);
+        let pass = e.mem.alloc(0x68);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(pass + 0x24, array);
+        e.mem.set_u16(pass + 0x28, 4);
+        e.mem.set_u16(pass + 0x2e, 2);
+        pass
+    }
+
+    fn stage(e: &mut Engine, textures: u32) -> u32 {
+        let stage = e.mem.alloc(0x70);
+        e.mem.set_u32(stage + 8, textures);
+        e.mem.set_u32(stage + 0x60, 1);
+        stage
+    }
+
+    #[test]
+    fn set_stage_stores_and_counts_a_stage() {
+        let mut e = engine();
+        let pass = pass(&mut e);
+        let first = stage(&mut e, 1);
+        assert_eq!(e.call(0x00e8_02b0, &args![pass, 0u32, first]).u32(), 0);
+        let array = e.mem.u32(pass + 0x24);
+        assert_eq!(e.mem.u32(array), first);
+        assert_eq!(e.mem.u32(first + 4), 0);
+        assert_eq!(e.mem.u32(first + 0x60), 1);
+        assert_eq!(e.mem.u32(pass + 0x14), 1);
+        assert_eq!(e.mem.u32(pass + 0x18), 1);
+        assert_eq!(e.mem.u32(pass + 0x1c), 1);
+        // A stage without textures at index 3: no textures counted, the current stage stays.
+        let second = stage(&mut e, 0);
+        e.call(0x00e8_02b0, &args![pass, 3u32, second]);
+        assert_eq!(e.mem.u32(second + 4), 3);
+        assert_eq!(e.mem.u32(pass + 0x14), 1);
+        assert_eq!(e.mem.u32(pass + 0x18), 2);
+        assert_eq!(e.mem.u32(pass + 0x1c), 1);
+        assert!(calls(&e, STAGES_SET_SIZE_00E7FD20).is_empty());
+        assert!(calls(&e, STAGE_DELETE_00E7ECD0).is_empty());
+    }
+
+    #[test]
+    fn set_stage_grows_the_array_and_refuses_indices_past_the_limit() {
+        let mut e = engine();
+        let pass = pass(&mut e);
+        // Index 4 is past the max size (4) and the growing limit (2): set-size to 4 + 2. The
+        // set-at double then writes past the array's 0x10 bytes, so it gets a larger one.
+        let array = e.mem.alloc(0x20);
+        e.mem.set_u32(pass + 0x24, array);
+        let new = stage(&mut e, 0);
+        e.mem.set_u32(new + 0x60, 0);
+        e.call(0x00e8_02b0, &args![pass, 4u32, new]);
+        assert_eq!(
+            calls(&e, STAGES_SET_SIZE_00E7FD20),
+            vec![vec![pass + 0x20, 6]]
+        );
+        // Held then dropped: back to 0 and deleted.
+        assert_eq!(calls(&e, STAGE_DELETE_00E7ECD0), vec![vec![new]]);
+        assert_eq!(e.call(0x00e8_02b0, &args![pass, 8u32, new]).u32(), 1);
+        assert_eq!(calls(&e, STAGES_SET_AT_00E7FB80).len(), 1);
+    }
+
+    #[test]
+    fn set_stage_with_no_stage_steps_the_current_stage_back() {
+        let mut e = engine();
+        let pass = pass(&mut e);
+        e.mem.set_u32(pass + 0x14, 2);
+        assert_eq!(e.call(0x00e8_02b0, &args![pass, 1u32, 0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(pass + 0x14), 1);
+        // Not the last stage: nothing changes.
+        e.call(0x00e8_02b0, &args![pass, 3u32, 0u32]);
+        assert_eq!(e.mem.u32(pass + 0x14), 1);
+        assert_eq!(e.mem.u32(pass + 0x18), 0);
     }
 }

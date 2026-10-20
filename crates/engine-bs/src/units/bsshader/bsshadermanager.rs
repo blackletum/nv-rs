@@ -1394,6 +1394,54 @@ pub fn bs_shader_manager_get_texture(
     }
 }
 
+/// The two shader settings the profile choosers read: `011f91bc` (the pixel chooser's when its
+/// byte is set) and `011f91c0` (otherwise, and the vertex chooser's).
+const PROFILE_SETTING_011F91BC: u32 = 0x011f_91bc;
+const PROFILE_SETTING_011F91C0: u32 = 0x011f_91c0;
+/// The profile strings (read in Ghidra).
+const PS_1_3_010A93D4: u32 = 0x010a_93d4;
+const PS_2_0_010A93CC: u32 = 0x010a_93cc;
+const PS_2_A_010A93C4: u32 = 0x010a_93c4;
+const PS_2_B_010A93BC: u32 = 0x010a_93bc;
+const PS_3_0_010A93B4: u32 = 0x010a_93b4;
+const VS_1_1_010A93EC: u32 = 0x010a_93ec;
+const VS_2_0_010A93E4: u32 = 0x010a_93e4;
+const VS_3_0_010A93DC: u32 = 0x010a_93dc;
+
+// Translated from 00b4f380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshadermanager.cpp`): the pixel shader profile string,
+/// `cdecl` with one byte. The setting is the word at `011f91bc` (always read) when the byte is
+/// set, else the one at `011f91c0`; 1 gives `"ps_1_3"`, 2 `"ps_2_0"`, 3 and 5 `"ps_2_a"`, 4
+/// and 6 `"ps_2_b"`, 7 `"ps_3_0"` (the arms of the switch's jump table at `00b4f3c0`, read in
+/// Ghidra), anything else null. Answers the string's address.
+pub fn fn_00b4f380(e: &mut Engine, first_setting: u8) -> u32 {
+    let mut setting = e.global::<u32>(PROFILE_SETTING_011F91BC);
+    if first_setting == 0 {
+        setting = e.global::<u32>(PROFILE_SETTING_011F91C0);
+    }
+    match setting.wrapping_sub(1) {
+        0 => PS_1_3_010A93D4,
+        1 => PS_2_0_010A93CC,
+        2 | 4 => PS_2_A_010A93C4,
+        3 | 5 => PS_2_B_010A93BC,
+        6 => PS_3_0_010A93B4,
+        _ => 0,
+    }
+}
+
+// Translated from 00b4f3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshadermanager.cpp`): the vertex shader profile string,
+/// no arguments. For the setting at `011f91c0`: 1 gives `"vs_1_1"`, 2 to 6 `"vs_2_0"`, 7
+/// `"vs_3_0"` (the switch's jump table at `00b4f408`, read in Ghidra), anything else null.
+pub fn fn_00b4f3e0(e: &mut Engine) -> u32 {
+    match e.global::<u32>(PROFILE_SETTING_011F91C0).wrapping_sub(1) {
+        0 => VS_1_1_010A93EC,
+        1..=5 => VS_2_0_010A93E4,
+        6 => VS_3_0_010A93DC,
+        _ => 0,
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1411,6 +1459,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_f5c0, bs_shader_manager_get_accumulator() -> Ptr),
         entry!(0x00b5_5540, bs_shader_manager_set_fog_property(u32, Ptr)),
         entry!(0x00b5_7420, fn_00b57420()),
+        entry!(0x00b4_f380, fn_00b4f380(u8) -> u32),
+        entry!(0x00b4_f3e0, fn_00b4f3e0() -> u32),
     ]
 }
 
@@ -2449,5 +2499,58 @@ pub(crate) mod creator_rig {
         let mut log = e.call_log.take().unwrap();
         log.remove(0);
         (answer, log)
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn engine(first: u32, second: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(PROFILE_SETTING_011F91BC, first);
+        e.set_global(PROFILE_SETTING_011F91C0, second);
+        e
+    }
+
+    #[test]
+    fn fn_00b4f380_picks_the_pixel_profile() {
+        let expected = [
+            (0u32, 0u32),
+            (1, PS_1_3_010A93D4),
+            (2, PS_2_0_010A93CC),
+            (3, PS_2_A_010A93C4),
+            (4, PS_2_B_010A93BC),
+            (5, PS_2_A_010A93C4),
+            (6, PS_2_B_010A93BC),
+            (7, PS_3_0_010A93B4),
+            (8, 0),
+        ];
+        for (setting, profile) in expected {
+            let mut e = engine(setting, 0);
+            assert_eq!(e.call(0x00b4_f380, &args![1u32]).u32(), profile);
+            let mut e = engine(0, setting);
+            assert_eq!(e.call(0x00b4_f380, &args![0u32]).u32(), profile);
+        }
+        // Only the low byte of the argument word counts.
+        let mut e = engine(7, 1);
+        assert_eq!(e.call(0x00b4_f380, &args![0x100u32]).u32(), PS_1_3_010A93D4);
+    }
+
+    #[test]
+    fn fn_00b4f3e0_picks_the_vertex_profile() {
+        let expected = [
+            (0u32, 0u32),
+            (1, VS_1_1_010A93EC),
+            (2, VS_2_0_010A93E4),
+            (6, VS_2_0_010A93E4),
+            (7, VS_3_0_010A93DC),
+            (8, 0),
+        ];
+        for (setting, profile) in expected {
+            let mut e = engine(7, setting);
+            assert_eq!(e.call(0x00b4_f3e0, &args![]).u32(), profile);
+        }
     }
 }

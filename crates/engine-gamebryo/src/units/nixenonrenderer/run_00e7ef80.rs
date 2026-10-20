@@ -40,9 +40,180 @@ pub fn fn_00e7f2b0(e: &mut Engine) {
     make_array_header(e, 0x0126_f71c, 0x10);
 }
 
+/// The render-state block pool (`0126f718`) and the render-state entry pool (`0126f71c`), the
+/// two blocks `fn_00e7f2b0` makes (element array at +0, count at +8, growth size at +0x10).
+const BLOCK_POOL_0126F718: u32 = 0x0126_f718;
+const ENTRY_POOL_0126F71C: u32 = 0x0126_f71c;
+/// The pools' grows: `00e7f160` for the block pool and `00e7f210` for the entry pool (unnamed;
+/// `thiscall` on the pool, one word: the growth size).
+const BLOCK_POOL_GROW_00E7F160: u32 = 0x00e7_f160;
+const ENTRY_POOL_GROW_00E7F210: u32 = 0x00e7_f210;
+/// The block's entry lookup `00e7f000` (unnamed; `thiscall` on the block: the state and the
+/// address of a byte it sets to the list the entry is in; answers the entry or 0) and the
+/// unlinks from the second list (`00e7efc0`) and from the first (`00e7ef80`) (unnamed;
+/// `thiscall` on the block, one word: the entry).
+const FIND_ENTRY_00E7F000: u32 = 0x00e7_f000;
+const UNLINK_SECOND_00E7EFC0: u32 = 0x00e7_efc0;
+const UNLINK_FIRST_00E7EF80: u32 = 0x00e7_ef80;
+/// `NiTPrimitiveSet<..>::AddUnique` (`00e7ec00`, `thiscall` on the set, the address of the
+/// element; the engine map names it `NiControllerSequence::SetState`), which gives a block or
+/// an entry back to its pool, the block's clean-up `00e7f320` (unnamed; `thiscall`, no stack
+/// words) and the Ni free `00aa1460` (`cdecl`: block, size).
+const POOL_ADD_UNIQUE_00E7EC00: u32 = 0x00e7_ec00;
+const BLOCK_CLEAN_UP_00E7F320: u32 = 0x00e7_f320;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+/// The first element taken from a pool: when the pool is empty it is grown (`grow` with the
+/// growth size at +0x10) and that size doubled; then the element at +0 of the array is taken,
+/// the count at +8 goes down and the last element moves into the first place.
+fn pool_take(e: &mut Engine, pool: u32, grow: u32) -> u32 {
+    if e.mem.u32(pool.wrapping_add(8)) == 0 {
+        let growth = e.mem.u32(pool.wrapping_add(0x10));
+        e.call(grow, &args![pool, growth]);
+        let growth = e.mem.u32(pool.wrapping_add(0x10));
+        e.mem
+            .set_u32(pool.wrapping_add(0x10), growth.wrapping_add(growth));
+    }
+    let elements = e.mem.u32(pool);
+    let element = e.mem.u32(elements);
+    let count = e.mem.u32(pool.wrapping_add(8)).wrapping_sub(1);
+    e.mem.set_u32(pool.wrapping_add(8), count);
+    let last = e.mem.u32(elements.wrapping_add(count.wrapping_mul(4)));
+    e.mem.set_u32(elements, last);
+    element
+}
+
+/// An entry appended to one of the block's lists (count at `count`, last entry at `last`):
+/// linked after the last entry when there is one (the last's +0xc and the entry's +8), the
+/// entry's +0xc cleared, the count up by one and the entry made the last.
+fn append_entry(e: &mut Engine, block: u32, entry: u32, count: u32, last: u32) {
+    let tail = e.mem.u32(block + last);
+    if tail != 0 {
+        e.mem.set_u32(tail.wrapping_add(0xc), entry);
+        let tail = e.mem.u32(block + last);
+        e.mem.set_u32(entry.wrapping_add(8), tail);
+    }
+    e.mem.set_u32(entry.wrapping_add(0xc), 0);
+    let entries = e.mem.u32(block + count).wrapping_add(1);
+    e.mem.set_u32(block + count, entries);
+    e.mem.set_u32(block + last, entry);
+}
+
+// Translated from 00e7f430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): a render state set in a render-state block,
+/// `thiscall` with three stack words: the state, the value and a byte that picks the list.
+/// Looks the state up (`00e7f000`, with a cleared byte it sets to the entry's list). When
+/// found: the entry's value (+4) is replaced; when its list differs from the byte, it is
+/// unlinked (`00e7efc0` from the second list, `00e7ef80` from the first) and appended to the
+/// other one. When not found: a new entry is taken from the entry pool (`0126f71c`, grown by
+/// `00e7f210` when empty), its +8 and +0xc cleared, the state and value stored, and appended to
+/// the second list (count +0xc, last +0x10) when the byte is set, else to the first (count +4,
+/// last +8).
+pub fn fn_00e7f430(e: &mut Engine, this: Ptr, state: u32, value: u32, second_list: u8) {
+    let base = this.addr();
+    let (entry, in_second) = e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.mem.set_u8(local, 0);
+        let entry = e
+            .call(FIND_ENTRY_00E7F000, &args![base, state, local])
+            .u32();
+        (entry, e.mem.u8(local))
+    });
+    if entry != 0 {
+        e.mem.set_u32(entry + 4, value);
+        if in_second == second_list {
+            return;
+        }
+        if in_second != 0 {
+            e.call(UNLINK_SECOND_00E7EFC0, &args![base, entry]);
+            append_entry(e, base, entry, 4, 8);
+        } else {
+            e.call(UNLINK_FIRST_00E7EF80, &args![base, entry]);
+            append_entry(e, base, entry, 0xc, 0x10);
+        }
+        return;
+    }
+    let pool = e.global::<u32>(ENTRY_POOL_0126F71C);
+    let entry = pool_take(e, pool, ENTRY_POOL_GROW_00E7F210);
+    e.mem.set_u32(entry.wrapping_add(8), 0);
+    e.mem.set_u32(entry.wrapping_add(0xc), 0);
+    e.mem.set_u32(entry, state);
+    e.mem.set_u32(entry.wrapping_add(4), value);
+    if second_list != 0 {
+        append_entry(e, base, entry, 0xc, 0x10);
+    } else {
+        append_entry(e, base, entry, 4, 8);
+    }
+}
+
+// Translated from 00e7f5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): a new render-state block, no arguments. Takes
+/// the first block of the block pool (`0126f718`; grown by `00e7f160` with its growth size,
+/// which then doubles, when empty), sets the block's first byte when it is clear and answers
+/// the block.
+pub fn fn_00e7f5d0(e: &mut Engine) -> u32 {
+    let pool = e.global::<u32>(BLOCK_POOL_0126F718);
+    let block = pool_take(e, pool, BLOCK_POOL_GROW_00E7F160);
+    if e.mem.u8(block) == 0 {
+        e.mem.set_u8(block, 1);
+    }
+    block
+}
+
+/// Every entry of one of the block's lists, from the last one (at `last`) back through each
+/// entry's +8, given back to the entry pool (`00e7ec00` on the pool read from `0126f71c` for
+/// each, with `slot` holding the entry).
+fn release_entries(e: &mut Engine, block: u32, last: u32, slot: u32) {
+    let mut entry = e.mem.u32(block + last);
+    while entry != 0 {
+        let previous = e.mem.u32(entry.wrapping_add(8));
+        let pool = e.global::<u32>(ENTRY_POOL_0126F71C);
+        e.mem.set_u32(slot, entry);
+        e.call(POOL_ADD_UNIQUE_00E7EC00, &args![pool, slot]);
+        entry = previous;
+    }
+}
+
+// Translated from 00e7f6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): a render-state block's release, `cdecl` with one
+/// word (the block). Nothing for a null block. When the block's first byte is set (a pool
+/// block): the entries of the first list (last at +8) go back to the entry pool, +8 and +4 are
+/// cleared, the same for the second list (last at +0x10, cleared with +0xc), and the block goes
+/// back to the block pool (`00e7ec00` on `0126f718`; the argument's own stack word holds the
+/// element each time). Otherwise the block is cleaned up (`00e7f320`) and freed (`00aa1460`
+/// with 0x14 bytes).
+pub fn fn_00e7f6b0(e: &mut Engine, block: Ptr) {
+    let block = block.addr();
+    if block == 0 {
+        return;
+    }
+    if e.mem.u8(block) == 0 {
+        e.call(BLOCK_CLEAN_UP_00E7F320, &args![block]);
+        e.call(NI_FREE_00AA1460, &args![block, 0x14u32]);
+        return;
+    }
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        release_entries(e, block, 8, slot);
+        e.mem.set_u32(block + 8, 0);
+        e.mem.set_u32(block + 4, 0);
+        release_entries(e, block, 0x10, slot);
+        e.mem.set_u32(block + 0x10, 0);
+        e.mem.set_u32(block + 0xc, 0);
+        let pool = e.global::<u32>(BLOCK_POOL_0126F718);
+        e.mem.set_u32(slot, block);
+        e.call(POOL_ADD_UNIQUE_00E7EC00, &args![pool, slot]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e7_f2b0, fn_00e7f2b0())]
+    vec![
+        entry!(0x00e7_f2b0, fn_00e7f2b0()),
+        entry!(0x00e7_f430, fn_00e7f430(Ptr, u32, u32, u8)),
+        entry!(0x00e7_f5d0, fn_00e7f5d0() -> u32),
+        entry!(0x00e7_f6b0, fn_00e7f6b0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -80,5 +251,197 @@ mod start_up_tests {
         e.call(0x00e7_f2b0, &args![]);
         assert_eq!(e.mem.u32(0x0126_f718), 0);
         assert_eq!(e.mem.u32(0x0126_f71c), 0);
+    }
+}
+
+#[cfg(test)]
+mod render_state_tests {
+    use super::*;
+
+    /// An engine with both pools mapped: each pool holds `held` fresh elements (0x14 bytes,
+    /// cleared) in a 16-element array, growth size 2; the grow doubles put one new element in.
+    fn engine(held: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        for global in [BLOCK_POOL_0126F718, ENTRY_POOL_0126F71C] {
+            let pool = e.mem.alloc(0x18);
+            let elements = e.mem.alloc(0x40);
+            for index in 0..held {
+                let element = e.mem.alloc(0x14);
+                e.mem.set_u32(elements + 4 * index, element);
+            }
+            e.mem.set_u32(pool, elements);
+            e.mem.set_u32(pool + 8, held);
+            e.mem.set_u32(pool + 0x10, 2);
+            e.set_global(global, pool);
+        }
+        fn grow(e: &mut Engine, a: &[u32]) -> Ret {
+            let element = e.mem.alloc(0x14);
+            let elements = e.mem.u32(a[0]);
+            e.mem.set_u32(elements, element);
+            e.mem.set_u32(a[0] + 8, 1);
+            Ret::default()
+        }
+        e.register(BLOCK_POOL_GROW_00E7F160, grow);
+        e.register(ENTRY_POOL_GROW_00E7F210, grow);
+        for target in [
+            UNLINK_SECOND_00E7EFC0,
+            UNLINK_FIRST_00E7EF80,
+            BLOCK_CLEAN_UP_00E7F320,
+            NI_FREE_00AA1460,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        // The add-unique double records the element its slot holds at +0x3c of the pool.
+        e.register(POOL_ADD_UNIQUE_00E7EC00, |e, a| {
+            let element = e.mem.u32(a[1]);
+            let seen = e.mem.u32(a[0] + 0x14);
+            e.mem.set_u32(a[0] + 0x14, seen + 1);
+            let elements = e.mem.u32(a[0]);
+            e.mem.set_u32(elements + 0x3c - 4 * seen, element);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A lookup double that answers `entry` with the list byte `list`.
+    fn find(e: &mut Engine, entry: u32, list: u8) {
+        e.register_double(FIND_ENTRY_00E7F000, move |e, a| {
+            assert_eq!(e.mem.u8(a[2]), 0);
+            e.mem.set_u8(a[2], list);
+            entry.into_ret()
+        });
+    }
+
+    #[test]
+    fn fn_00e7f5d0_takes_a_block_and_marks_it() {
+        let mut e = engine(2);
+        let pool = e.global::<u32>(BLOCK_POOL_0126F718);
+        let elements = e.mem.u32(pool);
+        let first = e.mem.u32(elements);
+        let second = e.mem.u32(elements + 4);
+        assert_eq!(e.call(0x00e7_f5d0, &args![]).u32(), first);
+        assert_eq!(e.mem.u8(first), 1);
+        assert_eq!(e.mem.u32(pool + 8), 1);
+        assert_eq!(e.mem.u32(elements), second);
+        // An empty pool is grown first and its growth size doubled.
+        let mut e = engine(0);
+        let pool = e.global::<u32>(BLOCK_POOL_0126F718);
+        let block = e.call(0x00e7_f5d0, &args![]).u32();
+        assert_eq!(calls(&e, BLOCK_POOL_GROW_00E7F160), vec![vec![pool, 2]]);
+        assert_eq!(e.mem.u32(pool + 0x10), 4);
+        assert_eq!(e.mem.u8(block), 1);
+    }
+
+    #[test]
+    fn fn_00e7f430_appends_a_new_entry_to_the_chosen_list() {
+        let mut e = engine(2);
+        find(&mut e, 0, 0);
+        let block = e.mem.alloc(0x14);
+        e.call(0x00e7_f430, &args![block, 0x13u32, 5u32, 1u32]);
+        let first = e.mem.u32(block + 0x10);
+        assert_eq!(e.mem.u32(first), 0x13);
+        assert_eq!(e.mem.u32(first + 4), 5);
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(e.mem.u32(block + 0xc), 1);
+        e.call(0x00e7_f430, &args![block, 0x14u32, 6u32, 1u32]);
+        let second = e.mem.u32(block + 0x10);
+        assert_eq!(e.mem.u32(first + 0xc), second);
+        assert_eq!(e.mem.u32(second + 8), first);
+        assert_eq!(e.mem.u32(block + 0xc), 2);
+        e.call(0x00e7_f430, &args![block, 0x15u32, 7u32, 0u32]);
+        let third = e.mem.u32(block + 8);
+        assert_eq!(e.mem.u32(third), 0x15);
+        assert_eq!(e.mem.u32(block + 4), 1);
+        // The third entry came from a grown pool.
+        let pool = e.global::<u32>(ENTRY_POOL_0126F71C);
+        assert_eq!(calls(&e, ENTRY_POOL_GROW_00E7F210), vec![vec![pool, 2]]);
+        assert_eq!(
+            calls(&e, FIND_ENTRY_00E7F000)
+                .iter()
+                .map(|a| a[1])
+                .collect::<Vec<_>>(),
+            vec![0x13, 0x14, 0x15]
+        );
+    }
+
+    #[test]
+    fn fn_00e7f430_moves_a_found_entry_between_the_lists() {
+        let mut e = engine(0);
+        let block = e.mem.alloc(0x14);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry + 8, 0x77);
+        // Found in the second list, asked for the first: unlinked and appended there.
+        find(&mut e, entry, 1);
+        e.call(0x00e7_f430, &args![block, 0x13u32, 9u32, 0u32]);
+        assert_eq!(e.mem.u32(entry + 4), 9);
+        assert_eq!(calls(&e, UNLINK_SECOND_00E7EFC0), vec![vec![block, entry]]);
+        assert_eq!(e.mem.u32(block + 8), entry);
+        assert_eq!(e.mem.u32(block + 4), 1);
+        // No last entry: the entry's +8 is left as it was.
+        assert_eq!(e.mem.u32(entry + 8), 0x77);
+        // Found in the first list, asked for the second.
+        find(&mut e, entry, 0);
+        e.call(0x00e7_f430, &args![block, 0x13u32, 3u32, 1u32]);
+        assert_eq!(calls(&e, UNLINK_FIRST_00E7EF80), vec![vec![block, entry]]);
+        assert_eq!(e.mem.u32(block + 0x10), entry);
+        assert_eq!(e.mem.u32(block + 0xc), 1);
+        // Found in the list asked for: only the value changes.
+        find(&mut e, entry, 1);
+        e.call(0x00e7_f430, &args![block, 0x13u32, 4u32, 1u32]);
+        assert_eq!(e.mem.u32(entry + 4), 4);
+        assert_eq!(e.mem.u32(block + 0xc), 1);
+        assert!(calls(&e, ENTRY_POOL_GROW_00E7F210).is_empty());
+    }
+
+    #[test]
+    fn fn_00e7f6b0_gives_the_entries_and_the_block_back() {
+        let mut e = engine(0);
+        let block = e.mem.alloc(0x14);
+        e.mem.set_u8(block, 1);
+        let entries: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x10)).collect();
+        // First list: entries 0 <- 1 (last); second list: entry 2.
+        e.mem.set_u32(entries[1] + 8, entries[0]);
+        e.mem.set_u32(block + 4, 2);
+        e.mem.set_u32(block + 8, entries[1]);
+        e.mem.set_u32(block + 0xc, 1);
+        e.mem.set_u32(block + 0x10, entries[2]);
+        e.call(0x00e7_f6b0, &args![block]);
+        let entry_pool = e.global::<u32>(ENTRY_POOL_0126F71C);
+        let block_pool = e.global::<u32>(BLOCK_POOL_0126F718);
+        let given = |e: &Engine, pool: u32, count: u32| -> Vec<u32> {
+            let elements = e.mem.u32(pool);
+            (0..count)
+                .map(|i| e.mem.u32(elements + 0x3c - 4 * i))
+                .collect()
+        };
+        assert_eq!(
+            given(&e, entry_pool, 3),
+            vec![entries[1], entries[0], entries[2]]
+        );
+        assert_eq!(given(&e, block_pool, 1), vec![block]);
+        assert_eq!(e.mem.bytes(block + 4, 0x10), vec![0; 0x10]);
+        assert!(calls(&e, NI_FREE_00AA1460).is_empty());
+    }
+
+    #[test]
+    fn fn_00e7f6b0_frees_a_block_not_from_the_pool() {
+        let mut e = engine(0);
+        let block = e.mem.alloc(0x14);
+        e.call(0x00e7_f6b0, &args![block]);
+        assert_eq!(calls(&e, BLOCK_CLEAN_UP_00E7F320), vec![vec![block]]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![block, 0x14]]);
+        e.call(0x00e7_f6b0, &args![0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+        assert!(calls(&e, POOL_ADD_UNIQUE_00E7EC00).is_empty());
     }
 }
