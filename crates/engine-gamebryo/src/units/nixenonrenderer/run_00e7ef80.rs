@@ -385,6 +385,79 @@ pub fn fn_00e7f320(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base + 0x10, 0);
 }
 
+/// The Ni array allocation `00aa1420` (`cdecl`, the byte count), the compiler's `vector
+/// constructor iterator` (`00401050`, `stdcall`: array, element size, count, constructor) and
+/// the element constructors it is given: `00e7ee80` for the 0x14-byte render-state blocks and
+/// `00e7ee70` for the 0x10-byte entries (code Ghidra made no functions of).
+const NI_ARRAY_ALLOCATE_00AA1420: u32 = 0x00aa_1420;
+const VECTOR_CONSTRUCT_00401050: u32 = 0x0040_1050;
+const BLOCK_CONSTRUCT_00E7EE80: u32 = 0x00e7_ee80;
+const ENTRY_CONSTRUCT_00E7EE70: u32 = 0x00e7_ee70;
+
+/// `count * size` as the code computes it (`MUL`, `SETO`, `NEG`, `OR`): all ones on overflow.
+fn product_or_all_ones(count: u32, size: u32) -> u32 {
+    let product = u64::from(count) * u64::from(size);
+    if product > u64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        product as u32
+    }
+}
+
+// Translated from 00e7f0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): `operator new[]` of `count` 0x14-byte
+/// render-state blocks after a count word, `cdecl` with one word (the count): `count * 0x14 + 4`
+/// bytes from `00aa1420` (all ones when the product or the sum overflows); null when that fails,
+/// otherwise the count is stored, the blocks are built (`vector constructor iterator` with
+/// `00e7ee80`) and the address after the count is answered.
+pub fn fn_00e7f0a0(e: &mut Engine, count: u32) -> u32 {
+    let total = product_or_all_ones(count, 0x14)
+        .checked_add(4)
+        .unwrap_or(u32::MAX);
+    let block = e.call(NI_ARRAY_ALLOCATE_00AA1420, &args![total]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.mem.set_u32(block, count);
+    e.call(
+        VECTOR_CONSTRUCT_00401050,
+        &args![block + 4, 0x14u32, count, BLOCK_CONSTRUCT_00E7EE80],
+    );
+    block + 4
+}
+
+// Translated from 00e7f0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the entry pool's block constructor, `thiscall`
+/// with one stack word (the count): +4 the count, +8 cleared, +0 an array of `count` 0x10-byte
+/// entries (`00aa1420` with `count * 0x10`, all ones on overflow; built by the `vector
+/// constructor iterator` with `00e7ee70`), null for a count of 0 or a failed allocation.
+/// Answers `this`.
+pub fn fn_00e7f0f0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base + 4, count);
+    e.mem.set_u32(base + 8, 0);
+    if count == 0 {
+        e.mem.set_u32(base, 0);
+        return this;
+    }
+    let entries = e
+        .call(
+            NI_ARRAY_ALLOCATE_00AA1420,
+            &args![product_or_all_ones(count, 0x10)],
+        )
+        .u32();
+    if entries == 0 {
+        e.mem.set_u32(base, 0);
+        return this;
+    }
+    e.call(
+        VECTOR_CONSTRUCT_00401050,
+        &args![entries, 0x10u32, count, ENTRY_CONSTRUCT_00E7EE70],
+    );
+    e.mem.set_u32(base, entries);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -396,6 +469,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_f160, fn_00e7f160(Ptr, u32)),
         entry!(0x00e7_f210, fn_00e7f210(Ptr, u32)),
         entry!(0x00e7_f320, fn_00e7f320(Ptr)),
+        entry!(0x00e7_f0a0, fn_00e7f0a0(u32) -> u32),
+        entry!(0x00e7_f0f0, fn_00e7f0f0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -774,5 +849,70 @@ mod b000n_tests {
         assert_eq!(e.mem.u32(block + 0x10), 0);
         assert_eq!(e.mem.u32(block + 4), 2);
         assert_eq!(e.mem.u32(block + 0xc), 1);
+    }
+}
+
+#[cfg(test)]
+mod b000p_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NI_ARRAY_ALLOCATE_00AA1420, |e, a| {
+            if a[0] <= 0x1000 {
+                e.mem.alloc(a[0].max(1)).into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.register(VECTOR_CONSTRUCT_00401050, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00e7f0a0_makes_the_counted_block_array() {
+        let mut e = engine();
+        let blocks = e.call(0x00e7_f0a0, &args![3u32]).u32();
+        assert_eq!(e.mem.u32(blocks - 4), 3);
+        assert_eq!(calls(&e, NI_ARRAY_ALLOCATE_00AA1420), vec![vec![0x40]]);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT_00401050),
+            vec![vec![blocks, 0x14, 3, BLOCK_CONSTRUCT_00E7EE80]]
+        );
+        assert_eq!(e.call(0x00e7_f0a0, &args![0x1000_0000u32]).u32(), 0);
+        assert_eq!(calls(&e, NI_ARRAY_ALLOCATE_00AA1420)[1], vec![u32::MAX]);
+    }
+
+    #[test]
+    fn fn_00e7f0f0_builds_the_entry_block() {
+        let mut e = engine();
+        let block = e.mem.alloc(0xc);
+        e.mem.write(block, &[0xcc; 0xc]);
+        assert_eq!(e.call(0x00e7_f0f0, &args![block, 2u32]).u32(), block);
+        let entries = e.mem.u32(block);
+        assert_eq!(e.mem.u32(block + 4), 2);
+        assert_eq!(e.mem.u32(block + 8), 0);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT_00401050),
+            vec![vec![entries, 0x10, 2, ENTRY_CONSTRUCT_00E7EE70]]
+        );
+        e.call(0x00e7_f0f0, &args![block, 0u32]);
+        assert_eq!(e.mem.u32(block), 0);
+        e.call(0x00e7_f0f0, &args![block, 0x1000_0000u32]);
+        assert_eq!(e.mem.u32(block), 0);
+        assert_eq!(e.mem.u32(block + 4), 0x1000_0000);
+        assert_eq!(
+            calls(&e, NI_ARRAY_ALLOCATE_00AA1420).last().unwrap(),
+            &vec![u32::MAX]
+        );
     }
 }

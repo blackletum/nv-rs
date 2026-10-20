@@ -4217,6 +4217,242 @@ pub fn fwrite(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream: Ptr) -
     written
 }
 
+/// The CRT's static stream table `_iob` (`011c1a08` to `011c1c68`, 0x20 bytes a stream): its
+/// streams are locked through `_lock` number `0x10 + index`, other streams through the critical
+/// section at their +0x20.
+const IOB_FIRST: u32 = 0x011c_1a08;
+const IOB_LAST: u32 = 0x011c_1c68;
+
+/// The `_lock` number of a stream in `_iob`, or `None` for another stream.
+fn iob_lock_number(stream: u32) -> Option<u32> {
+    if (IOB_FIRST..=IOB_LAST).contains(&stream) {
+        Some((((stream.wrapping_sub(IOB_FIRST)) as i32 >> 5) as u32).wrapping_add(0x10))
+    } else {
+        None
+    }
+}
+
+// Translated from 00ece01b (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_lock_file` (LIBCMT/_file.c, engine map), cdecl, the stream: a stream of `_iob` takes its
+/// `_lock` (0x10 + its index) and gets `_IOLOCKED` (0x8000) in its flags (+0xc); another
+/// stream enters the critical section at its +0x20 (`EnterCriticalSection`).
+pub fn lock_file(e: &mut Engine, stream: Ptr) {
+    let stream = stream.addr();
+    match iob_lock_number(stream) {
+        Some(number) => {
+            lock(e, number);
+            let flags = e.mem.u32(stream + 0xc) | 0x8000;
+            e.mem.set_u32(stream + 0xc, flags);
+        }
+        None => {
+            e.call(
+                IMPORT_ENTER_CRITICAL_SECTION,
+                &args![stream.wrapping_add(0x20)],
+            );
+        }
+    }
+}
+
+// Translated from 00ece08e (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_unlock_file` (LIBCMT/_file.c, engine map), cdecl, the stream: a stream of `_iob` loses
+/// `_IOLOCKED` (0x8000) and leaves its `_lock` (0x10 + its index); another stream leaves the
+/// critical section at its +0x20 (`LeaveCriticalSection`).
+pub fn unlock_file(e: &mut Engine, stream: Ptr) {
+    let stream = stream.addr();
+    match iob_lock_number(stream) {
+        Some(number) => {
+            let flags = e.mem.u32(stream + 0xc) & 0xffff_7fff;
+            e.mem.set_u32(stream + 0xc, flags);
+            unlock(e, number);
+        }
+        None => {
+            e.call(
+                IMPORT_LEAVE_CRITICAL_SECTION,
+                &args![stream.wrapping_add(0x20)],
+            );
+        }
+    }
+}
+
+/// `_flush` (`00ecd8e6`), `_freebuf` (`00ed8207`), `_fileno` (`00ed806c`) and `_close`
+/// (`00ed813a`) (LIBCMT, engine map; cdecl).
+const FLUSH: u32 = 0x00ec_d8e6;
+const FREEBUF: u32 = 0x00ed_8207;
+const FILENO: u32 = 0x00ed_806c;
+const CLOSE: u32 = 0x00ed_813a;
+
+// Translated from 00ec9890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_fclose_nolock` (LIBCMT/fclose.c, engine map), cdecl, the stream. A null stream sets
+/// `errno` to `EINVAL` (0x16), calls the invalid-parameter handler (`00ec7c30` with five zeros)
+/// and answers -1. A stream in use (`_flag` +0xc has one of 0x83: read, write, read-write)
+/// is flushed (`_flush`, whose result is the answer), its buffer freed (`_freebuf`) and its
+/// handle closed (`_close` of `_fileno`); a failed close makes the answer -1, otherwise a
+/// temporary file name at +0x1c is freed and cleared. The flags are then cleared; an unused
+/// stream answers -1.
+pub fn fclose_nolock(e: &mut Engine, stream: Ptr) -> i32 {
+    let stream = stream.addr();
+    if stream == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return -1;
+    }
+    let mut result = -1i32;
+    if e.mem.u8(stream + 0xc) & 0x83 != 0 {
+        result = e.call(FLUSH, &args![stream]).i32();
+        e.call(FREEBUF, &args![stream]);
+        let handle = e.call(FILENO, &args![stream]).u32();
+        if e.call(CLOSE, &args![handle]).i32() < 0 {
+            result = -1;
+        } else {
+            let name = e.mem.u32(stream + 0x1c);
+            if name != 0 {
+                free(e, Ptr::new(name));
+                e.mem.set_u32(stream + 0x1c, 0);
+            }
+        }
+    }
+    e.mem.set_u32(stream + 0xc, 0);
+    result
+}
+
+/// `_getstream` (`00ed8501`; answers a free stream, locked, or 0) and `_openfile` (`00ed8238`;
+/// cdecl: path, mode, share flag, stream) (LIBCMT, engine map).
+const GETSTREAM: u32 = 0x00ed_8501;
+const OPENFILE: u32 = 0x00ed_8238;
+
+// Translated from 00ec9983 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_fsopen` (LIBCMT/fopen.c, engine map), cdecl: path, mode, share flag. A null path or mode or
+/// an empty mode sets `errno` to `EINVAL` (0x16), calls the invalid-parameter handler
+/// (`00ec7c30` with five zeros) and answers null. Otherwise a stream comes from `_getstream`
+/// (none: `errno` `EMFILE` (0x18), null). An empty path sets `errno` to `EINVAL` and answers
+/// null; otherwise `_openfile` answers. Either way the stream is unlocked afterwards (the
+/// `__finally` block at `00ec9a3d`, `_unlock_file`; for the empty path reached through
+/// `__local_unwind4`).
+// Translation incomplete: 00ec9983 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) and the __local_unwind4 (00ed863c) call are not translated; its __finally block runs inline.
+pub fn fsopen(e: &mut Engine, path: Ptr, mode: Ptr, share: u32) -> Ptr {
+    let path = path.addr();
+    let mode = mode.addr();
+    if path == 0 || mode == 0 || e.mem.u8(mode) == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return Ptr::new(0);
+    }
+    let stream = e.call(GETSTREAM, &args![]).u32();
+    if stream == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x18);
+        return Ptr::new(0);
+    }
+    if e.mem.u8(path) == 0 {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        e.call(UNLOCK_FILE, &args![stream]);
+        return Ptr::new(0);
+    }
+    let opened = e.call(OPENFILE, &args![path, mode, share, stream]).u32();
+    e.call(UNLOCK_FILE, &args![stream]);
+    Ptr::new(opened)
+}
+
+/// `_write` (`00edc743`, cdecl: handle, buffer, count; LIBCMT, engine map).
+const WRITE: u32 = 0x00ed_c743;
+
+// Translated from 00ecaf24 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_fwrite_nolock` (LIBCMT/fwrite.c, engine map), cdecl: buffer, element size, count, stream.
+/// 0 for a zero size or count; a null stream or buffer, or a count above `0xffffffff / size`,
+/// sets `errno` to `EINVAL` (0x16), calls the invalid-parameter handler and answers 0. The
+/// total (`size * count`) is written in a loop, with the buffer size taken from the stream
+/// (+0x18) when it has a buffer (flags +0xc & 0x10c), else 0x1000: while the stream has room in
+/// its buffer (flags & 0x108 and a count +4 not 0) the bytes are copied into it (`memcpy`, as
+/// many as fit; a negative count marks an error); else a whole number of buffer sizes (all when
+/// the buffer size is 0) is written straight to the handle (`_write` of `_fileno`, after
+/// `_flush` when buffered), else one byte goes through `_flsbuf` (the buffer size re-read, 1
+/// when not positive). Errors set `_IOERR` (0x20; not for a failed flush or `_flsbuf`) and
+/// answer the whole elements written so far; a finished write answers the count.
+pub fn fwrite_nolock(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream: Ptr) -> u32 {
+    if size == 0 || count == 0 {
+        return 0;
+    }
+    let stream = stream.addr();
+    let buffer = buffer.addr();
+    if stream == 0 || buffer == 0 || count > u32::MAX / size {
+        let error = errno(e);
+        e.mem.set_u32(error.addr(), 0x16);
+        fn_00ec7c30(e, 0, 0, 0, 0, 0);
+        return 0;
+    }
+    let total = size.wrapping_mul(count);
+    let mut data = buffer;
+    let mut left = total;
+    let mut buffer_size = if e.mem.u32(stream + 0xc) & 0x10c != 0 {
+        e.mem.u32(stream + 0x18)
+    } else {
+        0x1000
+    };
+    let written_elements = |left: u32| total.wrapping_sub(left) / size;
+    if total == 0 {
+        return count;
+    }
+    loop {
+        let buffered = e.mem.u32(stream + 0xc) & 0x108;
+        let room = e.mem.u32(stream + 4);
+        if buffered != 0 && room != 0 {
+            if (room as i32) < 0 {
+                let flags = e.mem.u32(stream + 0xc) | 0x20;
+                e.mem.set_u32(stream + 0xc, flags);
+                return written_elements(left);
+            }
+            let chunk = if left < room { left } else { room };
+            let target = e.mem.u32(stream);
+            memcpy(e, Ptr::new(target), Ptr::new(data), chunk);
+            e.mem.set_u32(stream + 4, room.wrapping_sub(chunk));
+            e.mem.set_u32(stream, target.wrapping_add(chunk));
+            left = left.wrapping_sub(chunk);
+            data = data.wrapping_add(chunk);
+        } else if left >= buffer_size {
+            if buffered != 0 && e.call(FLUSH, &args![stream]).u32() != 0 {
+                return written_elements(left);
+            }
+            let chunk = if buffer_size != 0 {
+                left - left % buffer_size
+            } else {
+                left
+            };
+            let handle = e.call(FILENO, &args![stream]).u32();
+            let written = e.call(WRITE, &args![handle, data, chunk]).u32();
+            if written == 0xffff_ffff {
+                let flags = e.mem.u32(stream + 0xc) | 0x20;
+                e.mem.set_u32(stream + 0xc, flags);
+                return written_elements(left);
+            }
+            let done = if written > chunk { chunk } else { written };
+            data = data.wrapping_add(done);
+            left = left.wrapping_sub(done);
+            if written < chunk {
+                let flags = e.mem.u32(stream + 0xc) | 0x20;
+                e.mem.set_u32(stream + 0xc, flags);
+                return written_elements(left);
+            }
+        } else {
+            let character = e.mem.u8(data) as i8 as i32 as u32;
+            if e.call(FLSBUF, &args![character, stream]).i32() == -1 {
+                return written_elements(left);
+            }
+            data = data.wrapping_add(1);
+            left = left.wrapping_sub(1);
+            buffer_size = e.mem.u32(stream + 0x18);
+            if (buffer_size as i32) <= 0 {
+                buffer_size = 1;
+            }
+        }
+        if left == 0 {
+            return count;
+        }
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401000, operator_new(u32) -> Ptr),
@@ -4340,6 +4576,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_9a47, fopen(Ptr, Ptr) -> Ptr),
         entry!(0x00ec_9907, fclose(Ptr) -> i32),
         entry!(0x00ec_b086, fwrite(Ptr, u32, u32, Ptr) -> u32),
+        entry!(0x00ec_e01b, lock_file(Ptr)),
+        entry!(0x00ec_e08e, unlock_file(Ptr)),
+        entry!(0x00ec_9890, fclose_nolock(Ptr) -> i32),
+        entry!(0x00ec_9983, fsopen(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x00ec_af24, fwrite_nolock(Ptr, u32, u32, Ptr) -> u32),
     ]
 }
 
@@ -7482,5 +7723,216 @@ mod stream_tests {
         assert_eq!(e.mem.u32(error), 0x16);
         assert_eq!(calls(&e, HANDLER).len(), 1);
         assert_eq!(calls(&e, LOCK_FILE).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod stream_internals_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The invalid-parameter handler the doubled `__decode_pointer` answers.
+    const HANDLER: u32 = 0x0e30_0000;
+
+    /// An engine with `errno` at +8 of a block `__getptd_noexit` answers, a handler, the lock
+    /// table's sections and the critical-section imports doubled; answers it and `errno`.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(0x011c_1000, 0x2000);
+        let block = e.mem.alloc(0x10);
+        e.register_double(GETPTD_NOEXIT, move |_, _| block.into_ret());
+        e.register(DECODE_POINTER, |_, _| HANDLER.into_ret());
+        for target in [
+            HANDLER,
+            IMPORT_ENTER_CRITICAL_SECTION,
+            IMPORT_LEAVE_CRITICAL_SECTION,
+            FREEBUF,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        (e, block + 8)
+    }
+
+    #[test]
+    fn lock_file_uses_the_iob_lock_or_the_stream_section() {
+        let (mut e, _) = engine();
+        // `_iob` stream 2: lock 0x12, whose section the table holds.
+        let stream = IOB_FIRST + 0x40;
+        e.mem.set_u32(LOCK_TABLE + 0x12 * 8, 0x0e40_0000);
+        e.call(0x00ec_e01b, &args![stream]);
+        assert_eq!(e.mem.u32(stream + 0xc), 0x8000);
+        assert_eq!(
+            calls(&e, IMPORT_ENTER_CRITICAL_SECTION),
+            vec![vec![0x0e40_0000]]
+        );
+        e.call(0x00ec_e08e, &args![stream]);
+        assert_eq!(e.mem.u32(stream + 0xc), 0);
+        assert_eq!(
+            calls(&e, IMPORT_LEAVE_CRITICAL_SECTION),
+            vec![vec![0x0e40_0000]]
+        );
+        // Another stream: its own section at +0x20.
+        let other = e.mem.alloc(0x38);
+        e.call(0x00ec_e01b, &args![other]);
+        e.call(0x00ec_e08e, &args![other]);
+        assert_eq!(
+            calls(&e, IMPORT_ENTER_CRITICAL_SECTION)[1],
+            vec![other + 0x20]
+        );
+        assert_eq!(
+            calls(&e, IMPORT_LEAVE_CRITICAL_SECTION)[1],
+            vec![other + 0x20]
+        );
+        assert_eq!(e.mem.u32(other + 0xc), 0);
+    }
+
+    #[test]
+    fn fclose_nolock_flushes_closes_and_frees_the_name() {
+        let (mut e, error) = engine();
+        e.register(FLUSH, |_, _| 5u32.into_ret());
+        e.register(FILENO, |_, _| 3u32.into_ret());
+        e.register(CLOSE, |_, _| 0u32.into_ret());
+        let stream = e.mem.alloc(0x20);
+        e.mem.set_u32(stream + 0xc, 0x2);
+        let name = e.mem.alloc(8);
+        e.mem.set_u32(stream + 0x1c, name);
+        assert_eq!(e.call(0x00ec_9890, &args![stream]).i32(), 5);
+        assert_eq!(calls(&e, CLOSE), vec![vec![3]]);
+        assert_eq!(calls(&e, FREEBUF), vec![vec![stream]]);
+        assert_eq!(e.mem.u32(stream + 0x1c), 0);
+        assert_eq!(e.mem.u32(stream + 0xc), 0);
+        // A failed close answers -1 and keeps the name.
+        e.register(CLOSE, |_, _| 0xffff_ffffu32.into_ret());
+        e.mem.set_u32(stream + 0xc, 0x1);
+        let kept = e.mem.alloc(8);
+        e.mem.set_u32(stream + 0x1c, kept);
+        assert_eq!(e.call(0x00ec_9890, &args![stream]).i32(), -1);
+        assert_eq!(e.mem.u32(stream + 0x1c), kept);
+        // An unused stream: -1, flags cleared; no stream: EINVAL.
+        e.mem.set_u32(stream + 0xc, 0x4);
+        assert_eq!(e.call(0x00ec_9890, &args![stream]).i32(), -1);
+        assert_eq!(e.mem.u32(stream + 0xc), 0);
+        assert_eq!(calls(&e, FLUSH).len(), 2);
+        assert_eq!(e.call(0x00ec_9890, &args![0u32]).i32(), -1);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, HANDLER).len(), 1);
+    }
+
+    #[test]
+    fn fsopen_checks_the_names_and_unlocks_the_stream() {
+        let (mut e, error) = engine();
+        e.register(UNLOCK_FILE, |_, _| Ret::default());
+        e.register(GETSTREAM, |_, _| 0x0e60_0000u32.into_ret());
+        e.register(OPENFILE, |_, a| a[3].into_ret());
+        let path = e.mem.alloc(8);
+        e.mem.write(path, b"a.txt\0");
+        let mode = e.mem.alloc(4);
+        e.mem.write(mode, b"wb\0");
+        let opened = e.call(0x00ec_9983, &args![path, mode, 0x40u32]).u32();
+        assert_eq!(opened, 0x0e60_0000);
+        assert_eq!(
+            calls(&e, OPENFILE),
+            vec![vec![path, mode, 0x40, 0x0e60_0000]]
+        );
+        assert_eq!(calls(&e, UNLOCK_FILE), vec![vec![0x0e60_0000]]);
+        // An empty path: EINVAL, the stream unlocked, null.
+        let empty = e.mem.alloc(4);
+        assert_eq!(e.call(0x00ec_9983, &args![empty, mode, 0x40u32]).u32(), 0);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, UNLOCK_FILE).len(), 2);
+        assert!(calls(&e, HANDLER).is_empty());
+        // An empty mode: the handler, no stream taken.
+        assert_eq!(e.call(0x00ec_9983, &args![path, empty, 0x40u32]).u32(), 0);
+        assert_eq!(calls(&e, HANDLER).len(), 1);
+        assert_eq!(calls(&e, GETSTREAM).len(), 2);
+        // No free stream: EMFILE.
+        e.register(GETSTREAM, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ec_9983, &args![path, mode, 0x40u32]).u32(), 0);
+        assert_eq!(e.mem.u32(error), 0x18);
+    }
+
+    /// A buffered stream (flags 0x108 by default) whose buffer has `room` bytes, buffer size 8.
+    fn new_stream(e: &mut Engine, flags: u32, room: u32) -> (u32, u32) {
+        let stream = e.mem.alloc(0x20);
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(stream, buffer);
+        e.mem.set_u32(stream + 4, room);
+        e.mem.set_u32(stream + 0xc, flags);
+        e.mem.set_u32(stream + 0x18, 8);
+        (stream, buffer)
+    }
+
+    #[test]
+    fn fwrite_nolock_fills_the_buffer_then_writes_whole_blocks() {
+        let (mut e, _) = engine();
+        e.register(FLUSH, |_, _| 0u32.into_ret());
+        e.register(FILENO, |_, _| 3u32.into_ret());
+        e.register(WRITE, |_, a| a[2].into_ret());
+        e.register(FLSBUF, |_, _| 0u32.into_ret());
+        let data = e.mem.alloc(0x20);
+        e.mem.write(data, &(0..0x20).collect::<Vec<u8>>());
+        let (stream, buffer) = new_stream(&mut e, 0x108, 4);
+        // 5 elements of 4 bytes: 4 into the buffer, 16 written (two blocks of 8), none left.
+        assert_eq!(
+            e.call(0x00ec_af24, &args![data, 4u32, 5u32, stream]).u32(),
+            5
+        );
+        assert_eq!(e.mem.bytes(buffer, 4), vec![0, 1, 2, 3]);
+        assert_eq!(e.mem.u32(stream), buffer + 4);
+        assert_eq!(e.mem.u32(stream + 4), 0);
+        assert_eq!(calls(&e, WRITE), vec![vec![3, data + 4, 16]]);
+        assert_eq!(calls(&e, FLUSH), vec![vec![stream]]);
+        // 3 bytes left under the buffer size go one by one through `_flsbuf`.
+        let (stream, _) = new_stream(&mut e, 0x108, 0);
+        assert_eq!(
+            e.call(0x00ec_af24, &args![data, 1u32, 3u32, stream]).u32(),
+            3
+        );
+        let bytes: Vec<u32> = calls(&e, FLSBUF).iter().map(|a| a[0]).collect();
+        assert_eq!(bytes, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn fwrite_nolock_reports_errors_in_whole_elements() {
+        let (mut e, error) = engine();
+        e.register(FILENO, |_, _| 3u32.into_ret());
+        e.register(WRITE, |_, a| (a[2] - 4).into_ret());
+        let data = e.mem.alloc(0x40);
+        // Unbuffered (size 0x1000): a short write of 0x1000 - 4 bytes of 0x1000 bytes.
+        let big = e.mem.alloc(0x1000);
+        let (stream, _) = new_stream(&mut e, 0, 0);
+        assert_eq!(
+            e.call(0x00ec_af24, &args![big, 0x100u32, 0x10u32, stream])
+                .u32(),
+            0xf
+        );
+        assert_eq!(e.mem.u32(stream + 0xc), 0x20);
+        // A negative room marks the error at once.
+        let (stream, _) = new_stream(&mut e, 0x108, 0xffff_ffff);
+        assert_eq!(
+            e.call(0x00ec_af24, &args![data, 1u32, 2u32, stream]).u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(stream + 0xc), 0x128);
+        // Too many elements or no stream: EINVAL; a zero size: 0 quietly.
+        assert_eq!(
+            e.call(0x00ec_af24, &args![data, 2u32, 0x8000_0000u32, stream])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(e.call(0x00ec_af24, &args![data, 2u32, 1u32, 0u32]).u32(), 0);
+        assert_eq!(calls(&e, HANDLER).len(), 2);
+        assert_eq!(e.call(0x00ec_af24, &args![data, 0u32, 1u32, 0u32]).u32(), 0);
+        assert_eq!(calls(&e, HANDLER).len(), 2);
     }
 }
