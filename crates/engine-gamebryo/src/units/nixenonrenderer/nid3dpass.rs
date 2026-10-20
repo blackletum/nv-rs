@@ -470,6 +470,35 @@ pub fn fn_00e800f0(e: &mut Engine, this: Ptr<NiD3DPass>) -> Ptr<NiD3DPass> {
     this
 }
 
+/// The stage arrays' vtables: `NiTArray<NiPointer<NiD3DTextureStage>,..>` (`010ef35c`) and
+/// `NiTObjectArray<NiPointer<NiD3DTextureStage>>` (`010ef378`) (RTTI names read in Ghidra).
+const STAGE_ARRAY_BASE_VTABLE_010EF35C: u32 = 0x010e_f35c;
+const STAGE_ARRAY_VTABLE_010EF378: u32 = 0x010e_f378;
+
+// Translated from 00e80020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): the stage array's constructor
+/// (`NiTObjectArray<NiPointer<NiD3DTextureStage>>`), `thiscall` with two stack words: the max
+/// size and the grow-by (both used as 16 bits). Grow-by +0xe, the base class's vtable
+/// `010ef35c`, max size +8, size and element count 0; an array of that many pointers
+/// (`00c1d790`) for a non-zero max size, else none; then the vtable `010ef378`. Answers `this`.
+pub fn fn_00e80020(e: &mut Engine, this: Ptr, max_size: u32, grow_by: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u16(base + 0xe, grow_by as u16);
+    e.mem.set_u32(base, STAGE_ARRAY_BASE_VTABLE_010EF35C);
+    e.mem.set_u16(base + 8, max_size as u16);
+    e.mem.set_u16(base + 0xa, 0);
+    e.mem.set_u16(base + 0xc, 0);
+    let elements = if max_size as u16 != 0 {
+        e.call(NEW_POINTERS_00C1D790, &args![u32::from(max_size as u16)])
+            .u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(base + 4, elements);
+    e.mem.set_u32(base, STAGE_ARRAY_VTABLE_010EF378);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -485,6 +514,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_fd20, fn_00e7fd20(Ptr, u32)),
         entry!(0x00e7_fcd0, fn_00e7fcd0(Ptr)),
         entry!(0x00e8_00f0, fn_00e800f0(Ptr<NiD3DPass>) -> Ptr<NiD3DPass>),
+        entry!(0x00e8_0020, fn_00e80020(Ptr, u32, u32) -> Ptr),
     ]
 }
 
@@ -908,5 +938,37 @@ mod b000p_tests {
             calls(&e, STAGES_CONSTRUCT_00E80020),
             vec![vec![pass + 0x20, 8, 4]]
         );
+    }
+}
+
+#[cfg(test)]
+mod b000r_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e80020_builds_the_stage_array() {
+        let mut e = Engine::new();
+        e.register(NEW_POINTERS_00C1D790, |e, a| {
+            e.mem.alloc(4 * a[0]).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let array = e.mem.alloc(0x10);
+        e.mem.write(array, &[0xcc; 0x10]);
+        let answer = e
+            .call(0x00e8_0020, &args![array, 0x1_0008u32, 0x2_0004u32])
+            .u32();
+        assert_eq!(answer, array);
+        assert_eq!(e.mem.u32(array), STAGE_ARRAY_VTABLE_010EF378);
+        assert_ne!(e.mem.u32(array + 4), 0);
+        assert_eq!(e.mem.u16(array + 8), 8);
+        assert_eq!(e.mem.u16(array + 0xa), 0);
+        assert_eq!(e.mem.u16(array + 0xc), 0);
+        assert_eq!(e.mem.u16(array + 0xe), 4);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (NEW_POINTERS_00C1D790, vec![8]));
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_0020, &args![array, 0x1_0000u32, 4u32]);
+        assert_eq!(e.mem.u32(array + 4), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }
