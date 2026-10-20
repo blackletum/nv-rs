@@ -569,7 +569,8 @@ pub fn mobile_object_move(
             let process = this.addr() + 0xa4;
             if e.vcall(process, 8, &args![0x33u32]).i32() > 0 {
                 let divisor = e.call(0x0071_6440, &args![]).f64();
-                delta = (delta as f64 / divisor) as f32;
+                // `FDIVR dword` (`0092f306`): the step over the value in ST0.
+                delta = x87_div(x87_m32(delta.to_bits()), divisor) as f32;
             }
         }
         let position = e.call(0x0043_6aa0, &args![this]).u32();
@@ -808,7 +809,8 @@ pub fn mobile_object_move(
                     e.call(0x0062_9650, &args![controller.addr() + 0x410, 0u32]);
                     let setting = e.call(0x0040_3e20, &args![0x011e_0574u32]).u32();
                     let factor = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
-                    let value = (factor * e.mem.f32(setting) as f64) as f32;
+                    // `FMUL dword` (`0092ff48`).
+                    let value = x87_mul(factor, x87_m32(e.mem.u32(setting))) as f32;
                     fn_00930600(e, controller, value);
                 }
                 let speed = if actor && e.call(0x0088_46e0, &args![this]).u32() & 0x3f != 0 {
@@ -830,10 +832,17 @@ pub fn mobile_object_move(
                     e.call(0x0068_15c0, &args![at(0x2a0)]);
                     e.call(0x0081_2b00, &args![controller, at(0x2a0)]);
                     let radius = e.call(0x00c6_e280, &args![controller]).f32();
-                    let doubled = (2.0 * e.call(0x0045_87d0, &args![radius]).f64()) as f32;
+                    // `FADD ST0,ST0` (`00930035`).
+                    let half = e.call(0x0045_87d0, &args![radius]).f64();
+                    let doubled = x87_add(half, half) as f32;
                     let current_z = e.mem.f32(at(0x2a0) + 8);
                     e.mem
-                        .set_f32(at(0x2a0) + 8, (current_z as f64 + doubled as f64) as f32);
+                        // `FADD dword` (`00930043`).
+                        .set_f32(
+                            at(0x2a0) + 8,
+                            x87_add(x87_load32(current_z.to_bits()), x87_m32(doubled.to_bits()))
+                                as f32,
+                        );
                     e.vcall(this.addr(), 0x2a8, &args![at(0x2a0)]);
                 }
                 if !e.call(0x0062_1240, &args![controller]).bool() {
@@ -861,8 +870,11 @@ pub fn mobile_object_move(
                         let tes = e.global::<u32>(0x011d_ea10);
                         e.call(0x0045_72e0, &args![tes, at(0x30), at(0x2b4)]);
                         let height = e.mem.f32(at(0x2b4));
-                        if (height as f64 - e.mem.f32(at(0x30) + 8) as f64)
-                            > e.global::<f64>(0x0101_db88)
+                        // `FSUB dword`, `FCOMP qword` (`0093015b`).
+                        if x87_sub(
+                            x87_load32(height.to_bits()),
+                            x87_m32(e.mem.u32(at(0x30) + 8)),
+                        ) > e.global::<f64>(0x0101_db88)
                         {
                             e.mem.set_f32(at(0x30) + 8, height);
                             e.vcall(this.addr(), 0x2a8, &args![at(0x30)]);

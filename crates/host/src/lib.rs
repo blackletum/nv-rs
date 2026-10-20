@@ -68,6 +68,7 @@ impl Host {
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         let mut movement = player_move::PlayerMovement::default();
         let ni_init = start_ni(&mut engine, &mut movement);
+        start_renderer_fpu(&mut engine);
         start_game_objects(&mut engine);
         Ok(Host {
             engine,
@@ -119,6 +120,21 @@ pub fn start_ni(e: &mut Engine, movement: &mut player_move::PlayerMovement) -> O
             Ok(())
         })
         .err()
+}
+
+/// What creating the renderer's Direct3D device does to the main thread's FPU,
+/// at the point `main` creates it: `0086b028` calls `0086d500`, whose `Init`
+/// (`004da670`) creates the renderer at `004daa4c` (`NiDX9Renderer::Create`
+/// `00e76210` → `NiDX9Renderer::Initialize` `00e72e60` → `CreateDevice`), after
+/// `NiInit` (`0086a9f8`) and before `InitTES` (`0086b0e8`) and the AI threads
+/// (`0086b12d`). The game's behaviour flags never hold
+/// `D3DCREATE_FPU_PRESERVE` (`engine::units::platform::direct3d_device_created`),
+/// so from here on the main thread runs at 24-bit precision (control word
+/// `0x007F`, measured), as the player's mover and the character controller do
+/// in the game; threads made later start at `0x027F`. The device itself is the
+/// viewer's (platform).
+pub fn start_renderer_fpu(e: &mut Engine) {
+    engine::units::platform::direct3d_device_created(e, 0);
 }
 
 /// The objects of the game's start-up (`WinMain`) that making forms needs,
@@ -186,6 +202,17 @@ mod tests {
         assert_eq!(movement.misses[&0x00ab_cdef].stage, "niinit");
         e.register(0x00aa_20b0, |_, _| engine::Ret::default());
         assert_eq!(start_ni(&mut e, &mut movement), None);
+    }
+
+    /// After the renderer's start-up point the main thread computes at 24-bit
+    /// precision (0x007F), as measured in the game.
+    #[test]
+    fn the_renderer_start_up_sets_24_bit_precision_on_the_main_thread() {
+        let mut e = Engine::new();
+        assert_eq!(engine::x87::control_word(), 0x027f);
+        start_renderer_fpu(&mut e);
+        assert_eq!(engine::units::crt::x87_control_word(&mut e), 0x007f);
+        assert_eq!(engine::x87::x87_div(1.0, 3.0), f64::from(1.0f32 / 3.0));
     }
 
     #[test]
