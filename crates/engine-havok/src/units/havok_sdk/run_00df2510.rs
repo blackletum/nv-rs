@@ -44,36 +44,10 @@ const BOX_SCALE: u32 = 0x011b_9490;
 /// 0xd2): the dot product (lane sum `x2 + (x1 + x0)`) of `(cross(m3, d1) + [a1 + 0x1b0]) -
 /// (cross(m4, d2) + [a2 + 0x1b0])` with the vector at `a5 + 0x10`; quieted by the `FLD`.
 pub fn fn_00df2510(e: &mut Engine, a1: Ptr, a2: Ptr, a3: Ptr, a4: Ptr, a5: Ptr) -> f32 {
-    // SSE arithmetic with the SSE choice of NaN (Intel SDM vol. 1, table 4-7, SSE column):
-    // a NaN in the destination operand wins (quieted), else a NaN in the source (quieted);
-    // an invalid operation on two numbers gives the default NaN 0xffc00000. Host float
-    // arithmetic does not keep this (LLVM may swap the operands of a commutative operation).
-    fn sse(dest: f32, src: f32, op: fn(f32, f32) -> f32) -> f32 {
-        if dest.is_nan() {
-            f32::from_bits(dest.to_bits() | 0x0040_0000)
-        } else if src.is_nan() {
-            f32::from_bits(src.to_bits() | 0x0040_0000)
-        } else {
-            let result = op(dest, src);
-            if result.is_nan() {
-                f32::from_bits(0xffc0_0000)
-            } else {
-                result
-            }
-        }
-    }
-    fn lanes(dest: Xmm, src: Xmm, op: fn(f32, f32) -> f32) -> Xmm {
-        std::array::from_fn(|lane| sse(dest[lane], src[lane], op))
-    }
-    fn sub(dest: Xmm, src: Xmm) -> Xmm {
-        lanes(dest, src, |a, b| a - b)
-    }
-    fn add(dest: Xmm, src: Xmm) -> Xmm {
-        lanes(dest, src, |a, b| a + b)
-    }
-    fn mul(dest: Xmm, src: Xmm) -> Xmm {
-        lanes(dest, src, |a, b| a * b)
-    }
+    // SSE arithmetic with the SSE choice of NaN (the shared `crate::sse` helpers): a NaN in
+    // the destination operand wins (quieted), else a NaN in the source (quieted); an invalid
+    // operation on two numbers gives the default NaN 0xffc00000.
+    use crate::sse::{addps as add, mulps as mul, subps as sub};
     // MOVAPS XMM2,[a5]; MOVAPS XMM0,[a3]; MOVAPS XMM3,[a1+0x1c0]; SUBPS XMM1(=XMM2),XMM0.
     let point = movaps(e, a5.addr());
     let first = movaps(e, a3.addr());
@@ -98,8 +72,8 @@ pub fn fn_00df2510(e: &mut Engine, a1: Ptr, a2: Ptr, a3: Ptr, a4: Ptr, a5: Ptr) 
     let normal = movaps(e, a5.addr().wrapping_add(0x10));
     let product = mul(diff, normal);
     // ADDSS XMM1(lane 1),XMM0(lane 0); ADDSS XMM2(lane 2),XMM1; MOVSS; FLD (quiets).
-    let first_two = sse(product[1], product[0], |a, b| a + b);
-    let sum = sse(product[2], first_two, |a, b| a + b);
+    let first_two = crate::sse::add(product[1], product[0]);
+    let sum = crate::sse::add(product[2], first_two);
     x87_quiet(sum)
 }
 
