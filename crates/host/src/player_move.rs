@@ -986,6 +986,25 @@ impl crate::Host {
         self.movement.step(&mut self.engine, order, cell, input)
     }
 
+    /// The viewer's keyboard for the game's DirectInput keyboard
+    /// (`engine::units::platform::dinput::key`): `down` holds every DirectInput key code (the
+    /// scan code) down this frame; each change becomes a key event.
+    pub fn set_keys_down(&mut self, down: &[u8]) {
+        for code in 0..=255u8 {
+            engine::units::platform::dinput::key(&mut self.engine, code, down.contains(&code));
+        }
+    }
+
+    /// The viewer's mouse for the game's DirectInput mouse: motion since the last frame
+    /// (`dinput::mouse_move`) and the buttons down (`dinput::mouse_button`).
+    pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
+        let e = &mut self.engine;
+        engine::units::platform::dinput::mouse_move(e, motion[0], motion[1], motion[2]);
+        for (button, down) in buttons.into_iter().enumerate() {
+            engine::units::platform::dinput::mouse_button(e, button, down);
+        }
+    }
+
     /// The frame's AI linear task threads, with the Havok world step on
     /// thread 2, through the game's code ([`PlayerMovement::run_ai_threads`]);
     /// `None`: the caller steps its own bodies.
