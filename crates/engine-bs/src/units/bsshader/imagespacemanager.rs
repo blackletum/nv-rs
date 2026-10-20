@@ -1608,6 +1608,25 @@ pub fn fn_00b943d0(e: &mut Engine, this: Ptr) -> Ptr {
     construct_image_space_shader(e, this, 0x010b_7bf0, 0x010b_7bcc, 2)
 }
 
+/// The set-up `00b8b270` (this unit, unnamed; `thiscall` on the object at +0x58, two stack
+/// words: an index and the address of a byte).
+const SET_UP_00B8B270: u32 = 0x00b8_b270;
+
+// Translated from 00b8bc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: calls
+/// `00b8b270` on +0x58 with the indices 0 to 3, each with the address of a stack byte (the high
+/// byte of the word the function saved `ECX` in) set just before the call to 1, 1, 1 and 0.
+pub fn fn_00b8bc20(e: &mut Engine, this: Ptr) {
+    let target = this.addr() + 0x58;
+    e.with_stack(4, |e, local| {
+        let flag = local.addr() + 3;
+        for (index, value) in [(0u32, 1u8), (1, 1), (2, 1), (3, 0)] {
+            e.mem.set_u8(flag, value);
+            e.call(SET_UP_00B8B270, &args![target, index, flag]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1694,6 +1713,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_4130, fn_00b94130(Ptr) -> Ptr),
         entry!(0x00b9_4280, fn_00b94280(Ptr) -> Ptr),
         entry!(0x00b9_43d0, fn_00b943d0(Ptr) -> Ptr),
+        entry!(0x00b8_bc20, fn_00b8bc20(Ptr)),
     ]
 }
 
@@ -2673,5 +2693,41 @@ mod shader_constructor_tests {
     #[test]
     fn fn_00b943d0_constructs_the_shader() {
         check(0x00b9_43d0, 0x010b_7bf0, 0x010b_7bcc, 2);
+    }
+}
+
+#[cfg(test)]
+mod b000n_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b8bc20_sets_up_the_four_entries() {
+        let mut e = Engine::new();
+        // The double notes the index and the byte it was given.
+        let seen = e.mem.alloc(0x10);
+        e.register_double(SET_UP_00B8B270, move |e, a| {
+            let value = e.mem.u8(a[2]);
+            e.mem.set_u8(seen + a[1], value + 0x10);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x60);
+        e.call(0x00b8_bc20, &args![this]);
+        assert_eq!(e.mem.bytes(seen, 4), vec![0x11, 0x11, 0x11, 0x10]);
+        let log = e.call_log.take().unwrap();
+        let targets: Vec<(u32, u32)> = log
+            .iter()
+            .filter(|c| c.0 == SET_UP_00B8B270)
+            .map(|c| (c.1[0], c.1[1]))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                (this + 0x58, 0),
+                (this + 0x58, 1),
+                (this + 0x58, 2),
+                (this + 0x58, 3)
+            ]
+        );
     }
 }

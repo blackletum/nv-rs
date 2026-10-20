@@ -61,12 +61,29 @@ pub fn ni_d3d_texture_stage_create_new_stage(e: &mut Engine, slot: Ptr) {
     stage_release(e, stage);
 }
 
+use crate::units::nixenonrenderer::run_00e7ef80::{new_pool_block, pool_add_block};
+
+/// The stage array maker `00e7e880` (unnamed; `cdecl`, the count: that many 0x68-byte stages).
+const NEW_STAGES_00E7E880: u32 = 0x00e7_e880;
+
+// Translated from 00e7eb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dtexturestage.cpp`): the texture stage pool's grow,
+/// `thiscall` on the pool with one stack word (the growth size): a new pool block (0xc bytes
+/// from the memory manager: +4 the growth size, +8 cleared, +0 the stages `00e7e880` makes, or 0
+/// for a growth of 0) whose 0x68-byte stages are appended to the pool's set (grown through
+/// `00a311e0` when full) and the block linked in front of the pool's chain at +0xc, as the
+/// render-state pools' grows do (`00e7f160`).
+pub fn fn_00e7eb50(e: &mut Engine, this: Ptr, growth: u32) {
+    let block = new_pool_block(e, growth, NEW_STAGES_00E7E880);
+    pool_add_block(e, this.addr(), growth, block, 0x68);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00e7_edf0,
-        ni_d3d_texture_stage_create_new_stage(Ptr)
-    )]
+    vec![
+        entry!(0x00e7_edf0, ni_d3d_texture_stage_create_new_stage(Ptr)),
+        entry!(0x00e7_eb50, fn_00e7eb50(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -144,5 +161,33 @@ mod tests {
         e.call(0x00e7_edf0, &args![slot]);
         assert_eq!(e.mem.u32(made[0] + 0x60), 0);
         assert_eq!(calls(&e, STAGE_DELETE_00E7ECD0), vec![vec![made[0]]]);
+    }
+}
+
+#[cfg(test)]
+mod pool_grow_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7eb50_appends_the_new_stages() {
+        let mut e = Engine::new();
+        e.register(0x00aa_3e40, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(NEW_STAGES_00E7E880, |e, a| {
+            e.mem.alloc(0x68 * a[0]).into_ret()
+        });
+        e.register(0x00a3_11e0, |e, a| {
+            let new = e.mem.alloc(4 * a[1]);
+            e.mem.set_u32(a[0], new);
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        let pool = e.mem.alloc(0x18);
+        e.call(0x00e7_eb50, &args![pool, 1u32]);
+        let block = e.mem.u32(pool + 0xc);
+        let stages = e.mem.u32(block);
+        assert_eq!(e.mem.u32(block + 4), 1);
+        assert_eq!(e.mem.u32(pool + 8), 1);
+        let elements = e.mem.u32(pool);
+        assert_eq!(e.mem.u32(elements), stages);
     }
 }

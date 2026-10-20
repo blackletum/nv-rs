@@ -206,6 +206,185 @@ pub fn fn_00e7f6b0(e: &mut Engine, block: Ptr) {
     });
 }
 
+/// `NiTSet<..>::Realloc` (`00a311e0`, `thiscall` on the set, one word: the new capacity) the
+/// pools' grows call when their set is full.
+const SET_REALLOC_00A311E0: u32 = 0x00a3_11e0;
+
+/// A pool grow's block made inline (0xc bytes from the memory manager; null when that fails):
+/// +4 the growth size, +8 cleared, +0 the elements `maker` (`cdecl`, the count) makes, or 0 for
+/// a growth of 0.
+pub(crate) fn new_pool_block(e: &mut Engine, growth: u32, maker: u32) -> u32 {
+    let block = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, 0xcu32],
+        )
+        .u32();
+    if block != 0 {
+        e.mem.set_u32(block + 4, growth);
+        e.mem.set_u32(block + 8, 0);
+        if growth != 0 {
+            let elements = e.call(maker, &args![growth]).u32();
+            e.mem.set_u32(block, elements);
+        } else {
+            e.mem.set_u32(block, 0);
+        }
+    }
+    block
+}
+
+/// The rest of a pool grow (pool: element set at +0, capacity +4, count +8, block chain +0xc):
+/// for each of the `growth` new elements (its address in the block's array while the index is
+/// below the block's +4, else 0; the block's words read even when it is null) the set grows
+/// when full (`00a311e0` to twice the capacity, 1 when it is 0) and the element is appended;
+/// then the block is linked in front of the chain (its +8 takes the old head, written even
+/// through a null block).
+pub(crate) fn pool_add_block(e: &mut Engine, pool: u32, growth: u32, block: u32, size: u32) {
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < growth {
+        let element = if index < e.mem.u32(block.wrapping_add(4)) {
+            e.mem.u32(block).wrapping_add(offset)
+        } else {
+            0
+        };
+        let capacity = e.mem.u32(pool + 4);
+        if e.mem.u32(pool + 8) == capacity {
+            let new = if capacity != 0 {
+                capacity.wrapping_add(capacity)
+            } else {
+                1
+            };
+            e.call(SET_REALLOC_00A311E0, &args![pool, new]);
+        }
+        let used = e.mem.u32(pool + 8);
+        let elements = e.mem.u32(pool);
+        e.mem
+            .set_u32(elements.wrapping_add(used.wrapping_mul(4)), element);
+        e.mem.set_u32(pool + 8, used.wrapping_add(1));
+        index += 1;
+        offset = offset.wrapping_add(size);
+    }
+    let chain = e.mem.u32(pool + 0xc);
+    e.mem.set_u32(block.wrapping_add(8), chain);
+    e.mem.set_u32(pool + 0xc, block);
+}
+
+// Translated from 00e7f000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): a render-state block's entry lookup, `thiscall`
+/// with two stack words: the state and the address of a byte. Walks the first list (from its
+/// last entry at +8 back through each entry's +8) and then the second (from +0x10) for an entry
+/// whose +0 is the state; the byte becomes 0 or 1 for the list it was found in and the entry is
+/// answered; 0 when there is none (the byte not written).
+pub fn fn_00e7f000(e: &mut Engine, this: Ptr, state: u32, list: Ptr) -> u32 {
+    let base = this.addr();
+    for (last, which) in [(8u32, 0u8), (0x10, 1)] {
+        let mut entry = e.mem.u32(base + last);
+        while entry != 0 {
+            if e.mem.u32(entry) == state {
+                e.mem.set_u8(list.addr(), which);
+                return entry;
+            }
+            entry = e.mem.u32(entry + 8);
+        }
+    }
+    0
+}
+
+/// The element makers of the block pool (`00e7f0a0`, 0x14-byte blocks) and the entry pool's
+/// block constructor (`00e7f0f0`, `thiscall` on the 0xc-byte block, one word: the count; 0x10-byte
+/// entries) (unnamed; `cdecl` with the count for the first).
+const NEW_BLOCKS_00E7F0A0: u32 = 0x00e7_f0a0;
+const ENTRY_BLOCK_CONSTRUCT_00E7F0F0: u32 = 0x00e7_f0f0;
+
+// Translated from 00e7f160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the render-state block pool's grow, `thiscall`
+/// on the pool with one stack word (the growth size): a new pool block of that many 0x14-byte
+/// blocks (`00e7f0a0`) whose blocks are appended to the pool's set and the block chained (see
+/// [`pool_add_block`]).
+pub fn fn_00e7f160(e: &mut Engine, this: Ptr, growth: u32) {
+    let block = new_pool_block(e, growth, NEW_BLOCKS_00E7F0A0);
+    pool_add_block(e, this.addr(), growth, block, 0x14);
+}
+
+// Translated from 00e7f210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the render-state entry pool's grow, `thiscall` on
+/// the pool with one stack word (the growth size): 0xc bytes from the memory manager built by
+/// `00e7f0f0` with the growth size (null when the allocation fails), whose 0x10-byte entries are
+/// appended to the pool's set and the block chained (see [`pool_add_block`]).
+pub fn fn_00e7f210(e: &mut Engine, this: Ptr, growth: u32) {
+    let memory = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, 0xcu32],
+        )
+        .u32();
+    let block = if memory != 0 {
+        e.call(ENTRY_BLOCK_CONSTRUCT_00E7F0F0, &args![memory, growth])
+            .u32()
+    } else {
+        0
+    };
+    pool_add_block(e, this.addr(), growth, block, 0x10);
+}
+
+/// An element added to a pool's set unless it is already there, as `00e7f320` expands it: the
+/// set's elements are searched (an index of -1 counts as not found); when absent the set grows
+/// when full (`00a311e0`) and the element is appended, and the pool is read again from
+/// `0126f71c`. Answers the pool the next search uses.
+fn add_unique(e: &mut Engine, pool: u32, element: u32) -> u32 {
+    let used = e.mem.u32(pool + 8);
+    let elements = e.mem.u32(pool);
+    let mut found = None;
+    for index in 0..used {
+        if e.mem.u32(elements.wrapping_add(4 * index)) == element {
+            found = Some(index);
+            break;
+        }
+    }
+    if let Some(index) = found {
+        if index != 0xffff_ffff {
+            return pool;
+        }
+    }
+    let capacity = e.mem.u32(pool + 4);
+    if used == capacity {
+        let new = if capacity != 0 {
+            capacity.wrapping_add(capacity)
+        } else {
+            1
+        };
+        e.call(SET_REALLOC_00A311E0, &args![pool, new]);
+    }
+    let used = e.mem.u32(pool + 8);
+    let elements = e.mem.u32(pool);
+    e.mem
+        .set_u32(elements.wrapping_add(used.wrapping_mul(4)), element);
+    e.mem.set_u32(pool + 8, used.wrapping_add(1));
+    e.global::<u32>(ENTRY_POOL_0126F71C)
+}
+
+// Translated from 00e7f320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): a render-state block's clean-up, `thiscall`, no
+/// stack words. Every entry of the first list (from +8 back through each entry's +8) and then
+/// of the second (from +0x10) goes back to the entry pool (`0126f71c`, read once and again
+/// after each append) unless it is already in its set, then +8 and +0x10 are cleared (the
+/// counts +4 and +0xc are kept).
+pub fn fn_00e7f320(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut pool = e.global::<u32>(ENTRY_POOL_0126F71C);
+    for last in [8u32, 0x10] {
+        let mut entry = e.mem.u32(base + last);
+        while entry != 0 {
+            let previous = e.mem.u32(entry + 8);
+            pool = add_unique(e, pool, entry);
+            entry = previous;
+        }
+    }
+    e.mem.set_u32(base + 8, 0);
+    e.mem.set_u32(base + 0x10, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -213,6 +392,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_f430, fn_00e7f430(Ptr, u32, u32, u8)),
         entry!(0x00e7_f5d0, fn_00e7f5d0() -> u32),
         entry!(0x00e7_f6b0, fn_00e7f6b0(Ptr)),
+        entry!(0x00e7_f000, fn_00e7f000(Ptr, u32, Ptr) -> u32),
+        entry!(0x00e7_f160, fn_00e7f160(Ptr, u32)),
+        entry!(0x00e7_f210, fn_00e7f210(Ptr, u32)),
+        entry!(0x00e7_f320, fn_00e7f320(Ptr)),
     ]
 }
 
@@ -443,5 +626,153 @@ mod render_state_tests {
         e.call(0x00e7_f6b0, &args![0u32]);
         assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
         assert!(calls(&e, POOL_ADD_UNIQUE_00E7EC00).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b000n_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine whose realloc double moves a set's elements into a new array of the asked
+    /// capacity, the memory manager allocating, the makers answering arrays.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(SET_REALLOC_00A311E0, |e, a| {
+            let used = e.mem.u32(a[0] + 8);
+            let old = e.mem.u32(a[0]);
+            let new = e.mem.alloc(4 * a[1]);
+            for index in 0..used {
+                let element = e.mem.u32(old + 4 * index);
+                e.mem.set_u32(new + 4 * index, element);
+            }
+            e.mem.set_u32(a[0], new);
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(NEW_BLOCKS_00E7F0A0, |e, a| {
+            e.mem.alloc(0x14 * a[0]).into_ret()
+        });
+        e.register(ENTRY_BLOCK_CONSTRUCT_00E7F0F0, |e, a| {
+            let entries = e.mem.alloc(0x10 * a[1]);
+            e.mem.set_u32(a[0], entries);
+            e.mem.set_u32(a[0] + 4, a[1]);
+            e.mem.set_u32(a[0] + 8, 0);
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A pool with an empty set (capacity 0) and an old block in its chain.
+    fn pool(e: &mut Engine) -> u32 {
+        let pool = e.mem.alloc(0x18);
+        e.mem.set_u32(pool + 0xc, 0x0e00_0000);
+        pool
+    }
+
+    #[test]
+    fn fn_00e7f160_adds_the_new_blocks_to_the_pool() {
+        let mut e = engine();
+        let pool = pool(&mut e);
+        e.call(0x00e7_f160, &args![pool, 3u32]);
+        let block = e.mem.u32(pool + 0xc);
+        assert_eq!(e.mem.u32(block + 8), 0x0e00_0000);
+        let blocks = e.mem.u32(block);
+        assert_eq!(e.mem.u32(pool + 8), 3);
+        let elements = e.mem.u32(pool);
+        let held: Vec<u32> = (0..3).map(|i| e.mem.u32(elements + 4 * i)).collect();
+        assert_eq!(held, vec![blocks, blocks + 0x14, blocks + 0x28]);
+        assert_eq!(calls(&e, NEW_BLOCKS_00E7F0A0), vec![vec![3]]);
+        assert_eq!(
+            calls(&e, SET_REALLOC_00A311E0),
+            vec![vec![pool, 1], vec![pool, 2], vec![pool, 4]]
+        );
+    }
+
+    #[test]
+    fn fn_00e7f210_builds_the_entry_block_and_adds_its_entries() {
+        let mut e = engine();
+        let pool = pool(&mut e);
+        e.call(0x00e7_f210, &args![pool, 2u32]);
+        let block = e.mem.u32(pool + 0xc);
+        assert_eq!(e.mem.u32(block + 8), 0x0e00_0000);
+        let entries = e.mem.u32(block);
+        let elements = e.mem.u32(pool);
+        assert_eq!(e.mem.u32(elements), entries);
+        assert_eq!(e.mem.u32(elements + 4), entries + 0x10);
+        assert_eq!(
+            calls(&e, ENTRY_BLOCK_CONSTRUCT_00E7F0F0),
+            vec![vec![block, 2]]
+        );
+        // No growth: only the chain changes.
+        let pool = self::pool(&mut e);
+        e.call(0x00e7_f160, &args![pool, 0u32]);
+        let block = e.mem.u32(pool + 0xc);
+        assert_eq!(e.mem.u32(block), 0);
+        assert_eq!(e.mem.u32(pool + 8), 0);
+    }
+
+    #[test]
+    fn fn_00e7f000_finds_an_entry_in_either_list() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0x14);
+        let first = [e.mem.alloc(0x10), e.mem.alloc(0x10)];
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(first[0], 0x13);
+        e.mem.set_u32(first[1], 0x14);
+        e.mem.set_u32(first[1] + 8, first[0]);
+        e.mem.set_u32(second, 0x15);
+        e.mem.set_u32(block + 8, first[1]);
+        e.mem.set_u32(block + 0x10, second);
+        let byte = e.mem.alloc(4);
+        e.mem.set_u8(byte, 7);
+        assert_eq!(
+            e.call(0x00e7_f000, &args![block, 0x13u32, byte]).u32(),
+            first[0]
+        );
+        assert_eq!(e.mem.u8(byte), 0);
+        assert_eq!(
+            e.call(0x00e7_f000, &args![block, 0x15u32, byte]).u32(),
+            second
+        );
+        assert_eq!(e.mem.u8(byte), 1);
+        e.mem.set_u8(byte, 7);
+        assert_eq!(e.call(0x00e7_f000, &args![block, 0x16u32, byte]).u32(), 0);
+        assert_eq!(e.mem.u8(byte), 7);
+    }
+
+    #[test]
+    fn fn_00e7f320_gives_the_entries_back_once() {
+        let mut e = engine();
+        let pool = self::pool(&mut e);
+        e.set_global(ENTRY_POOL_0126F71C, pool);
+        let block = e.mem.alloc(0x14);
+        let entries: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x10)).collect();
+        // First list: 0 <- 1; second list: 2 <- 0 (the entry 0 again).
+        e.mem.set_u32(entries[1] + 8, entries[0]);
+        e.mem.set_u32(block + 4, 2);
+        e.mem.set_u32(block + 8, entries[1]);
+        e.mem.set_u32(block + 0xc, 1);
+        e.mem.set_u32(block + 0x10, entries[2]);
+        e.mem.set_u32(entries[2] + 8, entries[0]);
+        e.call(0x00e7_f320, &args![block]);
+        let elements = e.mem.u32(pool);
+        assert_eq!(e.mem.u32(pool + 8), 3);
+        let held: Vec<u32> = (0..3).map(|i| e.mem.u32(elements + 4 * i)).collect();
+        assert_eq!(held, vec![entries[1], entries[0], entries[2]]);
+        assert_eq!(e.mem.u32(block + 8), 0);
+        assert_eq!(e.mem.u32(block + 0x10), 0);
+        assert_eq!(e.mem.u32(block + 4), 2);
+        assert_eq!(e.mem.u32(block + 0xc), 1);
     }
 }
