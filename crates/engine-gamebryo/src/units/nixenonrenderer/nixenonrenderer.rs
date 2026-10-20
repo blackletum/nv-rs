@@ -7,6 +7,9 @@ use crate::prelude::*;
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_a9a0, ni_xenon_renderer_get_d3d_format_string(i32) -> u32),
+        entry!(0x00e6_9e50, fn_00e69e50(u32) -> u32),
+        entry!(0x00e6_c550, fn_00e6c550(Ptr) -> u8),
         entry!(0x00e6_9460, ni_xenon_renderer_create_direct3d9(u8) -> i32),
         (0x00e7_2e60, fn_00e72e60_entry as AbiFn),
         entry!(0x00e6_9510, fn_00e69510(u32, Ptr, Ptr) -> u8),
@@ -2255,5 +2258,249 @@ mod b000v_tests {
             calls(&e, IMPORT_INTERLOCKED_DOWN),
             vec![vec![0x7000], vec![pixel_data[0][0] + 4]]
         );
+    }
+}
+
+// ---- Format names, intervals and the clipper data (batch b000w) ----
+
+/// The "unknown" format string (`01015890`).
+const UNKNOWN_FORMAT_01015890: u32 = 0x0101_5890;
+
+// Translated from 00e7a9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiXenonRenderer::GetD3DFormatString` (engine map), `cdecl`, a Direct3D format number: the
+/// address of its `"D3DFMT_..."` name. `MET1` and the four-character codes above it (`DXT1`
+/// to `DXT5`, `UYVY`, `YUY2`, `RGBG`, `GRGB`) by compare; 0x14 to 0x75 through the switch's
+/// byte map at `00e7ac44` and jump table at `00e7ab7c` (read in Ghidra); everything else the
+/// string at `01015890`.
+pub fn ni_xenon_renderer_get_d3d_format_string(_e: &mut Engine, format: i32) -> u32 {
+    if format > 0x3154_454d {
+        return match format as u32 {
+            0x3154_5844 => 0x010e_e908,
+            0x3254_5844 => 0x010e_e914,
+            0x3354_5844 => 0x010e_e8f0,
+            0x3454_5844 => 0x010e_e8e4,
+            0x3554_5844 => 0x010e_e8c4,
+            0x3259_5559 => 0x010e_e8fc,
+            0x4247_5247 => 0x010e_e8d0,
+            0x4742_4752 => 0x010e_e8b0,
+            0x5956_5955 => 0x010e_e8a4,
+            _ => UNKNOWN_FORMAT_01015890,
+        };
+    }
+    if format == 0x3154_454d {
+        return 0x010e_e920;
+    }
+    match format as u32 {
+        0x14 => 0x010e_ec38,
+        0x15 => 0x010e_ec28,
+        0x16 => 0x010e_ec18,
+        0x17 => 0x010e_ec08,
+        0x18 => 0x010e_ebf8,
+        0x19 => 0x010e_ebe8,
+        0x1a => 0x010e_ebd8,
+        0x1b => 0x010e_ebc8,
+        0x1c => 0x010e_ebbc,
+        0x1d => 0x010e_ebac,
+        0x1e => 0x010e_eb9c,
+        0x1f => 0x010e_eb88,
+        0x20 => 0x010e_eb78,
+        0x21 => 0x010e_eb68,
+        0x22 => 0x010e_eb58,
+        0x23 => 0x010e_eb44,
+        0x24 => 0x010e_eb30,
+        0x28 => 0x010e_eb24,
+        0x29 => 0x010e_eb18,
+        0x32 => 0x010e_eb0c,
+        0x33 => 0x010e_eb00,
+        0x34 => 0x010e_eaf4,
+        0x3c => 0x010e_eae8,
+        0x3d => 0x010e_ead8,
+        0x3e => 0x010e_eac8,
+        0x3f => 0x010e_eab8,
+        0x40 => 0x010e_eaa8,
+        0x43 => 0x010e_ea94,
+        0x46 => 0x010e_ea80,
+        0x47 => 0x010e_ea74,
+        0x49 => 0x010e_ea64,
+        0x4b => 0x010e_ea54,
+        0x4d => 0x010e_ea44,
+        0x4f => 0x010e_ea34,
+        0x50 => 0x010e_ea28,
+        0x51 => 0x010e_e9f4,
+        0x52 => 0x010e_ea10,
+        0x53 => 0x010e_ea00,
+        0x64 => 0x010e_e9e0,
+        0x65 => 0x010e_e9d0,
+        0x66 => 0x010e_e9c0,
+        0x6e => 0x010e_e9ac,
+        0x6f => 0x010e_e9a0,
+        0x70 => 0x010e_e990,
+        0x71 => 0x010e_e978,
+        0x72 => 0x010e_e96c,
+        0x73 => 0x010e_e95c,
+        0x74 => 0x010e_e944,
+        0x75 => 0x010e_e934,
+        _ => UNKNOWN_FORMAT_01015890,
+    }
+}
+
+// Translated from 00e69e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nixenonrenderer.cpp`), `cdecl`, an interval number: the
+/// presentation interval flag (the jump table at `00e69e84`, read in Ghidra): 0 gives
+/// 0x80000000 (immediate), 1 to 4 give 1, 2, 4 and 8; anything else 0.
+pub fn fn_00e69e50(_e: &mut Engine, interval: u32) -> u32 {
+    match interval {
+        0 => 0x8000_0000,
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        _ => 0,
+    }
+}
+
+/// The pixel data constructor `00a7c190` (unnamed; `thiscall`: width, height, pixel format,
+/// mipmap levels, faces) and the pixel format's set-up `00a622d0` (unnamed; `cdecl`).
+const PIXEL_DATA_00A7C190: u32 = 0x00a7_c190;
+const PIXEL_FORMAT_SET_UP_00A622D0: u32 = 0x00a6_22d0;
+
+// Translated from 00e6c550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nixenonrenderer.cpp`), `thiscall`, no stack words; answers a
+/// byte. For each of the four sampler blocks (0x16 words each from +0x700): the first
+/// non-null pixel format among its entries 1, 0, 2, 4, 3, 5 is kept at +0x860 + 4 * block;
+/// with one, a 4 by 4 pixel data (0x74 bytes, `00a7c190`) is held at +0x870 + 4 * block
+/// (`NiPointer` assignment) and its pixels filled with 0xff (`memset` of its size, +0x64, times
+/// 16). Then without a pixel format at +0x860 it answers 0; otherwise `00a622d0` runs on it,
+/// +0x880 gets its +0x10 and it answers 1.
+pub fn fn_00e6c550(e: &mut Engine, this: Ptr) -> u8 {
+    let base = this.addr();
+    for block in 0..4u32 {
+        let first = 0x16 * block;
+        let holder = base + 0x870 + 4 * block;
+        let format_at = holder - 0x10;
+        e.mem.set_u32(format_at, 0);
+        for entry in [1u32, 0, 2, 4, 3, 5] {
+            let at = base + 0x700 + 4 * (entry + first);
+            if e.mem.u32(at) != 0 {
+                let format = e.mem.u32(at);
+                e.mem.set_u32(format_at, format);
+                break;
+            }
+        }
+        let format = e.mem.u32(format_at);
+        if format == 0 {
+            continue;
+        }
+        let allocated = e.call(NEW_OBJECT, &args![0x74u32]).u32();
+        let pixels = if allocated != 0 {
+            e.call(
+                PIXEL_DATA_00A7C190,
+                &args![allocated, 4u32, 4u32, format, 1u32, 1u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        let held = e.mem.u32(holder);
+        if held != pixels {
+            if held != 0 {
+                release_object(e, held);
+            }
+            e.mem.set_u32(holder, pixels);
+            if pixels != 0 {
+                e.call(IMPORT_INTERLOCKED_UP, &args![pixels + 4]);
+            }
+        }
+        let data = e.mem.u32(holder);
+        let size = e.mem.u32(data.wrapping_add(0x64)) << 4;
+        let table = e.mem.u32(data.wrapping_add(0x5c));
+        let start = e
+            .mem
+            .u32(table)
+            .wrapping_add(e.mem.u32(data.wrapping_add(0x50)));
+        e.call(MEMSET_ADDR, &args![start, 0xffu32, size]);
+    }
+    let format = e.mem.u32(base + 0x860);
+    if format == 0 {
+        return 0;
+    }
+    e.call(PIXEL_FORMAT_SET_UP_00A622D0, &args![format]);
+    let format = e.mem.u32(base + 0x860);
+    let value = e.mem.u32(format.wrapping_add(0x10));
+    e.mem.set_u32(base + 0x880, value);
+    1
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    #[test]
+    fn get_d3d_format_string_names_formats() {
+        let mut e = Engine::new();
+        let mut name = |format: u32| e.call(0x00e7_a9a0, &args![format]).u32();
+        assert_eq!(name(0x14), 0x010e_ec38);
+        assert_eq!(name(0x16), 0x010e_ec18);
+        assert_eq!(name(0x4b), 0x010e_ea54);
+        assert_eq!(name(0x75), 0x010e_e934);
+        assert_eq!(name(0x25), UNKNOWN_FORMAT_01015890);
+        assert_eq!(name(0x76), UNKNOWN_FORMAT_01015890);
+        assert_eq!(name(0x13), UNKNOWN_FORMAT_01015890);
+        assert_eq!(name(0x3154_454d), 0x010e_e920);
+        assert_eq!(name(0x3154_5844), 0x010e_e908);
+        assert_eq!(name(0x5956_5955), 0x010e_e8a4);
+        assert_eq!(name(0x5956_5956), UNKNOWN_FORMAT_01015890);
+    }
+
+    #[test]
+    fn fn_00e69e50_maps_intervals() {
+        let mut e = Engine::new();
+        let values: Vec<u32> = (0..6)
+            .map(|i| e.call(0x00e6_9e50, &args![i as u32]).u32())
+            .collect();
+        assert_eq!(values, vec![0x8000_0000, 1, 2, 4, 8, 0]);
+    }
+
+    #[test]
+    fn fn_00e6c550_fills_the_clipper_pixels() {
+        let mut e = Engine::new();
+        e.register(0x00fd_f1c0, |_, _| Ret::default());
+        e.register(NEW_OBJECT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MEMSET_ADDR, |_, _| Ret::default());
+        e.register(PIXEL_FORMAT_SET_UP_00A622D0, |_, _| Ret::default());
+        e.register(PIXEL_DATA_00A7C190, |e, a| {
+            let table = e.mem.alloc(4);
+            e.mem.set_u32(table, 0x9000);
+            e.mem.set_u32(a[0] + 0x5c, table);
+            e.mem.set_u32(a[0] + 0x50, 0x10);
+            e.mem.set_u32(a[0] + 0x64, 3);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0xb80);
+        let format = e.mem.alloc(0x20);
+        e.mem.set_u32(format + 0x10, 0x55);
+        // Block 0: entries 1 empty, 0 set; block 2: entry 5 set; blocks 1 and 3 empty.
+        e.mem.set_u32(this + 0x700, format);
+        e.mem.set_u32(this + 0x700 + 4 * (0x2c + 5), 0x777);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e6_c550, &args![this]).u8(), 1);
+        assert_eq!(e.mem.u32(this + 0x860), format);
+        assert_eq!(e.mem.u32(this + 0x864), 0);
+        assert_eq!(e.mem.u32(this + 0x868), 0x777);
+        assert_ne!(e.mem.u32(this + 0x870), 0);
+        assert_eq!(e.mem.u32(this + 0x874), 0);
+        assert_eq!(e.mem.u32(this + 0x880), 0x55);
+        let fills: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == MEMSET_ADDR)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(fills, vec![vec![0x9010, 0xff, 0x30]; 2]);
+        // No pixel format in block 0: 0.
+        let empty = e.mem.alloc(0xb80);
+        assert_eq!(e.call(0x00e6_c550, &args![empty]).u8(), 0);
     }
 }

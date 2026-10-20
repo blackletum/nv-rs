@@ -44,9 +44,36 @@ pub fn fn_00e8bae0(e: &mut Engine, this: Ptr, library: u32, device: u32) -> Ptr 
     this
 }
 
+// Translated from 00e8b170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e89ed0`): the light manager's reset, `thiscall`, no
+/// stack words. Calls the render state's (+0x20) virtual slot 0x68 with (0x8b, 0, 0, 0) and
+/// (0x89, 0, 0, 0), clears +0x30, the byte +0x2d and +0x34, the same slot with 0x94, 0x93 and
+/// 0x91, then clears the byte +0x2c and copies +0x24 to +0x28.
+pub fn fn_00e8b170(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let set_state = |e: &mut Engine, state: u32| {
+        let render_state = e.mem.u32(base + 0x20);
+        e.vcall(render_state, 0x68, &args![state, 0u32, 0u32, 0u32]);
+    };
+    set_state(e, 0x8b);
+    set_state(e, 0x89);
+    e.mem.set_u32(base + 0x30, 0);
+    e.mem.set_u8(base + 0x2d, 0);
+    e.mem.set_u32(base + 0x34, 0);
+    set_state(e, 0x94);
+    set_state(e, 0x93);
+    set_state(e, 0x91);
+    e.mem.set_u8(base + 0x2c, 0);
+    let value = e.mem.u32(base + 0x24);
+    e.mem.set_u32(base + 0x28, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e8_bae0, fn_00e8bae0(Ptr, u32, u32) -> Ptr)]
+    vec![
+        entry!(0x00e8_bae0, fn_00e8bae0(Ptr, u32, u32) -> Ptr),
+        entry!(0x00e8_b170, fn_00e8b170(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -78,5 +105,39 @@ mod b000v_tests {
         assert!(log.contains(&(0x6100, vec![device])));
         assert!(log.contains(&(MEMSET, vec![this + 0x3c, 0, 0x200])));
         assert_eq!(log.last().unwrap(), &(FINISH_00E8B170, vec![this]));
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e8b170_resets_the_light_states() {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x20).map(|i| 0x6100 + 4 * i).collect();
+        e.put_vtable(0x6000, &slots);
+        e.register(0x6168, |_, _| Ret::default());
+        let state = e.mem.alloc(4);
+        e.mem.set_u32(state, 0x6000);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x20, state);
+        e.mem.set_u32(this + 0x24, 0x99);
+        e.mem.set_u32(this + 0x2c, 0xffff_ffff);
+        e.mem.set_u32(this + 0x30, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_b170, &args![this]);
+        let states: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == 0x6168)
+            .map(|(_, w)| w[1])
+            .collect();
+        assert_eq!(states, vec![0x8b, 0x89, 0x94, 0x93, 0x91]);
+        assert_eq!(e.mem.u32(this + 0x2c), 0xffff_0000);
+        assert_eq!(e.mem.u32(this + 0x28), 0x99);
+        assert_eq!(e.mem.u32(this + 0x30), 0);
     }
 }

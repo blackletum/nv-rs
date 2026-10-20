@@ -190,9 +190,99 @@ pub fn fn_00e91590(e: &mut Engine, renderer: u32, caps: u32, flag: u8) -> u32 {
     state
 }
 
+/// What the error shader's set-up calls: the pass maker `00e804d0` and the render state
+/// group maker `00e7edf0` (unnamed; `cdecl`, the address of the word they fill), the state
+/// setters `00e88fc0` (three words) and `00e890c0` (four words) (unnamed; `thiscall` on the
+/// group's +0x10), the pass attachment `00e802b0` (unnamed; `thiscall` on the pass: its +0x14
+/// and the group), the pass releases `00e7ecd0` and `00e80190` (unnamed; `thiscall`) and the
+/// global the pass is kept in (`0126f74c`).
+const MAKE_PASS_00E804D0: u32 = 0x00e8_04d0;
+const MAKE_GROUP_00E7EDF0: u32 = 0x00e7_edf0;
+const SET_STATE_00E88FC0: u32 = 0x00e8_8fc0;
+const SET_SAMPLER_STATE_00E890C0: u32 = 0x00e8_90c0;
+const ATTACH_00E802B0: u32 = 0x00e8_02b0;
+const RELEASE_GROUP_00E7ECD0: u32 = 0x00e7_ecd0;
+const RELEASE_PASS_00E80190: u32 = 0x00e8_0190;
+const ERROR_PASS_0126F74C: u32 = 0x0126_f74c;
+
+// Translated from 00e90850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e8f190`): the error shader's set-up, `thiscall`, no
+/// stack words; answers 1. Makes a pass (`00e804d0`, kept at +0x3c) and a state group
+/// (`00e7edf0`; +4 and +8 cleared), sets its states (`00e88fc0` with (1, 2, 0), (2, 3, 0), (4,
+/// 2, 0), (5, 3, 0), (0xb, 0, 0); `00e890c0` with (1, 3, 0, 0), (2, 3, 0, 0), (5, 2, 0, 0), (6,
+/// 2, 0, 0), (7, 0, 0, 0); the byte +0x5e cleared; `00e88fc0` with (0x18, 0, 0)), attaches the
+/// group to the pass (`00e802b0` with the pass's +0x14), keeps the pass at `0126f74c`, then
+/// drops the local references: the group's count (+0x60) and the pass's count (+0x64) down,
+/// each released (`00e7ecd0`, `00e80190`) at zero.
+pub fn fn_00e90850(e: &mut Engine, this: Ptr) -> u8 {
+    let base = this.addr();
+    e.with_stack(8, |e, locals| {
+        let pass_slot = locals.addr();
+        let group_slot = locals.addr() + 4;
+        e.mem.set_u32(pass_slot, 0);
+        e.call(MAKE_PASS_00E804D0, &args![pass_slot]);
+        let pass = e.mem.u32(pass_slot);
+        e.mem.set_u32(base + 0x3c, pass);
+        e.mem.set_u32(group_slot, 0);
+        e.call(MAKE_GROUP_00E7EDF0, &args![group_slot]);
+        let group = e.mem.u32(group_slot);
+        e.mem.set_u32(group + 4, 0);
+        e.mem.set_u32(group + 8, 0);
+        let states = |e: &mut Engine, words: [u32; 3]| {
+            let target = e.mem.u32(group + 0x10);
+            e.call(
+                SET_STATE_00E88FC0,
+                &args![target, words[0], words[1], words[2]],
+            );
+        };
+        let samplers = |e: &mut Engine, words: [u32; 4]| {
+            let target = e.mem.u32(group + 0x10);
+            e.call(
+                SET_SAMPLER_STATE_00E890C0,
+                &args![target, words[0], words[1], words[2], words[3]],
+            );
+        };
+        states(e, [1, 2, 0]);
+        states(e, [2, 3, 0]);
+        states(e, [4, 2, 0]);
+        states(e, [5, 3, 0]);
+        states(e, [0xb, 0, 0]);
+        samplers(e, [1, 3, 0, 0]);
+        samplers(e, [2, 3, 0, 0]);
+        samplers(e, [5, 2, 0, 0]);
+        samplers(e, [6, 2, 0, 0]);
+        samplers(e, [7, 0, 0, 0]);
+        e.mem.set_u8(group + 0x5e, 0);
+        states(e, [0x18, 0, 0]);
+        let pass = e.mem.u32(pass_slot);
+        let stage = e.mem.u32(pass.wrapping_add(0x14));
+        e.call(ATTACH_00E802B0, &args![pass, stage, group]);
+        let group = e.mem.u32(group_slot);
+        let pass = e.mem.u32(pass_slot);
+        e.mem.set_u32(ERROR_PASS_0126F74C, pass);
+        if group != 0 {
+            let count = e.mem.u32(group + 0x60).wrapping_sub(1);
+            e.mem.set_u32(group + 0x60, count);
+            if count == 0 {
+                e.call(RELEASE_GROUP_00E7ECD0, &args![group]);
+            }
+        }
+        let pass = e.mem.u32(pass_slot);
+        if pass != 0 {
+            let count = e.mem.u32(pass + 0x64).wrapping_sub(1);
+            e.mem.set_u32(pass + 0x64, count);
+            if count == 0 {
+                e.call(RELEASE_PASS_00E80190, &args![pass]);
+            }
+        }
+    });
+    1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_0850, fn_00e90850(Ptr) -> u8),
         entry!(0x00e8_fb20, fn_00e8fb20(Ptr, u32) -> Ptr),
         entry!(0x00e9_0a80, fn_00e90a80(Ptr, u32) -> Ptr),
         entry!(0x00e9_09e0, fn_00e909e0(Ptr) -> Ptr),
@@ -341,5 +431,64 @@ mod b000v_tests {
         // Without the byte, state 7 becomes 0.
         e.call(0x00e9_1590, &args![0x4000u32, 0x5000u32, 0u32]);
         assert_eq!(e.mem.u32(STATE_PAIRS_011BFCE8 + 0xc), 0);
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e90850_sets_up_the_error_pass() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x14, 0x1414);
+        e.mem.set_u32(pass + 0x64, 2);
+        let group = e.mem.alloc(0x70);
+        e.mem.set_u32(group + 0x10, 0x1010);
+        e.mem.set_u32(group + 0x60, 1);
+        e.register_double(MAKE_PASS_00E804D0, move |e, a| {
+            e.mem.set_u32(a[0], pass);
+            Ret::default()
+        });
+        e.register_double(MAKE_GROUP_00E7EDF0, move |e, a| {
+            e.mem.set_u32(a[0], group);
+            Ret::default()
+        });
+        for no_op in [
+            SET_STATE_00E88FC0,
+            SET_SAMPLER_STATE_00E890C0,
+            ATTACH_00E802B0,
+            RELEASE_GROUP_00E7ECD0,
+            RELEASE_PASS_00E80190,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00e9_0850, &args![this]).u8(), 1);
+        assert_eq!(e.mem.u32(this + 0x3c), pass);
+        assert_eq!(e.mem.u32(ERROR_PASS_0126F74C), pass);
+        let states = calls(&e, SET_STATE_00E88FC0);
+        assert_eq!(states.len(), 6);
+        assert_eq!(states[0], vec![0x1010, 1, 2, 0]);
+        assert_eq!(states[5], vec![0x1010, 0x18, 0, 0]);
+        assert_eq!(calls(&e, SET_SAMPLER_STATE_00E890C0).len(), 5);
+        assert_eq!(calls(&e, ATTACH_00E802B0), vec![vec![pass, 0x1414, group]]);
+        // The group's count reaches zero, the pass's does not.
+        assert_eq!(calls(&e, RELEASE_GROUP_00E7ECD0), vec![vec![group]]);
+        assert!(calls(&e, RELEASE_PASS_00E80190).is_empty());
+        assert_eq!(e.mem.u32(pass + 0x64), 1);
     }
 }
