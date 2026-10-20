@@ -809,8 +809,8 @@ const MT_DELETE_LOCKS: u32 = 0x00ed_de08;
 /// the locks `__mtinitlocks` sets up from the static block at `012705c0`.
 const LOCK_TABLE: u32 = 0x011c_28a8;
 const STATIC_LOCKS: u32 = 0x0127_05c0;
-/// `__mtinitlocknum`'s "start-up done" word (0: too early, the program
-/// ends).
+/// `_crtheap`, the CRT heap's handle (0 before the heap's start-up: too
+/// early, `__mtinitlocknum` and `_malloc` end the program).
 const LOCKS_READY: u32 = 0x0127_05bc;
 /// `_FF_MSGBANNER` (`00ed2ab7`, no arguments) and `_NMSG_WRITE`
 /// (`00ed290c`, cdecl: message number).
@@ -1541,6 +1541,630 @@ fn string_type_ansi(
         }
         result
     })
+}
+
+// ---- Locks' end, run-time messages, locale references, heap (LIBCMT) ----
+
+/// `DeleteCriticalSection` (import slot).
+const IMPORT_DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+/// `GetModuleFileNameA`, `GetStdHandle`, `WriteFile` (import slots).
+const IMPORT_GET_MODULE_FILE_NAME_A: u32 = 0x00fd_f150;
+const IMPORT_GET_STD_HANDLE: u32 = 0x00fd_f1e0;
+const IMPORT_WRITE_FILE: u32 = 0x00fd_f0dc;
+/// `GetLocaleInfoA`, `GetCPInfo`, `WideCharToMultiByte`, `HeapAlloc`
+/// (import slots).
+const IMPORT_GET_LOCALE_INFO_A: u32 = 0x00fd_f268;
+const IMPORT_GET_CP_INFO: u32 = 0x00fd_f1d8;
+const IMPORT_WIDE_CHAR_TO_MULTI_BYTE: u32 = 0x00fd_f170;
+const IMPORT_HEAP_ALLOC: u32 = 0x00fd_f1a0;
+/// The end of the lock table (0x24 entries of 8 bytes).
+const LOCK_TABLE_END: u32 = 0x011c_29c8;
+/// `__set_error_mode` (`00ee1dac`, cdecl: mode; 3 asks for the current one).
+const SET_ERROR_MODE: u32 = 0x00ee_1dac;
+/// `__app_type` (1: a console program).
+const APP_TYPE: u32 = 0x011c_19b0;
+/// The run-time message table: 0x17 entries of (number, text).
+const RUNTIME_MESSAGES: u32 = 0x011c_1d30;
+/// The 0x314-byte message buffer and the program name inside it.
+const MESSAGE_BUFFER: u32 = 0x0127_0148;
+const MESSAGE_PROGRAM_NAME: u32 = 0x0127_0161;
+const MESSAGE_PROGRAM_NAME_END: u32 = 0x0127_0265;
+const MESSAGE_BUFFER_END: u32 = 0x0127_045c;
+/// The strings the message is built from: `Runtime Error!\n\nProgram: `,
+/// `<program name unknown>`, `...`, `\n\n` and the box caption
+/// `Microsoft Visual C++ Runtime Library`.
+const MESSAGE_HEADER: u32 = 0x010f_3070;
+const MESSAGE_UNKNOWN_PROGRAM: u32 = 0x010f_3058;
+const MESSAGE_ELLIPSIS: u32 = 0x0107_2308;
+const MESSAGE_BREAK: u32 = 0x0109_5188;
+const MESSAGE_CAPTION: u32 = 0x010f_3030;
+/// `strcpy_s`, `strcat_s`, `strncpy_s`, `strlen` (this file's stand-ins,
+/// called by address as the code does).
+const STRCPY_S_ADDR: u32 = 0x00ec_65a6;
+const STRCAT_S_ADDR: u32 = 0x00ec_6bd2;
+const STRNCPY_S_ADDR: u32 = 0x00ec_8d5f;
+const STRLEN_ADDR: u32 = 0x00ec_6130;
+/// `__invoke_watson` (`00ec7b08`; it does not return).
+const INVOKE_WATSON_ADDR: u32 = 0x00ec_7b08;
+/// `__crtMessageBoxA` (`00ee1c43`, cdecl: text, caption, type).
+const CRT_MESSAGE_BOX_A: u32 = 0x00ee_1c43;
+/// `doexit` (`00eccd99`, cdecl: code, quick, return to caller).
+const DOEXIT_ADDR: u32 = 0x00ec_cd99;
+/// The C locale's static category names, never released.
+const C_LOCALE_NAMES: u32 = 0x011c_2318;
+/// The C locale's static `lconv` and its pieces, never freed.
+const C_LCONV: u32 = 0x011c_19d4;
+const C_LC_TIME: u32 = 0x011c_2a98;
+/// The `lconv` and `lc_time` frees (`00ee06e6`, `00ee04d7`, `00ee02c9`;
+/// cdecl, one word).
+const FREE_LCONV_MONETARY: u32 = 0x00ee_06e6;
+const FREE_LCONV_NUMERIC: u32 = 0x00ee_04d7;
+const FREE_LC_TIME: u32 = 0x00ee_02c9;
+/// `__active_heap` (1 the system heap, 3 the small-block heap) and
+/// `_newmode`.
+const ACTIVE_HEAP: u32 = 0x0127_0948;
+const NEW_MODE: u32 = 0x0127_0730;
+/// `__sbh_alloc_block`-style small-block allocation (`00ecd178`, cdecl:
+/// size) and `_callnewh` (`00ede20b`, cdecl: size).
+const SMALL_BLOCK_ALLOC: u32 = 0x00ec_d178;
+const CALL_NEW_HANDLER: u32 = 0x00ed_e20b;
+
+// Translated from 00edde08 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mtdeletelocks` (engine map; cdecl): deletes and frees every lock
+/// section that is set and not of kind 1 (clearing its entry), then deletes
+/// the kind-1 (static) sections.
+pub fn mtdeletelocks(e: &mut Engine) {
+    let mut entry = LOCK_TABLE;
+    while entry < LOCK_TABLE_END {
+        let section = e.mem.u32(entry);
+        if section != 0 && e.mem.u32(entry + 4) != 1 {
+            e.call(IMPORT_DELETE_CRITICAL_SECTION, &[section]);
+            free(e, Ptr::new(section));
+            e.mem.set_u32(entry, 0);
+        }
+        entry += 8;
+    }
+    let mut entry = LOCK_TABLE;
+    while entry < LOCK_TABLE_END {
+        let section = e.mem.u32(entry);
+        if section != 0 && e.mem.u32(entry + 4) == 1 {
+            e.call(IMPORT_DELETE_CRITICAL_SECTION, &[section]);
+        }
+        entry += 8;
+    }
+}
+
+// Translated from 00ed2ab7 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_FF_MSGBANNER` (LIBCMT/crt0msg.c; no arguments): for a console program
+/// (error mode 1, or the default mode with `__app_type` 1) writes the
+/// messages 0xFC (a new line) and 0xFF (the banner).
+pub fn ff_msgbanner(e: &mut Engine) {
+    let console = e.call(SET_ERROR_MODE, &[3]).u32() == 1
+        || (e.call(SET_ERROR_MODE, &[3]).u32() == 0 && e.mem.u32(APP_TYPE) == 1);
+    if console {
+        nmsg_write(e, 0xfc);
+        nmsg_write(e, 0xff);
+    }
+}
+
+/// `__invoke_watson(0, 0, 0, 0, 0)` after a failed string call (it does
+/// not return).
+fn watson_unless_zero(e: &mut Engine, result: u32) {
+    if result != 0 {
+        e.call(INVOKE_WATSON_ADDR, &[0, 0, 0, 0, 0]);
+    }
+}
+
+// Translated from 00ed290c (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_NMSG_WRITE` (LIBCMT/crt0msg.c; cdecl: message number): for a number in
+/// the run-time message table, a console program writes the text to the
+/// standard error handle (`WriteFile`); otherwise (except for 0xFC) builds
+/// `Runtime Error!\n\nProgram: <name, cut to "...">\n\n<text>` in the
+/// message buffer and shows it with `__crtMessageBoxA` (type 0x12010).
+pub fn nmsg_write(e: &mut Engine, number: u32) {
+    let mut index = 0u32;
+    while index < 0x17 {
+        if number == e.mem.u32(RUNTIME_MESSAGES + index * 8) {
+            break;
+        }
+        index += 1;
+    }
+    if index >= 0x17 {
+        return;
+    }
+    let console = e.call(SET_ERROR_MODE, &[3]).u32() == 1
+        || (e.call(SET_ERROR_MODE, &[3]).u32() == 0 && e.mem.u32(APP_TYPE) == 1);
+    if console {
+        let handle = e.call(IMPORT_GET_STD_HANDLE, &[(-12i32) as u32]).u32();
+        if handle != 0 && handle != u32::MAX {
+            let text = e.mem.u32(RUNTIME_MESSAGES + index * 8 + 4);
+            e.with_stack(4, |e, written| {
+                let length = e.call(STRLEN_ADDR, &[text]).u32();
+                e.call(
+                    IMPORT_WRITE_FILE,
+                    &[handle, text, length, written.addr(), 0],
+                );
+            });
+        }
+        return;
+    }
+    if number == 0xfc {
+        return;
+    }
+    let r = e
+        .call(STRCPY_S_ADDR, &[MESSAGE_BUFFER, 0x314, MESSAGE_HEADER])
+        .u32();
+    watson_unless_zero(e, r);
+    e.mem.set_u8(MESSAGE_PROGRAM_NAME_END, 0);
+    let named = e
+        .call(
+            IMPORT_GET_MODULE_FILE_NAME_A,
+            &[0, MESSAGE_PROGRAM_NAME, 0x104],
+        )
+        .u32();
+    if named == 0 {
+        let r = e
+            .call(
+                STRCPY_S_ADDR,
+                &[MESSAGE_PROGRAM_NAME, 0x2fb, MESSAGE_UNKNOWN_PROGRAM],
+            )
+            .u32();
+        watson_unless_zero(e, r);
+    }
+    let length = e.call(STRLEN_ADDR, &[MESSAGE_PROGRAM_NAME]).u32();
+    if length.wrapping_add(1) > 0x3c {
+        let length = e.call(STRLEN_ADDR, &[MESSAGE_PROGRAM_NAME]).u32();
+        let start = length.wrapping_add(MESSAGE_PROGRAM_NAME - 0x3b);
+        let r = e
+            .call(
+                STRNCPY_S_ADDR,
+                &[
+                    start,
+                    MESSAGE_BUFFER_END.wrapping_sub(start),
+                    MESSAGE_ELLIPSIS,
+                    3,
+                ],
+            )
+            .u32();
+        watson_unless_zero(e, r);
+    }
+    let r = e
+        .call(STRCAT_S_ADDR, &[MESSAGE_BUFFER, 0x314, MESSAGE_BREAK])
+        .u32();
+    watson_unless_zero(e, r);
+    let text = e.mem.u32(RUNTIME_MESSAGES + index * 8 + 4);
+    let r = e.call(STRCAT_S_ADDR, &[MESSAGE_BUFFER, 0x314, text]).u32();
+    watson_unless_zero(e, r);
+    e.call(
+        CRT_MESSAGE_BOX_A,
+        &[MESSAGE_BUFFER, MESSAGE_CAPTION, 0x12010],
+    );
+}
+
+// Translated from 00eccedb (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__exit` (engine map; cdecl: exit code): `doexit(code, 1, 0)`, the quick
+/// exit `_amsg_exit` reaches through its encoded pointer.
+pub fn exit_quick(e: &mut Engine, code: u32) {
+    e.call(DOEXIT_ADDR, &[code, 1, 0]);
+}
+
+/// Applies `step` (`InterlockedIncrement` or `InterlockedDecrement`) to every
+/// count of the locale info `info`, in the order the CRT walks them: the
+/// info, its `lconv` counts (+0xB0, +0xB8, +0xB4, +0xC0), the six
+/// categories' name and wide-name counts that are not the C locale's, and
+/// the `lc_time` count (+0xD4's +0xB4).
+fn locale_counts(e: &mut Engine, info: u32, step: u32) {
+    e.call(step, &[info]);
+    for offset in [0xb0, 0xb8, 0xb4, 0xc0] {
+        let count = e.mem.u32(info + offset);
+        if count != 0 {
+            e.call(step, &[count]);
+        }
+    }
+    let mut category = info + 0x50;
+    for _ in 0..6 {
+        if e.mem.u32(category - 8) != C_LOCALE_NAMES {
+            let count = e.mem.u32(category);
+            if count != 0 {
+                e.call(step, &[count]);
+            }
+        }
+        if e.mem.u32(category - 4) != 0 {
+            let count = e.mem.u32(category + 4);
+            if count != 0 {
+                e.call(step, &[count]);
+            }
+        }
+        category += 0x10;
+    }
+    let time = e.mem.u32(info + 0xd4);
+    e.call(step, &[time.wrapping_add(0xb4)]);
+}
+
+// Translated from 00ecf5b6 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___addlocaleref` (engine map; cdecl: locale info): raises every
+/// reference count of the info (`InterlockedIncrement`).
+pub fn addlocaleref(e: &mut Engine, info: u32) {
+    locale_counts(e, info, IMPORT_INTERLOCKED_INCREMENT);
+}
+
+// Translated from 00ecf645 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___removelocaleref` (engine map; cdecl: locale info): lowers every
+/// reference count of a non-null info (`InterlockedDecrement`). Returns
+/// the info.
+pub fn removelocaleref(e: &mut Engine, info: u32) -> u32 {
+    if info != 0 {
+        locale_counts(e, info, IMPORT_INTERLOCKED_DECREMENT);
+    }
+    info
+}
+
+// Translated from 00ecf46d (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___freetlocinfo` (engine map; cdecl: locale info): frees what has no
+/// reference left: the `lconv` (+0xBC, unless it is the C locale's) with
+/// its monetary (+0xB8) and numeric (+0xB4) parts, the ctype tables (+0xC0
+/// count; the blocks before +0xC4, +0xCC, +0xD0), the `lc_time` (+0xD4,
+/// unless the C locale's), the categories' names (not the C locale's), and
+/// the info itself.
+pub fn freetlocinfo(e: &mut Engine, info: u32) {
+    let lconv = e.mem.u32(info + 0xbc);
+    if lconv != 0 && lconv != C_LCONV {
+        let count = e.mem.u32(info + 0xb0);
+        if count != 0 && e.mem.u32(count) == 0 {
+            let monetary = e.mem.u32(info + 0xb8);
+            if monetary != 0 && e.mem.u32(monetary) == 0 {
+                free(e, Ptr::new(monetary));
+                let lconv = e.mem.u32(info + 0xbc);
+                e.call(FREE_LCONV_MONETARY, &[lconv]);
+            }
+            let numeric = e.mem.u32(info + 0xb4);
+            if numeric != 0 && e.mem.u32(numeric) == 0 {
+                free(e, Ptr::new(numeric));
+                let lconv = e.mem.u32(info + 0xbc);
+                e.call(FREE_LCONV_NUMERIC, &[lconv]);
+            }
+            let count = e.mem.u32(info + 0xb0);
+            free(e, Ptr::new(count));
+            let lconv = e.mem.u32(info + 0xbc);
+            free(e, Ptr::new(lconv));
+        }
+    }
+    let ctype = e.mem.u32(info + 0xc0);
+    if ctype != 0 && e.mem.u32(ctype) == 0 {
+        let table = e.mem.u32(info + 0xc4).wrapping_sub(0xfe);
+        free(e, Ptr::new(table));
+        let lower = e.mem.u32(info + 0xcc).wrapping_sub(0x80);
+        free(e, Ptr::new(lower));
+        let upper = e.mem.u32(info + 0xd0).wrapping_sub(0x80);
+        free(e, Ptr::new(upper));
+        let ctype = e.mem.u32(info + 0xc0);
+        free(e, Ptr::new(ctype));
+    }
+    let time = e.mem.u32(info + 0xd4);
+    if time != C_LC_TIME && e.mem.u32(time + 0xb4) == 0 {
+        e.call(FREE_LC_TIME, &[time]);
+        let time = e.mem.u32(info + 0xd4);
+        free(e, Ptr::new(time));
+    }
+    let mut category = info + 0x50;
+    for _ in 0..6 {
+        if e.mem.u32(category - 8) != C_LOCALE_NAMES {
+            let name = e.mem.u32(category);
+            if name != 0 && e.mem.u32(name) == 0 {
+                free(e, Ptr::new(name));
+            }
+        }
+        if e.mem.u32(category - 4) != 0 {
+            let wide = e.mem.u32(category + 4);
+            if wide != 0 && e.mem.u32(wide) == 0 {
+                free(e, Ptr::new(wide));
+            }
+        }
+        category += 0x10;
+    }
+    free(e, Ptr::new(info));
+}
+
+// Translated from 00ee13e5 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___ansicp` (engine map; cdecl: locale id): the locale's ANSI code page
+/// (`GetLocaleInfoA(lcid, LOCALE_IDEFAULTANSICODEPAGE, buffer, 6)`, read
+/// with `atol`), -1 when it is not known.
+// Translation incomplete: 00ee13e5 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn ansicp(e: &mut Engine, lcid: u32) -> u32 {
+    e.with_stack(8, |e, buffer| {
+        let buffer = buffer.addr();
+        e.mem.set_u8(buffer + 6, 0);
+        if e.call(IMPORT_GET_LOCALE_INFO_A, &[lcid, 0x1004, buffer, 6])
+            .u32()
+            == 0
+        {
+            u32::MAX
+        } else {
+            atol_body(e, Ptr::new(buffer)) as u32
+        }
+    })
+}
+
+// Translated from 00ee142e (decompiled, FalloutNV.exe 1.4.0.525)
+/// `___convertcp` (engine map; cdecl: from code page, to code page, text,
+/// length by address, output, output size): converts the text through
+/// wide characters (`MultiByteToWideChar` / `WideCharToMultiByte`; a length
+/// of -1 means up to the terminator). The wide buffer is on the stack up to
+/// 0x400 bytes (marked 0xCCCC), else `_malloc`'d (0xDDDD), released with
+/// `__freea`. With an output buffer the result is that buffer; without one
+/// a new block (`_calloc_crt`) sized by the conversion, or by the wide
+/// count for two single-byte code pages, whose length is stored back
+/// (unless it was -1). Returns 0 for the same code page or any failure.
+// Translation incomplete: 00ee142e - the /GS stack cookie check (00ec408c) is not translated.
+pub fn convertcp(
+    e: &mut Engine,
+    from: u32,
+    to: u32,
+    text: u32,
+    length_slot: u32,
+    output: u32,
+    output_size: u32,
+) -> u32 {
+    let length = e.mem.u32(length_slot);
+    if from == to {
+        return 0;
+    }
+    // CPINFO at EBP-0x18 (MaxCharSize first).
+    let single_byte = e.with_stack(0x14, |e, info| {
+        let info = info.addr();
+        e.call(IMPORT_GET_CP_INFO, &[from, info]).u32() != 0
+            && e.mem.u32(info) == 1
+            && e.call(IMPORT_GET_CP_INFO, &[to, info]).u32() != 0
+            && e.mem.u32(info) == 1
+    });
+    let count = if single_byte {
+        if length == u32::MAX {
+            e.call(STRLEN_ADDR, &[text]).u32().wrapping_add(1)
+        } else {
+            length
+        }
+    } else {
+        let count = e
+            .call(
+                IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
+                &[from, 1, text, length, 0, 0],
+            )
+            .u32();
+        if count == 0 {
+            return 0;
+        }
+        count
+    };
+    let fits = (count as i32) > 0 && count <= 0x7fff_fff0;
+    let size = count.wrapping_mul(2).wrapping_add(8);
+    let convert = |e: &mut Engine, wide: u32| {
+        convert_wide(
+            e,
+            wide,
+            ConvertArgs {
+                from,
+                to,
+                text,
+                length,
+                length_slot,
+                output,
+                output_size,
+                count,
+                single_byte,
+            },
+        )
+    };
+    if fits && size <= 0x400 {
+        // `_alloca` through the probe `00ec5ec0`: a stack block here.
+        e.with_stack(size, |e, block| {
+            let block = block.addr();
+            e.mem.set_u32(block, 0xcccc);
+            convert(e, block + 8)
+        })
+    } else {
+        let mut wide = 0;
+        if fits {
+            let block = e.call(MALLOC_BODY, &[size]).u32();
+            if block != 0 {
+                e.mem.set_u32(block, 0xdddd);
+                wide = block + 8;
+            }
+        }
+        if wide == 0 {
+            return 0;
+        }
+        convert(e, wide)
+    }
+}
+
+/// The values [`convertcp`]'s second half works with.
+struct ConvertArgs {
+    from: u32,
+    to: u32,
+    text: u32,
+    length: u32,
+    length_slot: u32,
+    output: u32,
+    output_size: u32,
+    count: u32,
+    single_byte: bool,
+}
+
+/// The second half of [`convertcp`]: into wide characters at `wide`, then
+/// out to the target code page; releases the wide buffer.
+fn convert_wide(e: &mut Engine, wide: u32, a: ConvertArgs) -> u32 {
+    let mut result = 0;
+    memset(e, Ptr::new(wide), 0, a.count.wrapping_mul(2));
+    let converted = e
+        .call(
+            IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
+            &[a.from, 1, a.text, a.length, wide, a.count],
+        )
+        .u32();
+    if converted != 0 {
+        if a.output != 0 {
+            let written = e
+                .call(
+                    IMPORT_WIDE_CHAR_TO_MULTI_BYTE,
+                    &[a.to, 0, wide, a.count, a.output, a.output_size, 0, 0],
+                )
+                .u32();
+            if written != 0 {
+                result = a.output;
+            }
+        } else {
+            let mut size = a.count;
+            let mut sized = true;
+            if !a.single_byte {
+                size = e
+                    .call(
+                        IMPORT_WIDE_CHAR_TO_MULTI_BYTE,
+                        &[a.to, 0, wide, a.count, 0, 0, 0, 0],
+                    )
+                    .u32();
+                sized = size != 0;
+            }
+            if sized {
+                result = calloc_crt(e, 1, size).addr();
+                if result != 0 {
+                    let written = e
+                        .call(
+                            IMPORT_WIDE_CHAR_TO_MULTI_BYTE,
+                            &[a.to, 0, wide, size, result, size, 0, 0],
+                        )
+                        .u32();
+                    if written == 0 {
+                        free(e, Ptr::new(result));
+                        result = 0;
+                    } else if a.length != u32::MAX {
+                        e.mem.set_u32(a.length_slot, written);
+                    }
+                }
+            }
+        }
+    }
+    freea(e, wide);
+    result
+}
+
+// Translated from 00ecd1c7 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The body of `_malloc` (engine map; cdecl: size). Above 0xFFFFFFE0 bytes
+/// it calls the new handler, sets `ENOMEM` and returns 0. Otherwise, with
+/// the CRT heap (`_crtheap`; none: banner, message 0x1E, exit 0xFF): from
+/// the system heap (`HeapAlloc`, at least one byte) when `__active_heap` is
+/// 1; else the small-block heap first when it is 3, then the system heap
+/// with the size rounded up to 16. A failure retries while `_newmode` is
+/// set and the new handler succeeds; otherwise `ENOMEM` and 0.
+pub fn malloc_body(e: &mut Engine, size: u32) -> u32 {
+    if size > 0xffff_ffe0 {
+        e.call(CALL_NEW_HANDLER, &[size]);
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0xc);
+        return 0;
+    }
+    let mut request = size;
+    loop {
+        if e.mem.u32(LOCKS_READY) == 0 {
+            ff_msgbanner(e);
+            nmsg_write(e, 0x1e);
+            e.call(0x00ec_cca9, &[0xff]);
+        }
+        let mode = e.mem.u32(ACTIVE_HEAP);
+        let mut block = 0;
+        let mut allocated = false;
+        if mode == 1 {
+            let bytes = if request != 0 { request } else { 1 };
+            let heap = e.mem.u32(LOCKS_READY);
+            block = e.call(IMPORT_HEAP_ALLOC, &[heap, 0, bytes]).u32();
+            allocated = true;
+        } else if mode == 3 {
+            block = e.call(SMALL_BLOCK_ALLOC, &[request]).u32();
+            allocated = block != 0;
+        }
+        if !allocated {
+            if request == 0 {
+                request = 1;
+            }
+            request = request.wrapping_add(0xf) & 0xffff_fff0;
+            let heap = e.mem.u32(LOCKS_READY);
+            block = e.call(IMPORT_HEAP_ALLOC, &[heap, 0, request]).u32();
+        }
+        if block != 0 {
+            return block;
+        }
+        if e.mem.u32(NEW_MODE) == 0 {
+            let slot = errno(e);
+            e.mem.set_u32(slot.addr(), 0xc);
+        } else if e.call(CALL_NEW_HANDLER, &[size]).u32() != 0 {
+            request = size;
+            continue;
+        }
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0xc);
+        return 0;
+    }
+}
+
+// Translated from 00ec8e14 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__freea` (engine map; cdecl: buffer): frees a non-null `_malloca`
+/// buffer whose marker (8 bytes before it) is 0xDDDD (a heap block); a
+/// stack block (0xCCCC) is left alone.
+pub fn freea(e: &mut Engine, buffer: u32) {
+    if buffer != 0 {
+        let block = buffer - 8;
+        if e.mem.u32(block) == 0xdddd {
+            free(e, Ptr::new(block));
+        }
+    }
+}
+
+// Translated from 00ed11f8 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_freefls` (the FLS destructor `__mtinit` registers; Ghidra made no
+/// function here, read from the bytes; stdcall: thread block): for a
+/// non-null block frees its buffers (+0x24, +0x2C, +0x34, +0x3C, +0x40,
+/// +0x44, +0x48 when set, +0x5C unless the static table), releases its
+/// multibyte info under lock 0xD (freed at a zero count unless the static
+/// one) and its locale info under lock 0xC (freed when unreferenced unless
+/// it is the global or the static one; the `__finally` blocks at
+/// `00ed1312`/`00ed131e`, the unlocks, are this function's own code), then
+/// frees the block.
+// Translation incomplete: 00ed11f8 - the SEH frame (__SEH_prolog4/__SEH_epilog4) is not translated.
+pub fn freefls(e: &mut Engine, block: u32) {
+    if block == 0 {
+        return;
+    }
+    for offset in [0x24, 0x2c, 0x34, 0x3c, 0x40, 0x44, 0x48] {
+        let buffer = e.mem.u32(block + offset);
+        if buffer != 0 {
+            free(e, Ptr::new(buffer));
+        }
+    }
+    let table = e.mem.u32(block + 0x5c);
+    if table != 0x010f_dca0 {
+        free(e, Ptr::new(table));
+    }
+    lock(e, 0xd);
+    let mbc = e.mem.u32(block + 0x68);
+    if mbc != 0
+        && e.call(IMPORT_INTERLOCKED_DECREMENT, &[mbc]).u32() == 0
+        && mbc != INITIAL_MBC_INFO
+    {
+        free(e, Ptr::new(mbc));
+    }
+    unlock(e, 0xd);
+    lock(e, 0xc);
+    let info = e.mem.u32(block + 0x6c);
+    if info != 0 {
+        removelocaleref(e, info);
+        if info != e.mem.u32(GLOBAL_LOCALE_INFO)
+            && info != INITIAL_LOCALE_INFO
+            && e.mem.u32(info) == 0
+        {
+            freetlocinfo(e, info);
+        }
+    }
+    unlock(e, 0xc);
+    free(e, Ptr::new(block));
 }
 
 /// C `atof`: the longest prefix that is a decimal floating-point number.
@@ -3060,9 +3684,9 @@ const ERRNO_FALLBACK: u32 = 0x011c_18c0;
 // Translated from 00ec85e3 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `_errno` (LIBCMT/dosmap.c; Ghidra: `__errno`), cdecl: the address of the thread's `errno`:
 /// the `_terrno` field at `+8` of the thread's CRT data block (`__getptd_noexit`, `00ed1165`),
-/// or the static slot `011c18c0` when the thread has no block. The block is the platform
-/// layer's thread block, which nothing provides yet, so the call to `00ed1165` stays open until
-/// it is.
+/// or the static slot `011c18c0` when the thread has no block. `__getptd_noexit` is
+/// translated ([`getptd_noexit`]); it finds the block through the TLS/FLS slots that `__mtinit`
+/// ([`mtinit`]) sets up, so the block exists once the host has run `__mtinit`.
 pub fn errno(e: &mut Engine) -> Ptr {
     let block = e.call(GETPTD_NOEXIT, &args![]).u32();
     if block == 0 {
@@ -3614,6 +4238,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed1327, mtinit() -> u32),
         entry!(0x00ecf704, update_tlocinfo_ex_nolock(u32, u32) -> u32),
         entry!(0x00ee11e9, crt_get_string_type_a_stat(u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00edde08, mtdeletelocks()),
+        entry!(0x00ed2ab7, ff_msgbanner()),
+        entry!(0x00ed290c, nmsg_write(u32)),
+        entry!(0x00eccedb, exit_quick(u32)),
+        entry!(0x00ecf5b6, addlocaleref(u32)),
+        entry!(0x00ecf645, removelocaleref(u32) -> u32),
+        entry!(0x00ecf46d, freetlocinfo(u32)),
+        entry!(0x00ee13e5, ansicp(u32) -> u32),
+        entry!(0x00ee142e, convertcp(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ecd1c7, malloc_body(u32) -> u32),
+        entry!(0x00ec8e14, freea(u32)),
+        entry!(0x00ed11f8, freefls(u32)),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
@@ -6247,5 +6883,496 @@ mod thread_start_up_tests {
         assert_eq!(calls_to(&e, IMPORT_GET_STRING_TYPE_A)[0][2], 0x0055_0000);
         e.register(ANSI_CODE_PAGE, |_, _| u32::MAX.into_ret());
         assert_eq!(e.call(0x00ee_11e9, &args).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod runtime_support_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn freed(e: &Engine, block: u32) -> bool {
+        e.mem.block_size(block).is_none()
+    }
+
+    /// An engine with the CRT's data pages mapped, the Interlocked imports
+    /// at their slots and doubles for the section imports.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x00fd_f000,
+            0x0107_2000,
+            0x0109_5000,
+            0x010f_3000,
+            0x011c_1000,
+            0x011c_2000,
+            0x0126_f000,
+            0x0127_0000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        let table = crate::units::platform::imports();
+        for (slot, name) in [
+            (IMPORT_INTERLOCKED_INCREMENT, "InterlockedIncrement"),
+            (IMPORT_INTERLOCKED_DECREMENT, "InterlockedDecrement"),
+        ] {
+            let (_, _, f) = table.iter().find(|(_, n, _)| *n == name).unwrap();
+            e.register(slot, *f);
+        }
+        for slot in [
+            IMPORT_DELETE_CRITICAL_SECTION,
+            IMPORT_ENTER_CRITICAL_SECTION,
+            IMPORT_LEAVE_CRITICAL_SECTION,
+        ] {
+            e.register(slot, |_, _| 0u32.into_ret());
+        }
+        e.register(GETPTD_NOEXIT, |_, _| 0u32.into_ret());
+        e
+    }
+
+    #[test]
+    fn mtdeletelocks_frees_dynamic_sections_and_deletes_static_ones() {
+        let mut e = engine();
+        let dynamic = e.mem.alloc(0x18);
+        e.mem.set_u32(LOCK_TABLE + 3 * 8, dynamic);
+        e.mem.set_u32(LOCK_TABLE + 5 * 8, STATIC_LOCKS);
+        e.mem.set_u32(LOCK_TABLE + 5 * 8 + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_de08, &[]);
+        assert_eq!(
+            calls_to(&e, IMPORT_DELETE_CRITICAL_SECTION),
+            vec![vec![dynamic], vec![STATIC_LOCKS]]
+        );
+        assert!(freed(&e, dynamic));
+        assert_eq!(e.mem.u32(LOCK_TABLE + 3 * 8), 0);
+        assert_eq!(e.mem.u32(LOCK_TABLE + 5 * 8), STATIC_LOCKS);
+    }
+
+    /// The message table with 0xFC, 0xFF and 0x1E, their texts in the heap.
+    fn messages(e: &mut Engine) -> [u32; 3] {
+        let mut texts = [0; 3];
+        for (i, (number, text)) in [
+            (0xfcu32, &b"\r\n\0"[..]),
+            (0xff, b"banner\0"),
+            (0x1e, b"R6030\0"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let s = e.mem.alloc(16);
+            e.mem.write(s, text);
+            e.mem.set_u32(RUNTIME_MESSAGES + i as u32 * 8, number);
+            e.mem.set_u32(RUNTIME_MESSAGES + i as u32 * 8 + 4, s);
+            texts[i] = s;
+        }
+        for i in 3..0x17 {
+            e.mem.set_u32(RUNTIME_MESSAGES + i * 8, 0xdead);
+        }
+        texts
+    }
+
+    #[test]
+    fn console_messages_go_to_standard_error() {
+        let mut e = engine();
+        let texts = messages(&mut e);
+        e.register(SET_ERROR_MODE, |_, _| 1u32.into_ret());
+        e.register(IMPORT_GET_STD_HANDLE, |_, a| {
+            assert_eq!(a[0], (-12i32) as u32);
+            0x30u32.into_ret()
+        });
+        e.register(IMPORT_WRITE_FILE, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_2ab7, &[]);
+        let writes: Vec<(u32, u32, u32)> = calls_to(&e, IMPORT_WRITE_FILE)
+            .iter()
+            .map(|w| (w[0], w[1], w[2]))
+            .collect();
+        assert_eq!(writes, vec![(0x30, texts[0], 2), (0x30, texts[1], 6)]);
+        // A number outside the table writes nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_290c, &[0x1234]);
+        assert!(calls_to(&e, SET_ERROR_MODE).is_empty());
+        // No console and the default mode with a GUI app: no banner.
+        e.register(SET_ERROR_MODE, |_, _| 0u32.into_ret());
+        e.mem.set_u32(APP_TYPE, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_2ab7, &[]);
+        assert!(calls_to(&e, IMPORT_WRITE_FILE).is_empty());
+    }
+
+    #[test]
+    fn window_messages_build_the_runtime_error_box() {
+        let mut e = engine();
+        messages(&mut e);
+        for (at, text) in [
+            (MESSAGE_HEADER, &b"Runtime Error!\n\nProgram: \0"[..]),
+            (MESSAGE_UNKNOWN_PROGRAM, b"<program name unknown>\0"),
+            (MESSAGE_ELLIPSIS, b"...\0"),
+            (MESSAGE_BREAK, b"\n\n\0"),
+            (MESSAGE_CAPTION, b"Microsoft Visual C++ Runtime Library\0"),
+        ] {
+            e.mem.write(at, text);
+        }
+        e.register(SET_ERROR_MODE, |_, _| 2u32.into_ret());
+        let name = "C:\\Games\\Fallout New Vegas\\a rather long folder name\\FalloutNV.exe";
+        e.register(IMPORT_GET_MODULE_FILE_NAME_A, |e, a| {
+            let name = "C:\\Games\\Fallout New Vegas\\a rather long folder name\\FalloutNV.exe";
+            e.mem.write(a[1], name.as_bytes());
+            e.mem.set_u8(a[1] + name.len() as u32, 0);
+            (name.len() as u32).into_ret()
+        });
+        let shown = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let record = shown.clone();
+        e.register_double(CRT_MESSAGE_BOX_A, move |e, a| {
+            assert_eq!(a[1], MESSAGE_CAPTION);
+            assert_eq!(a[2], 0x12010);
+            *record.borrow_mut() = String::from_utf8(e.mem.cstr(a[0])).unwrap();
+            1u32.into_ret()
+        });
+        e.call(0x00ed_290c, &[0x1e]);
+        let kept = &name[..name.len() - 0x3b];
+        assert_eq!(
+            *shown.borrow(),
+            format!("Runtime Error!\n\nProgram: {kept}...\n\nR6030")
+        );
+        // An unknown program name, and 0xFC shows nothing.
+        e.register(IMPORT_GET_MODULE_FILE_NAME_A, |_, _| 0u32.into_ret());
+        e.call(0x00ed_290c, &[0x1e]);
+        assert_eq!(
+            *shown.borrow(),
+            "Runtime Error!\n\nProgram: <program name unknown>\n\nR6030"
+        );
+        shown.borrow_mut().clear();
+        e.call(0x00ed_290c, &[0xfc]);
+        assert!(shown.borrow().is_empty());
+    }
+
+    #[test]
+    fn exit_quick_is_doexit_quick() {
+        let mut e = engine();
+        e.register(DOEXIT_ADDR, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_cedb, &[3]);
+        assert_eq!(calls_to(&e, DOEXIT_ADDR), vec![vec![3, 1, 0]]);
+    }
+
+    /// A locale info with every count at 1 (category 2 uses the C names and
+    /// category 4 has no wide name); returns it and its count words.
+    fn locale_info(e: &mut Engine) -> (u32, Vec<u32>) {
+        let info = e.mem.alloc(0xd8);
+        let mut counts = vec![info];
+        e.mem.set_u32(info, 1);
+        let count = |e: &mut Engine| {
+            let c = e.mem.alloc(4);
+            e.mem.set_u32(c, 1);
+            c
+        };
+        for offset in [0xb0, 0xb8, 0xb4, 0xc0] {
+            let c = count(e);
+            e.mem.set_u32(info + offset, c);
+            counts.push(c);
+        }
+        for category in 0..6u32 {
+            let at = info + 0x50 + category * 0x10;
+            e.mem
+                .set_u32(at - 8, if category == 2 { C_LOCALE_NAMES } else { 0 });
+            let name = count(e);
+            e.mem.set_u32(at, name);
+            e.mem.set_u32(at - 4, u32::from(category != 4));
+            let wide = count(e);
+            e.mem.set_u32(at + 4, wide);
+            if category != 2 {
+                counts.push(name);
+            }
+            if category != 4 {
+                counts.push(wide);
+            }
+        }
+        let time = e.mem.alloc(0xb8);
+        e.mem.set_u32(time + 0xb4, 1);
+        e.mem.set_u32(info + 0xd4, time);
+        counts.push(time + 0xb4);
+        (info, counts)
+    }
+
+    #[test]
+    fn locale_references_go_up_and_down_together() {
+        let mut e = engine();
+        let (info, counts) = locale_info(&mut e);
+        e.call(0x00ec_f5b6, &[info]);
+        assert!(counts.iter().all(|c| e.mem.u32(*c) == 2));
+        assert_eq!(e.call(0x00ec_f645, &[info]).u32(), info);
+        assert!(counts.iter().all(|c| e.mem.u32(*c) == 1));
+        // The skipped names keep their counts.
+        let c_names = e.mem.u32(info + 0x50 + 2 * 0x10);
+        assert_eq!(e.mem.u32(c_names), 1);
+        assert_eq!(e.call(0x00ec_f645, &[0]).u32(), 0);
+    }
+
+    #[test]
+    fn freetlocinfo_frees_the_unreferenced_pieces() {
+        let mut e = engine();
+        e.register(FREE_LCONV_MONETARY, |_, _| 0u32.into_ret());
+        e.register(FREE_LCONV_NUMERIC, |_, _| 0u32.into_ret());
+        e.register(FREE_LC_TIME, |_, _| 0u32.into_ret());
+        let (info, counts) = locale_info(&mut e);
+        for c in &counts {
+            e.mem.set_u32(*c, 0);
+        }
+        let lconv = e.mem.alloc(0x40);
+        e.mem.set_u32(info + 0xbc, lconv);
+        let tables: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x200)).collect();
+        e.mem.set_u32(info + 0xc4, tables[0] + 0xfe);
+        e.mem.set_u32(info + 0xcc, tables[1] + 0x80);
+        e.mem.set_u32(info + 0xd0, tables[2] + 0x80);
+        let time = e.mem.u32(info + 0xd4);
+        let c_names = e.mem.u32(info + 0x50 + 2 * 0x10);
+        let no_wide = e.mem.u32(info + 0x50 + 4 * 0x10 + 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_f46d, &[info]);
+        assert_eq!(calls_to(&e, FREE_LCONV_MONETARY), vec![vec![lconv]]);
+        assert_eq!(calls_to(&e, FREE_LCONV_NUMERIC), vec![vec![lconv]]);
+        assert_eq!(calls_to(&e, FREE_LC_TIME), vec![vec![time]]);
+        for block in [info, lconv, time, tables[0], tables[1], tables[2]] {
+            assert!(freed(&e, block), "{block:08x}");
+        }
+        for c in counts.iter().filter(|c| **c != info && **c != time + 0xb4) {
+            assert!(freed(&e, *c), "{c:08x}");
+        }
+        assert!(!freed(&e, c_names));
+        assert!(!freed(&e, no_wide));
+    }
+
+    #[test]
+    fn freetlocinfo_keeps_the_c_locales_pieces() {
+        let mut e = engine();
+        let (info, _) = locale_info(&mut e);
+        e.mem.set_u32(info + 0xbc, C_LCONV);
+        e.mem.set_u32(info + 0xd4, C_LC_TIME);
+        let ctype = e.mem.u32(info + 0xc0);
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_f46d, &[info]);
+        assert!(!freed(&e, ctype));
+        assert!(freed(&e, info));
+        assert!(e.call_log.as_ref().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn ansicp_reads_the_locales_code_page() {
+        let mut e = engine();
+        e.register(IMPORT_GET_LOCALE_INFO_A, |e, a| {
+            assert_eq!((a[0], a[1], a[3]), (0x409, 0x1004, 6));
+            e.mem.write(a[2], b"1252\0");
+            5u32.into_ret()
+        });
+        assert_eq!(e.call(0x00ee_13e5, &[0x409]).u32(), 1252);
+        e.register(IMPORT_GET_LOCALE_INFO_A, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ee_13e5, &[0x409]).u32(), u32::MAX);
+    }
+
+    /// Doubles for the code-page imports: code page 932 is double-byte,
+    /// the others single-byte; conversions copy bytes to and from 16-bit
+    /// characters and give their counts.
+    fn code_pages(e: &mut Engine) {
+        e.register(IMPORT_GET_CP_INFO, |e, a| {
+            e.mem.set_u32(a[1], if a[0] == 932 { 2 } else { 1 });
+            1u32.into_ret()
+        });
+        e.register(IMPORT_MULTI_BYTE_TO_WIDE_CHAR, |e, a| {
+            if a[4] != 0 {
+                for i in 0..a[3] {
+                    let c = e.mem.u8(a[2] + i);
+                    e.mem.set_u16(a[4] + i * 2, u16::from(c));
+                }
+            }
+            a[3].into_ret()
+        });
+        e.register(IMPORT_WIDE_CHAR_TO_MULTI_BYTE, |e, a| {
+            if a[4] != 0 {
+                for i in 0..a[3] {
+                    let c = e.mem.u16(a[2] + i * 2);
+                    e.mem.set_u8(a[4] + i, c as u8 + 1);
+                }
+            }
+            a[3].into_ret()
+        });
+        e.register(MALLOC_BODY, |e, a| e.mem.alloc(a[0]).into_ret());
+    }
+
+    #[test]
+    fn convertcp_converts_through_wide_characters() {
+        let mut e = engine();
+        code_pages(&mut e);
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"abc\0");
+        let length = e.mem.alloc(4);
+        e.mem.set_u32(length, 3);
+        // The same code page: nothing.
+        assert_eq!(
+            e.call(0x00ee_142e, &[1252, 1252, text, length, 0, 0]).u32(),
+            0
+        );
+        // Single-byte to single-byte, a new block sized by the text.
+        let out = e.call(0x00ee_142e, &[1252, 1250, text, length, 0, 0]).u32();
+        assert_eq!(e.mem.bytes(out, 3), b"bcd");
+        assert_eq!(e.mem.u32(length), 3);
+        // Double-byte source, into a given buffer; -1 counts the terminator.
+        e.mem.set_u32(length, u32::MAX);
+        let buffer = e.mem.alloc(8);
+        e.register(IMPORT_MULTI_BYTE_TO_WIDE_CHAR, |e, a| {
+            let count = if a[3] == u32::MAX { 4 } else { a[3] };
+            if a[4] != 0 {
+                for i in 0..count {
+                    let c = e.mem.u8(a[2] + i);
+                    e.mem.set_u16(a[4] + i * 2, u16::from(c));
+                }
+            }
+            count.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x00ee_142e, &[932, 1252, text, length, buffer, 8])
+            .u32();
+        assert_eq!(result, buffer);
+        assert_eq!(e.mem.bytes(buffer, 4), b"bcd\x01");
+        assert_eq!(e.mem.u32(length), u32::MAX);
+        let wide = calls_to(&e, IMPORT_WIDE_CHAR_TO_MULTI_BYTE);
+        assert_eq!(wide.len(), 1);
+        assert_eq!(wide[0][3], 4);
+        // A failed first conversion gives 0.
+        e.register(IMPORT_MULTI_BYTE_TO_WIDE_CHAR, |_, _| 0u32.into_ret());
+        assert_eq!(
+            e.call(0x00ee_142e, &[932, 1252, text, length, 0, 0]).u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn convertcp_long_texts_use_a_heap_buffer_that_is_freed() {
+        let mut e = engine();
+        code_pages(&mut e);
+        let text = e.mem.alloc(0x300);
+        e.mem.write(text, &[b'a'; 0x300]);
+        let length = e.mem.alloc(4);
+        e.mem.set_u32(length, 0x300);
+        e.call_log = Some(vec![]);
+        let out = e.call(0x00ee_142e, &[932, 1252, text, length, 0, 0]).u32();
+        assert_ne!(out, 0);
+        assert_eq!(e.mem.u32(length), 0x300);
+        let block = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|(a, _)| *a == MALLOC_BODY)
+            .unwrap()
+            .1[0];
+        assert_eq!(block, 0x300 * 2 + 8);
+        // Sized by the conversion for a double-byte source: two calls out.
+        assert_eq!(calls_to(&e, IMPORT_WIDE_CHAR_TO_MULTI_BYTE).len(), 2);
+    }
+
+    #[test]
+    fn malloc_body_picks_the_heap_and_reports_failures() {
+        let mut e = engine();
+        e.mem.set_u32(LOCKS_READY, 0x0044_0000);
+        e.register(IMPORT_HEAP_ALLOC, |_, a| {
+            assert_eq!(&a[..2], &[0x0044_0000, 0]);
+            (0x0010_0000 + a[2]).into_ret()
+        });
+        e.mem.set_u32(ACTIVE_HEAP, 1);
+        assert_eq!(e.call(0x00ec_d1c7, &[0]).u32(), 0x0010_0001);
+        assert_eq!(e.call(0x00ec_d1c7, &[0x21]).u32(), 0x0010_0021);
+        // Other heaps round up to 16 bytes; the small-block heap goes first.
+        e.mem.set_u32(ACTIVE_HEAP, 3);
+        e.register(SMALL_BLOCK_ALLOC, |_, a| u32::from(a[0] == 8).into_ret());
+        assert_eq!(e.call(0x00ec_d1c7, &[8]).u32(), 1);
+        assert_eq!(e.call(0x00ec_d1c7, &[0x21]).u32(), 0x0010_0030);
+        e.mem.set_u32(ACTIVE_HEAP, 2);
+        assert_eq!(e.call(0x00ec_d1c7, &[0]).u32(), 0x0010_0010);
+        // Failures: ENOMEM; with _newmode the new handler gets a retry.
+        e.register(IMPORT_HEAP_ALLOC, |_, _| 0u32.into_ret());
+        e.register_double(CALL_NEW_HANDLER, |e, _| {
+            // The handler frees memory: the next attempt succeeds.
+            e.register(IMPORT_HEAP_ALLOC, |_, _| 0x0020_0000u32.into_ret());
+            1u32.into_ret()
+        });
+        assert_eq!(e.call(0x00ec_d1c7, &[4]).u32(), 0);
+        assert_eq!(e.mem.u32(ERRNO_FALLBACK), 0xc);
+        e.mem.set_u32(NEW_MODE, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_d1c7, &[4]).u32(), 0x0020_0000);
+        assert_eq!(calls_to(&e, CALL_NEW_HANDLER), vec![vec![4]]);
+        // Too large: the new handler, ENOMEM, 0.
+        e.mem.set_u32(ERRNO_FALLBACK, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec_d1c7, &[0xffff_fff0]).u32(), 0);
+        assert_eq!(calls_to(&e, CALL_NEW_HANDLER), vec![vec![0xffff_fff0]]);
+        assert_eq!(e.mem.u32(ERRNO_FALLBACK), 0xc);
+    }
+
+    #[test]
+    fn freea_frees_only_heap_buffers() {
+        let mut e = engine();
+        let heap = e.mem.alloc(0x20);
+        e.mem.set_u32(heap, 0xdddd);
+        let stack = e.mem.alloc(0x20);
+        e.mem.set_u32(stack, 0xcccc);
+        e.call(0x00ec_8e14, &[heap + 8]);
+        e.call(0x00ec_8e14, &[stack + 8]);
+        e.call(0x00ec_8e14, &[0]);
+        assert!(freed(&e, heap));
+        assert!(!freed(&e, stack));
+    }
+
+    #[test]
+    fn freefls_releases_a_thread_block() {
+        let mut e = engine();
+        for number in [0xc, 0xd] {
+            e.mem.set_u32(LOCK_TABLE + number * 8, 0x0055_0000 + number);
+        }
+        let block = e.mem.alloc(0x214);
+        let buffers: Vec<u32> = [0x24, 0x2c, 0x34, 0x3c, 0x40, 0x44, 0x48, 0x5c]
+            .iter()
+            .map(|offset| {
+                let b = e.mem.alloc(8);
+                e.mem.set_u32(block + offset, b);
+                b
+            })
+            .collect();
+        let mbc = e.mem.alloc(4);
+        e.mem.set_u32(mbc, 1);
+        e.mem.set_u32(block + 0x68, mbc);
+        let (info, _) = locale_info(&mut e);
+        e.mem.set_u32(info, 2);
+        e.mem.set_u32(block + 0x6c, info);
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_11f8, &[block]);
+        assert!(buffers.iter().all(|b| freed(&e, *b)));
+        assert!(freed(&e, mbc));
+        assert!(freed(&e, block));
+        // The locale info is still referenced: kept.
+        assert!(!freed(&e, info));
+        assert_eq!(
+            calls_to(&e, IMPORT_ENTER_CRITICAL_SECTION),
+            vec![vec![0x0055_000d], vec![0x0055_000c]]
+        );
+        assert_eq!(
+            calls_to(&e, IMPORT_LEAVE_CRITICAL_SECTION),
+            vec![vec![0x0055_000d], vec![0x0055_000c]]
+        );
+        // A null block does nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00ed_11f8, &[0]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }
