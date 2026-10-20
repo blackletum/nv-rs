@@ -41,12 +41,51 @@ pub fn ni_d3d_shader_program_ni_d3d_shader_program(
     this
 }
 
+// Translated from 00e89760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram::SetD3DRenderer` (engine map), `thiscall` with one stack word (the
+/// renderer), stored at +0x24. With a renderer: the old device at +0x20 is released (its
+/// vtable slot +8, `stdcall`), the renderer's device (+0x288) is kept there and referenced
+/// (slot +4) when not null, and +0x28 takes the renderer's +0x8b8. Without one: +0x28 is
+/// cleared, the old device released and +0x20 cleared.
+pub fn ni_d3d_shader_program_set_d3d_renderer(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    let base = this.addr();
+    let renderer = renderer.addr();
+    e.mem.set_u32(base + 0x24, renderer);
+    if renderer != 0 {
+        let device = e.mem.u32(renderer + 0x288);
+        let old = e.mem.u32(base + 0x20);
+        if old != 0 {
+            e.vcall(old, 8, &args![]);
+        }
+        e.mem.set_u32(base + 0x20, device);
+        if device != 0 {
+            e.vcall(device, 4, &args![]);
+        }
+        let renderer = e.mem.u32(base + 0x24);
+        let state = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.mem.set_u32(base + 0x28, state);
+        return;
+    }
+    let old = e.mem.u32(base + 0x20);
+    e.mem.set_u32(base + 0x28, 0);
+    if old != 0 {
+        e.vcall(old, 8, &args![]);
+    }
+    e.mem.set_u32(base + 0x20, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00e8_97d0,
-        ni_d3d_shader_program_ni_d3d_shader_program(Ptr, Ptr, u32) -> Ptr
-    )]
+    vec![
+        entry!(
+            0x00e8_97d0,
+            ni_d3d_shader_program_ni_d3d_shader_program(Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00e8_9760,
+            ni_d3d_shader_program_set_d3d_renderer(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -80,5 +119,52 @@ mod tests {
                 (SET_D3D_RENDERER_00E89760, vec![this, 0x0e00_0000]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod set_renderer_tests {
+    use super::*;
+
+    const DEVICE_VTABLE: u32 = 0x0e00_0000;
+    const ADD_REFERENCE: u32 = 0x0e01_0004;
+    const RELEASE: u32 = 0x0e01_0008;
+
+    #[test]
+    fn set_d3d_renderer_swaps_the_device() {
+        let mut e = Engine::new();
+        e.put_vtable(DEVICE_VTABLE, &[0, ADD_REFERENCE, RELEASE]);
+        e.register(ADD_REFERENCE, |_, _| Ret::default());
+        e.register(RELEASE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let old = e.mem.alloc(4);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(old, DEVICE_VTABLE);
+        e.mem.set_u32(device, DEVICE_VTABLE);
+        let renderer = e.mem.alloc(0x8bc);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x0e02_0000);
+        let program = e.mem.alloc(0x2c);
+        e.mem.set_u32(program + 0x20, old);
+        e.call(0x00e8_9760, &args![program, renderer]);
+        assert_eq!(e.mem.u32(program + 0x24), renderer);
+        assert_eq!(e.mem.u32(program + 0x20), device);
+        assert_eq!(e.mem.u32(program + 0x28), 0x0e02_0000);
+        e.call(0x00e8_9760, &args![program, 0u32]);
+        assert_eq!(e.mem.u32(program + 0x20), 0);
+        assert_eq!(e.mem.u32(program + 0x28), 0);
+        let log = e.call_log.take().unwrap();
+        let released: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == RELEASE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(released, vec![old, device]);
+        let referenced: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == ADD_REFERENCE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(referenced, vec![device]);
     }
 }
