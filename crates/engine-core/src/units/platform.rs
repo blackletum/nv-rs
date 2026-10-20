@@ -5,6 +5,7 @@
 use crate::prelude::*;
 
 pub mod dinput;
+pub mod dsound;
 pub mod loader;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
@@ -726,6 +727,8 @@ pub struct Kernel {
     pub input: dinput::Input,
     /// Fiber-local storage ([`loader`]).
     pub fls: loader::Fls,
+    /// The DirectSound 8 objects ([`dsound`]).
+    pub sound: dsound::Sound,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -1600,6 +1603,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             k,
             "GetProcAddress",
             entry!(0, loader::get_proc_address(u32, u32) -> u32).1,
+        ),
+        (
+            "DSOUND.dll",
+            "#11",
+            entry!(0, dsound::direct_sound_create8(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
+            "CoInitialize",
+            entry!(0, dsound::co_initialize(u32) -> u32).1,
         ),
         (
             "DINPUT8.dll",
