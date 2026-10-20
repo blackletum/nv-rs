@@ -545,6 +545,1069 @@ pub fn fn_00b94520(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// The `ImageSpaceShader` base constructor of the image-space shaders (`00c04570`, unnamed in
+/// the engine map; `thiscall`, no stack words).
+const IMAGE_SPACE_SHADER_CONSTRUCT_00C04570: u32 = 0x00c0_4570;
+/// The `NiTArray` resize `00a90180` (unnamed in the engine map; `thiscall` on the array,
+/// `RET 4`: the new size).
+const ARRAY_SET_SIZE_00A90180: u32 = 0x00a9_0180;
+/// The texture array of an `ImageSpaceShader` (`pTextures`, Xbox PDB, at the
+/// `ImageSpaceEffect` base +0x6c, +0x28 in it: +0x94; the same on PC).
+const SHADER_TEXTURES: u32 = 0x94;
+/// The `ImageSpaceEffect` base of an `ImageSpaceShader` (Xbox PDB, +0x6c).
+const SHADER_EFFECT_BASE: u32 = 0x6c;
+
+/// The body every plain image-space shader constructor below has, in the exe's order: the
+/// base constructor `00c04570`, the class's vtable at +0, its `ImageSpaceEffect` vtable at
+/// +0x6c, then the texture array (+0x94) resized to `textures` by `00a90180`. Answers `this`.
+fn construct_image_space_shader(
+    e: &mut Engine,
+    this: Ptr,
+    vtable: u32,
+    effect_vtable: u32,
+    textures: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(IMAGE_SPACE_SHADER_CONSTRUCT_00C04570, &args![this]);
+    e.mem.set_u32(base, vtable);
+    e.mem.set_u32(base + SHADER_EFFECT_BASE, effect_vtable);
+    e.call(
+        ARRAY_SET_SIZE_00A90180,
+        &args![base + SHADER_TEXTURES, textures],
+    );
+    this
+}
+
+/// The object `00b922d0` keeps a reference to (`NiPointer` at +0xd0; the word at `011f9520`).
+const OBJECT_011F9520: u32 = 0x011f_9520;
+
+// Translated from 00b922d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of the 0xd4-byte `ImageSpaceShader` subclass whose object +0x6c `00b94520`
+/// stores at index 0x2f of the effect array (`EFFECT_SHADER_TEXTUREMASK` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed). Runs the base
+/// constructor `00c04570`, sets the vtables `010b5978` (+0) and `010b5954` (+0x6c), clears
+/// the pointer at +0xd0, sizes the texture array (+0x94) to two (`00a90180`), then assigns
+/// the object at `011f9520` to the `NiPointer` at +0xd0 (inline: nothing when it is already
+/// there; else the old one's reference given up, deleted through its vtable slot +4 at zero,
+/// and a reference taken on the new one when it is not null). Answers `this`.
+// Translation incomplete: 00b922d0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the base and the pointer) is not translated.
+pub fn fn_00b922d0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(IMAGE_SPACE_SHADER_CONSTRUCT_00C04570, &args![this]);
+    e.mem.set_u32(base, 0x010b_5978);
+    e.mem.set_u32(base + SHADER_EFFECT_BASE, 0x010b_5954);
+    e.mem.set_u32(base + 0xd0, 0);
+    e.call(
+        ARRAY_SET_SIZE_00A90180,
+        &args![base + SHADER_TEXTURES, 2u32],
+    );
+    let object = e.global::<u32>(OBJECT_011F9520);
+    assign_pointer(e, base + 0xd0, object);
+    this
+}
+
+// Translated from 00b8bce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x49 of the effect array (`EFFECT_SHADER_INTERFACE_VATS_SCANLINES_BLEND` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010affc0` (+0) and `010affa0` (+0x6c) and sizes the texture array (+0x94) to five
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8bce0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8bce0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010a_ffc0, 0x010a_ffa0, 5)
+}
+
+// Translated from 00b8bea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x39 of the effect array (`EFFECT_SHADER_SUNBEAMS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0198` (+0) and `010b0174` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8bea0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8bea0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0198, 0x010b_0174, 2)
+}
+
+// Translated from 00b8c070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x4d of the effect array (`EFFECT_SHADER_TV` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0338` (+0) and `010b0318` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8c070 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8c070(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0338, 0x010b_0318, 4)
+}
+
+// Translated from 00b8d330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x2a of the effect array (`EFFECT_SHADER_VOLUMETRIC_FOG` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0518` (+0) and `010b04f4` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8d330 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8d330(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0518, 0x010b_04f4, 3)
+}
+
+// Translated from 00b8d5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x2d of the effect array (`EFFECT_SHADER_ALPHAMULT` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b06c0` (+0) and `010b06a0` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8d5b0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8d5b0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_06c0, 0x010b_06a0, 2)
+}
+
+// Translated from 00b8d700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x2e of the effect array (`EFFECT_SHADER_BLEND` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0860` (+0) and `010b083c` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8d700 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8d700(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0860, 0x010b_083c, 3)
+}
+
+// Translated from 00b8d850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x2b of the effect array (`EFFECT_SHADER_BLUR` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0a00` (+0) and `010b09dc` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8d850 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8d850(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0a00, 0x010b_09dc, 2)
+}
+
+// Translated from 00b8d990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x4e of the effect array (`EFFECT_SHADER_BLUR3` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0b98` (+0) and `010b0b78` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8d990 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8d990(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0b98, 0x010b_0b78, 2)
+}
+
+// Translated from 00b8dae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x4f of the effect array (`EFFECT_SHADER_BLUR5` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0d40` (+0) and `010b0d1c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8dae0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8dae0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0d40, 0x010b_0d1c, 2)
+}
+
+// Translated from 00b8dc30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x50 of the effect array (`EFFECT_SHADER_BLUR7` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b0ec0` (+0) and `010b0e9c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8dc30 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8dc30(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_0ec0, 0x010b_0e9c, 2)
+}
+
+// Translated from 00b8dd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x51 of the effect array (`EFFECT_SHADER_BLUR9` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1040` (+0) and `010b101c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8dd80 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8dd80(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1040, 0x010b_101c, 2)
+}
+
+// Translated from 00b8ded0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x52 of the effect array (`EFFECT_SHADER_BLUR11` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b11c0` (+0) and `010b119c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8ded0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8ded0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_11c0, 0x010b_119c, 2)
+}
+
+// Translated from 00b8e020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x53 of the effect array (`EFFECT_SHADER_BLUR13` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1340` (+0) and `010b1320` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e020 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e020(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1340, 0x010b_1320, 2)
+}
+
+// Translated from 00b8e170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x54 of the effect array (`EFFECT_SHADER_BLUR15` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b14c0` (+0) and `010b14a0` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e170 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e170(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_14c0, 0x010b_14a0, 2)
+}
+
+// Translated from 00b8e2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x55 of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR3` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1640` (+0) and `010b1620` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e2c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e2c0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1640, 0x010b_1620, 3)
+}
+
+// Translated from 00b8e460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x56 of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR5` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b17f8` (+0) and `010b17d8` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e460 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e460(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_17f8, 0x010b_17d8, 3)
+}
+
+// Translated from 00b8e600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x57 of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR7` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1980` (+0) and `010b1960` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e600 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e600(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1980, 0x010b_1960, 3)
+}
+
+// Translated from 00b8e7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x58 of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR9` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1b08` (+0) and `010b1ae8` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e7a0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e7a0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1b08, 0x010b_1ae8, 3)
+}
+
+// Translated from 00b8e940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x59 of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR11` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1c90` (+0) and `010b1c70` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8e940 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8e940(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1c90, 0x010b_1c70, 3)
+}
+
+// Translated from 00b8eae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x5a of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR13` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1e20` (+0) and `010b1dfc` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8eae0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8eae0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1e20, 0x010b_1dfc, 3)
+}
+
+// Translated from 00b8ec80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x5b of the effect array (`EFFECT_SHADER_BRIGHTPASS_BLUR15` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b1fb0` (+0) and `010b1f8c` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8ec80 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8ec80(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_1fb0, 0x010b_1f8c, 3)
+}
+
+// Translated from 00b8ee20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x32 of the effect array (`EFFECT_SHADER_CINEMATIC` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2140` (+0) and `010b211c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8ee20 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8ee20(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2140, 0x010b_211c, 2)
+}
+
+// Translated from 00b8efa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// indices 0x22 and 0x26 of the effect array (`EFFECT_SHADER_COPY` and `EFFECT_SHADER_COPYWITHALPHA` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2a98` (+0) and `010b2a74` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8efa0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8efa0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2a98, 0x010b_2a74, 2)
+}
+
+// Translated from 00b8f010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x23 of the effect array (`EFFECT_SHADER_COPY_RENDER_TARGET1` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2308` (+0) and `010b22e8` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f010 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f010(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2308, 0x010b_22e8, 2)
+}
+
+// Translated from 00b8f1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x27 of the effect array (`EFFECT_SHADER_STENCILCOPY` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2490` (+0) and `010b2470` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f1b0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f1b0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2490, 0x010b_2470, 2)
+}
+
+// Translated from 00b8f360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x28 of the effect array (`EFFECT_SHADER_STENCILCOPY_NOTEX_NODEPTH` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2610` (+0) and `010b25f0` (+0x6c) and sizes the texture array (+0x94) to one
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f360 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f360(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2610, 0x010b_25f0, 1)
+}
+
+// Translated from 00b8f520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x25 of the effect array (`EFFECT_SHADER_NULL` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b27a8` (+0) and `010b2784` (+0x6c) and sizes the texture array (+0x94) to one
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f520 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f520(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_27a8, 0x010b_2784, 1)
+}
+
+// Translated from 00b8f660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x24 of the effect array (`EFFECT_SHADER_RESTORE_EDRAM` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2920` (+0) and `010b28fc` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f660 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f660(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2920, 0x010b_28fc, 3)
+}
+
+// Translated from 00b8f7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x33 of the effect array (`EFFECT_SHADER_DEPTH_OF_FIELD` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2c10` (+0) and `010b2bec` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f7e0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f7e0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2c10, 0x010b_2bec, 4)
+}
+
+// Translated from 00b8f930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x36 of the effect array (`EFFECT_SHADER_RADIAL_BLUR` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2db0` (+0) and `010b2d8c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8f930 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8f930(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2db0, 0x010b_2d8c, 2)
+}
+
+// Translated from 00b8fa80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x37 of the effect array (`EFFECT_SHADER_RADIAL_BLUR_MED` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b2f50` (+0) and `010b2f30` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8fa80 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8fa80(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_2f50, 0x010b_2f30, 2)
+}
+
+// Translated from 00b8fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x38 of the effect array (`EFFECT_SHADER_RADIAL_BLUR_HIGH` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b30e0` (+0) and `010b30c0` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8fbe0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8fbe0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_30e0, 0x010b_30c0, 2)
+}
+
+// Translated from 00b8fd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x34 of the effect array (`EFFECT_SHADER_DEPTH_OF_FIELD_MASK` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3268` (+0) and `010b3244` (+0x6c) and sizes the texture array (+0x94) to five
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8fd40 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8fd40(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3268, 0x010b_3244, 5)
+}
+
+// Translated from 00b8fea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x2c of the effect array (`EFFECT_SHADER_DOUBLEVIS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b33f0` (+0) and `010b33cc` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8fea0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8fea0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_33f0, 0x010b_33cc, 3)
+}
+
+// Translated from 00b8fff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3a of the effect array (`EFFECT_SHADER_HDR_BLENDINSHADER` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3598` (+0) and `010b3574` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b8fff0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b8fff0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3598, 0x010b_3574, 4)
+}
+
+// Translated from 00b90190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3b of the effect array (`EFFECT_SHADER_HDR_BLENDINSHADER_CINEMATIC` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b37a8` (+0) and `010b3788` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90190 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90190(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_37a8, 0x010b_3788, 4)
+}
+
+// Translated from 00b90330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3c of the effect array (`EFFECT_SHADER_HDR_BLENDINSHADER_CINEMATIC_ALPHAMASK` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3958` (+0) and `010b3934` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90330 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90330(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3958, 0x010b_3934, 4)
+}
+
+// Translated from 00b90520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3d of the effect array (`EFFECT_SHADER_HDR_BLUR` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3af0` (+0) and `010b3ad0` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90520 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90520(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3af0, 0x010b_3ad0, 2)
+}
+
+// Translated from 00b906b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3e of the effect array (`EFFECT_SHADER_HDR_BRIGHTPASSFILTER` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3c78` (+0) and `010b3c58` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b906b0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b906b0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3c78, 0x010b_3c58, 2)
+}
+
+// Translated from 00b90830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x3f of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE16` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3e18` (+0) and `010b3df4` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90830 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90830(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3e18, 0x010b_3df4, 2)
+}
+
+// Translated from 00b909c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x40 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE9` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b3fa8` (+0) and `010b3f88` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b909c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b909c0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_3fa8, 0x010b_3f88, 2)
+}
+
+// Translated from 00b90b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x41 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE4` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4138` (+0) and `010b4114` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90b50 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90b50(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4138, 0x010b_4114, 2)
+}
+
+// Translated from 00b90ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x46 of the effect array (`EFFECT_SHADER_HDR_LIGHTADAPT` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b42c8` (+0) and `010b42a4` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90ce0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90ce0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_42c8, 0x010b_42a4, 3)
+}
+
+// Translated from 00b90e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x47 of the effect array (`EFFECT_SHADER_HDR_LUMCLAMP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4460` (+0) and `010b443c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b90e70 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b90e70(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4460, 0x010b_443c, 2)
+}
+
+// Translated from 00b91000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x43 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE4_LIGHTADAPT` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4600` (+0) and `010b45dc` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91000 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91000(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4600, 0x010b_45dc, 3)
+}
+
+// Translated from 00b911a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x42 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE4_LUMCLAMP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b47a0` (+0) and `010b477c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b911a0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b911a0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_47a0, 0x010b_477c, 2)
+}
+
+// Translated from 00b91340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x45 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE16_LIGHTADAPT` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4938` (+0) and `010b4914` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91340 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91340(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4938, 0x010b_4914, 3)
+}
+
+// Translated from 00b914e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x44 of the effect array (`EFFECT_SHADER_HDR_DOWNSAMPLE16_LUMCLAMP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4ad0` (+0) and `010b4aac` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b914e0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b914e0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4ad0, 0x010b_4aac, 2)
+}
+
+// Translated from 00b91680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x48 of the effect array (`EFFECT_SHADER_INTERFACE_SCANLINES_BLEND` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4c68` (+0) and `010b4c48` (+0x6c) and sizes the texture array (+0x94) to five
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91680 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91680(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4c68, 0x010b_4c48, 5)
+}
+
+// Translated from 00b917c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x30 of the effect array (`EFFECT_SHADER_MAP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4de8` (+0) and `010b4dc8` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b917c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b917c0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4de8, 0x010b_4dc8, 2)
+}
+
+// Translated from 00b91900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x31 of the effect array (`EFFECT_SHADER_MENUBG` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b4f80` (+0) and `010b4f60` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91900 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91900(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_4f80, 0x010b_4f60, 3)
+}
+
+// Translated from 00b91a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x4c of the effect array (`EFFECT_SHADER_INTERFACE_MENUUNPACK` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5140` (+0) and `010b511c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91a40 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91a40(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5140, 0x010b_511c, 2)
+}
+
+// Translated from 00b91b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x35 of the effect array (`EFFECT_SHADER_MOTION_BLUR` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b52c0` (+0) and `010b52a0` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91b80 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91b80(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_52c0, 0x010b_52a0, 3)
+}
+
+// Translated from 00b91cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x72 of the effect array (`EFFECT_SHADER_NOISE_SCROLL_AND_BLEND` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5480` (+0) and `010b5460` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91cf0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91cf0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5480, 0x010b_5460, 2)
+}
+
+// Translated from 00b91e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x73 of the effect array (`EFFECT_SHADER_NOISE_NORMALMAP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5640` (+0) and `010b5620` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b91e40 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b91e40(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5640, 0x010b_5620, 2)
+}
+
+// Translated from 00b92180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x29 of the effect array (`EFFECT_SHADER_REFRACTION` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b57d0` (+0) and `010b57b0` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92180 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92180(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_57d0, 0x010b_57b0, 3)
+}
+
+// Translated from 00b92500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x4b of the effect array (`EFFECT_SHADER_INTERFACE_VATS_SCAN` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5b10` (+0) and `010b5af0` (+0x6c) and sizes the texture array (+0x94) to five
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92500 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92500(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5b10, 0x010b_5af0, 5)
+}
+
+// Translated from 00b92690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x69 of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_CLEAR_SIMULATION` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5cb8` (+0) and `010b5c94` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92690 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92690(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5cb8, 0x010b_5c94, 2)
+}
+
+// Translated from 00b927e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6a of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_TEX_OFFSET` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b5ea8` (+0) and `010b5e84` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b927e0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b927e0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_5ea8, 0x010b_5e84, 2)
+}
+
+// Translated from 00b92930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6b of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_WADING_RIPPLE` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6048` (+0) and `010b6028` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92930 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92930(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6048, 0x010b_6028, 2)
+}
+
+// Translated from 00b92a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6c of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_RAIN_RIPPLE` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b61f0` (+0) and `010b61d0` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92a80 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92a80(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_61f0, 0x010b_61d0, 2)
+}
+
+// Translated from 00b92bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6d of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_WADING_HEIGHTMAP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6398` (+0) and `010b6374` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92bd0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92bd0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6398, 0x010b_6374, 2)
+}
+
+// Translated from 00b92d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6e of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_RAIN_HEIGHTMAP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6548` (+0) and `010b6524` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92d90 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92d90(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6548, 0x010b_6524, 2)
+}
+
+// Translated from 00b92ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x6f of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_BLEND_HEIGHTMAPS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b66f0` (+0) and `010b66cc` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b92ee0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b92ee0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_66f0, 0x010b_66cc, 3)
+}
+
+// Translated from 00b93030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x70 of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_SMOOTH_HEIGHTMAP` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b68a0` (+0) and `010b687c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93030 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93030(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_68a0, 0x010b_687c, 2)
+}
+
+// Translated from 00b93180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x71 of the effect array (`EFFECT_SHADER_WATER_DISPLACEMENT_NORMALS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6a40` (+0) and `010b6a20` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93180 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93180(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6a40, 0x010b_6a20, 2)
+}
+
+// Translated from 00b932d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// indices 0x5d and 0x67 of the effect array (`EFFECT_SHADER_WATER_FFT_WATER_SPECTRUM` and `EFFECT_SHADER_WATER_FFT_DISPLAY_WATER_SPECTRUM` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6bd8` (+0) and `010b6bb8` (+0x6c) and sizes the texture array (+0x94) to three
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b932d0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b932d0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6bd8, 0x010b_6bb8, 3)
+}
+
+// Translated from 00b93600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x5e of the effect array (`EFFECT_SHADER_WATER_FFT_HORIZONTAL_BUTTERFLY` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6d90` (+0) and `010b6d70` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93600 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93600(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6d90, 0x010b_6d70, 4)
+}
+
+// Translated from 00b93950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x5f of the effect array (`EFFECT_SHADER_WATER_FFT_VERTICAL_BUTTERFLY` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b6f38` (+0) and `010b6f14` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93950 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93950(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_6f38, 0x010b_6f14, 4)
+}
+
+// Translated from 00b93aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x60 of the effect array (`EFFECT_SHADER_WATER_FFT_HORIZONTAL_SCRAMBLE` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b70d8` (+0) and `010b70b8` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93aa0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93aa0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_70d8, 0x010b_70b8, 4)
+}
+
+// Translated from 00b93bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x61 of the effect array (`EFFECT_SHADER_WATER_FFT_VERTICAL_SCRAMBLE` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7278` (+0) and `010b7258` (+0x6c) and sizes the texture array (+0x94) to four
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93bf0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93bf0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7278, 0x010b_7258, 4)
+}
+
+// Translated from 00b93d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x62 of the effect array (`EFFECT_SHADER_WATER_FFT_NORMALS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7418` (+0) and `010b73f4` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93d40 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93d40(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7418, 0x010b_73f4, 2)
+}
+
+// Translated from 00b93e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x63 of the effect array (`EFFECT_SHADER_WATER_FFT_FILTER` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7598` (+0) and `010b7578` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93e90 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93e90(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7598, 0x010b_7578, 2)
+}
+
+// Translated from 00b93fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x64 of the effect array (`EFFECT_SHADER_WATER_FFT_DISPLAY_NORMALS` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7720` (+0) and `010b7700` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b93fe0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b93fe0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7720, 0x010b_7700, 2)
+}
+
+// Translated from 00b94130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x65 of the effect array (`EFFECT_SHADER_WATER_FFT_DISPLAY_HIGHW` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b78b8` (+0) and `010b7898` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b94130 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b94130(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_78b8, 0x010b_7898, 2)
+}
+
+// Translated from 00b94280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x66 of the effect array (`EFFECT_SHADER_WATER_FFT_DISPLAY_AMPLITUDE` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7a50` (+0) and `010b7a2c` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b94280 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b94280(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7a50, 0x010b_7a2c, 2)
+}
+
+// Translated from 00b943d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespacemanager.cpp`), `thiscall`, no stack words: the
+/// constructor of an `ImageSpaceShader` subclass whose object +0x6c `00b94520` stores at
+/// index 0x68 of the effect array (`EFFECT_SHADER_WATER_FFT_DISPLAY_WATER_HEIGHT` in the Xbox PDB's
+/// `ImageSpaceManager::ImageSpaceEffectEnum`; the class name is unconfirmed, it keeps
+/// `ImageSpaceShader`'s `GetRTTI`). Runs the base constructor `00c04570`, sets the vtables
+/// `010b7bf0` (+0) and `010b7bcc` (+0x6c) and sizes the texture array (+0x94) to two
+/// (`00a90180`). Answers `this`.
+// Translation incomplete: 00b943d0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the base) is not translated.
+pub fn fn_00b943d0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_image_space_shader(e, this, 0x010b_7bf0, 0x010b_7bcc, 2)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -553,6 +1616,84 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b8_ad70, fn_00b8ad70()),
         entry!(0x00b8_b360, image_space_manager_setup_effects(Ptr)),
         entry!(0x00b9_77d0, image_space_manager_initialize(Ptr)),
+        entry!(0x00b9_22d0, fn_00b922d0(Ptr) -> Ptr),
+        entry!(0x00b8_bce0, fn_00b8bce0(Ptr) -> Ptr),
+        entry!(0x00b8_bea0, fn_00b8bea0(Ptr) -> Ptr),
+        entry!(0x00b8_c070, fn_00b8c070(Ptr) -> Ptr),
+        entry!(0x00b8_d330, fn_00b8d330(Ptr) -> Ptr),
+        entry!(0x00b8_d5b0, fn_00b8d5b0(Ptr) -> Ptr),
+        entry!(0x00b8_d700, fn_00b8d700(Ptr) -> Ptr),
+        entry!(0x00b8_d850, fn_00b8d850(Ptr) -> Ptr),
+        entry!(0x00b8_d990, fn_00b8d990(Ptr) -> Ptr),
+        entry!(0x00b8_dae0, fn_00b8dae0(Ptr) -> Ptr),
+        entry!(0x00b8_dc30, fn_00b8dc30(Ptr) -> Ptr),
+        entry!(0x00b8_dd80, fn_00b8dd80(Ptr) -> Ptr),
+        entry!(0x00b8_ded0, fn_00b8ded0(Ptr) -> Ptr),
+        entry!(0x00b8_e020, fn_00b8e020(Ptr) -> Ptr),
+        entry!(0x00b8_e170, fn_00b8e170(Ptr) -> Ptr),
+        entry!(0x00b8_e2c0, fn_00b8e2c0(Ptr) -> Ptr),
+        entry!(0x00b8_e460, fn_00b8e460(Ptr) -> Ptr),
+        entry!(0x00b8_e600, fn_00b8e600(Ptr) -> Ptr),
+        entry!(0x00b8_e7a0, fn_00b8e7a0(Ptr) -> Ptr),
+        entry!(0x00b8_e940, fn_00b8e940(Ptr) -> Ptr),
+        entry!(0x00b8_eae0, fn_00b8eae0(Ptr) -> Ptr),
+        entry!(0x00b8_ec80, fn_00b8ec80(Ptr) -> Ptr),
+        entry!(0x00b8_ee20, fn_00b8ee20(Ptr) -> Ptr),
+        entry!(0x00b8_efa0, fn_00b8efa0(Ptr) -> Ptr),
+        entry!(0x00b8_f010, fn_00b8f010(Ptr) -> Ptr),
+        entry!(0x00b8_f1b0, fn_00b8f1b0(Ptr) -> Ptr),
+        entry!(0x00b8_f360, fn_00b8f360(Ptr) -> Ptr),
+        entry!(0x00b8_f520, fn_00b8f520(Ptr) -> Ptr),
+        entry!(0x00b8_f660, fn_00b8f660(Ptr) -> Ptr),
+        entry!(0x00b8_f7e0, fn_00b8f7e0(Ptr) -> Ptr),
+        entry!(0x00b8_f930, fn_00b8f930(Ptr) -> Ptr),
+        entry!(0x00b8_fa80, fn_00b8fa80(Ptr) -> Ptr),
+        entry!(0x00b8_fbe0, fn_00b8fbe0(Ptr) -> Ptr),
+        entry!(0x00b8_fd40, fn_00b8fd40(Ptr) -> Ptr),
+        entry!(0x00b8_fea0, fn_00b8fea0(Ptr) -> Ptr),
+        entry!(0x00b8_fff0, fn_00b8fff0(Ptr) -> Ptr),
+        entry!(0x00b9_0190, fn_00b90190(Ptr) -> Ptr),
+        entry!(0x00b9_0330, fn_00b90330(Ptr) -> Ptr),
+        entry!(0x00b9_0520, fn_00b90520(Ptr) -> Ptr),
+        entry!(0x00b9_06b0, fn_00b906b0(Ptr) -> Ptr),
+        entry!(0x00b9_0830, fn_00b90830(Ptr) -> Ptr),
+        entry!(0x00b9_09c0, fn_00b909c0(Ptr) -> Ptr),
+        entry!(0x00b9_0b50, fn_00b90b50(Ptr) -> Ptr),
+        entry!(0x00b9_0ce0, fn_00b90ce0(Ptr) -> Ptr),
+        entry!(0x00b9_0e70, fn_00b90e70(Ptr) -> Ptr),
+        entry!(0x00b9_1000, fn_00b91000(Ptr) -> Ptr),
+        entry!(0x00b9_11a0, fn_00b911a0(Ptr) -> Ptr),
+        entry!(0x00b9_1340, fn_00b91340(Ptr) -> Ptr),
+        entry!(0x00b9_14e0, fn_00b914e0(Ptr) -> Ptr),
+        entry!(0x00b9_1680, fn_00b91680(Ptr) -> Ptr),
+        entry!(0x00b9_17c0, fn_00b917c0(Ptr) -> Ptr),
+        entry!(0x00b9_1900, fn_00b91900(Ptr) -> Ptr),
+        entry!(0x00b9_1a40, fn_00b91a40(Ptr) -> Ptr),
+        entry!(0x00b9_1b80, fn_00b91b80(Ptr) -> Ptr),
+        entry!(0x00b9_1cf0, fn_00b91cf0(Ptr) -> Ptr),
+        entry!(0x00b9_1e40, fn_00b91e40(Ptr) -> Ptr),
+        entry!(0x00b9_2180, fn_00b92180(Ptr) -> Ptr),
+        entry!(0x00b9_2500, fn_00b92500(Ptr) -> Ptr),
+        entry!(0x00b9_2690, fn_00b92690(Ptr) -> Ptr),
+        entry!(0x00b9_27e0, fn_00b927e0(Ptr) -> Ptr),
+        entry!(0x00b9_2930, fn_00b92930(Ptr) -> Ptr),
+        entry!(0x00b9_2a80, fn_00b92a80(Ptr) -> Ptr),
+        entry!(0x00b9_2bd0, fn_00b92bd0(Ptr) -> Ptr),
+        entry!(0x00b9_2d90, fn_00b92d90(Ptr) -> Ptr),
+        entry!(0x00b9_2ee0, fn_00b92ee0(Ptr) -> Ptr),
+        entry!(0x00b9_3030, fn_00b93030(Ptr) -> Ptr),
+        entry!(0x00b9_3180, fn_00b93180(Ptr) -> Ptr),
+        entry!(0x00b9_32d0, fn_00b932d0(Ptr) -> Ptr),
+        entry!(0x00b9_3600, fn_00b93600(Ptr) -> Ptr),
+        entry!(0x00b9_3950, fn_00b93950(Ptr) -> Ptr),
+        entry!(0x00b9_3aa0, fn_00b93aa0(Ptr) -> Ptr),
+        entry!(0x00b9_3bf0, fn_00b93bf0(Ptr) -> Ptr),
+        entry!(0x00b9_3d40, fn_00b93d40(Ptr) -> Ptr),
+        entry!(0x00b9_3e90, fn_00b93e90(Ptr) -> Ptr),
+        entry!(0x00b9_3fe0, fn_00b93fe0(Ptr) -> Ptr),
+        entry!(0x00b9_4130, fn_00b94130(Ptr) -> Ptr),
+        entry!(0x00b9_4280, fn_00b94280(Ptr) -> Ptr),
+        entry!(0x00b9_43d0, fn_00b943d0(Ptr) -> Ptr),
     ]
 }
 
@@ -1043,5 +2184,494 @@ mod set_up_00b94520_tests {
             .count();
         assert_eq!(calls(&e, SLOT_120).len(), left);
         assert!(calls(&e, SLOT_120).iter().all(|a| a == &vec![object]));
+    }
+}
+
+#[cfg(test)]
+mod shader_constructor_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The base constructor writes marker vtables; the resize checks both were replaced
+    /// before it runs.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(IMAGE_SPACE_SHADER_CONSTRUCT_00C04570, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            e.mem.set_u32(a[0] + SHADER_EFFECT_BASE, 0x2222);
+            a[0].into_ret()
+        });
+        e.register(ARRAY_SET_SIZE_00A90180, |e, a| {
+            let object = a[0] - SHADER_TEXTURES;
+            assert_ne!(e.mem.u32(object), 0x1111);
+            assert_ne!(e.mem.u32(object + SHADER_EFFECT_BASE), 0x2222);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn check(addr: u32, vtable: u32, effect_vtable: u32, textures: u32) {
+        let mut e = engine();
+        let this = e.mem.alloc(0xd0);
+        assert_eq!(e.call(addr, &args![this]).u32(), this);
+        let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            [
+                addr,
+                IMAGE_SPACE_SHADER_CONSTRUCT_00C04570,
+                ARRAY_SET_SIZE_00A90180
+            ]
+        );
+        assert_eq!(
+            calls(&e, IMAGE_SPACE_SHADER_CONSTRUCT_00C04570),
+            vec![vec![this]]
+        );
+        assert_eq!(
+            calls(&e, ARRAY_SET_SIZE_00A90180),
+            vec![vec![this + SHADER_TEXTURES, textures]]
+        );
+        assert_eq!(e.mem.u32(this), vtable);
+        assert_eq!(e.mem.u32(this + SHADER_EFFECT_BASE), effect_vtable);
+    }
+
+    /// The engine, `this` and the object at `011f9520` (null without one; else with two
+    /// references).
+    fn texture_mask_rig(with_object: bool) -> (Engine, u32, u32) {
+        let mut e = engine();
+        let object = if with_object { e.mem.alloc(8) } else { 0 };
+        if with_object {
+            e.mem.set_u32(object + 4, 2);
+        }
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(OBJECT_011F9520, object);
+        let this = e.mem.alloc(0xd4);
+        e.mem.set_u32(this + 0xd0, 0xdead_beef);
+        (e, this, object)
+    }
+
+    #[test]
+    fn fn_00b922d0_takes_a_reference_on_the_object() {
+        let (mut e, this, object) = texture_mask_rig(true);
+        assert_eq!(e.call(0x00b9_22d0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010b_5978);
+        assert_eq!(e.mem.u32(this + SHADER_EFFECT_BASE), 0x010b_5954);
+        assert_eq!(
+            calls(&e, ARRAY_SET_SIZE_00A90180),
+            vec![vec![this + SHADER_TEXTURES, 2]]
+        );
+        assert_eq!(e.mem.u32(this + 0xd0), object);
+        assert_eq!(e.mem.u32(object + 4), 3);
+        // The cleared pointer had nothing to give up.
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b922d0_with_no_object_keeps_the_pointer_clear() {
+        let (mut e, this, _) = texture_mask_rig(false);
+        e.call(0x00b9_22d0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0xd0), 0);
+        assert!(calls(&e, IMPORT_INTERLOCKED_INCREMENT).is_empty());
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b8bce0_constructs_the_shader() {
+        check(0x00b8_bce0, 0x010a_ffc0, 0x010a_ffa0, 5);
+    }
+
+    #[test]
+    fn fn_00b8bea0_constructs_the_shader() {
+        check(0x00b8_bea0, 0x010b_0198, 0x010b_0174, 2);
+    }
+
+    #[test]
+    fn fn_00b8c070_constructs_the_shader() {
+        check(0x00b8_c070, 0x010b_0338, 0x010b_0318, 4);
+    }
+
+    #[test]
+    fn fn_00b8d330_constructs_the_shader() {
+        check(0x00b8_d330, 0x010b_0518, 0x010b_04f4, 3);
+    }
+
+    #[test]
+    fn fn_00b8d5b0_constructs_the_shader() {
+        check(0x00b8_d5b0, 0x010b_06c0, 0x010b_06a0, 2);
+    }
+
+    #[test]
+    fn fn_00b8d700_constructs_the_shader() {
+        check(0x00b8_d700, 0x010b_0860, 0x010b_083c, 3);
+    }
+
+    #[test]
+    fn fn_00b8d850_constructs_the_shader() {
+        check(0x00b8_d850, 0x010b_0a00, 0x010b_09dc, 2);
+    }
+
+    #[test]
+    fn fn_00b8d990_constructs_the_shader() {
+        check(0x00b8_d990, 0x010b_0b98, 0x010b_0b78, 2);
+    }
+
+    #[test]
+    fn fn_00b8dae0_constructs_the_shader() {
+        check(0x00b8_dae0, 0x010b_0d40, 0x010b_0d1c, 2);
+    }
+
+    #[test]
+    fn fn_00b8dc30_constructs_the_shader() {
+        check(0x00b8_dc30, 0x010b_0ec0, 0x010b_0e9c, 2);
+    }
+
+    #[test]
+    fn fn_00b8dd80_constructs_the_shader() {
+        check(0x00b8_dd80, 0x010b_1040, 0x010b_101c, 2);
+    }
+
+    #[test]
+    fn fn_00b8ded0_constructs_the_shader() {
+        check(0x00b8_ded0, 0x010b_11c0, 0x010b_119c, 2);
+    }
+
+    #[test]
+    fn fn_00b8e020_constructs_the_shader() {
+        check(0x00b8_e020, 0x010b_1340, 0x010b_1320, 2);
+    }
+
+    #[test]
+    fn fn_00b8e170_constructs_the_shader() {
+        check(0x00b8_e170, 0x010b_14c0, 0x010b_14a0, 2);
+    }
+
+    #[test]
+    fn fn_00b8e2c0_constructs_the_shader() {
+        check(0x00b8_e2c0, 0x010b_1640, 0x010b_1620, 3);
+    }
+
+    #[test]
+    fn fn_00b8e460_constructs_the_shader() {
+        check(0x00b8_e460, 0x010b_17f8, 0x010b_17d8, 3);
+    }
+
+    #[test]
+    fn fn_00b8e600_constructs_the_shader() {
+        check(0x00b8_e600, 0x010b_1980, 0x010b_1960, 3);
+    }
+
+    #[test]
+    fn fn_00b8e7a0_constructs_the_shader() {
+        check(0x00b8_e7a0, 0x010b_1b08, 0x010b_1ae8, 3);
+    }
+
+    #[test]
+    fn fn_00b8e940_constructs_the_shader() {
+        check(0x00b8_e940, 0x010b_1c90, 0x010b_1c70, 3);
+    }
+
+    #[test]
+    fn fn_00b8eae0_constructs_the_shader() {
+        check(0x00b8_eae0, 0x010b_1e20, 0x010b_1dfc, 3);
+    }
+
+    #[test]
+    fn fn_00b8ec80_constructs_the_shader() {
+        check(0x00b8_ec80, 0x010b_1fb0, 0x010b_1f8c, 3);
+    }
+
+    #[test]
+    fn fn_00b8ee20_constructs_the_shader() {
+        check(0x00b8_ee20, 0x010b_2140, 0x010b_211c, 2);
+    }
+
+    #[test]
+    fn fn_00b8efa0_constructs_the_shader() {
+        check(0x00b8_efa0, 0x010b_2a98, 0x010b_2a74, 2);
+    }
+
+    #[test]
+    fn fn_00b8f010_constructs_the_shader() {
+        check(0x00b8_f010, 0x010b_2308, 0x010b_22e8, 2);
+    }
+
+    #[test]
+    fn fn_00b8f1b0_constructs_the_shader() {
+        check(0x00b8_f1b0, 0x010b_2490, 0x010b_2470, 2);
+    }
+
+    #[test]
+    fn fn_00b8f360_constructs_the_shader() {
+        check(0x00b8_f360, 0x010b_2610, 0x010b_25f0, 1);
+    }
+
+    #[test]
+    fn fn_00b8f520_constructs_the_shader() {
+        check(0x00b8_f520, 0x010b_27a8, 0x010b_2784, 1);
+    }
+
+    #[test]
+    fn fn_00b8f660_constructs_the_shader() {
+        check(0x00b8_f660, 0x010b_2920, 0x010b_28fc, 3);
+    }
+
+    #[test]
+    fn fn_00b8f7e0_constructs_the_shader() {
+        check(0x00b8_f7e0, 0x010b_2c10, 0x010b_2bec, 4);
+    }
+
+    #[test]
+    fn fn_00b8f930_constructs_the_shader() {
+        check(0x00b8_f930, 0x010b_2db0, 0x010b_2d8c, 2);
+    }
+
+    #[test]
+    fn fn_00b8fa80_constructs_the_shader() {
+        check(0x00b8_fa80, 0x010b_2f50, 0x010b_2f30, 2);
+    }
+
+    #[test]
+    fn fn_00b8fbe0_constructs_the_shader() {
+        check(0x00b8_fbe0, 0x010b_30e0, 0x010b_30c0, 2);
+    }
+
+    #[test]
+    fn fn_00b8fd40_constructs_the_shader() {
+        check(0x00b8_fd40, 0x010b_3268, 0x010b_3244, 5);
+    }
+
+    #[test]
+    fn fn_00b8fea0_constructs_the_shader() {
+        check(0x00b8_fea0, 0x010b_33f0, 0x010b_33cc, 3);
+    }
+
+    #[test]
+    fn fn_00b8fff0_constructs_the_shader() {
+        check(0x00b8_fff0, 0x010b_3598, 0x010b_3574, 4);
+    }
+
+    #[test]
+    fn fn_00b90190_constructs_the_shader() {
+        check(0x00b9_0190, 0x010b_37a8, 0x010b_3788, 4);
+    }
+
+    #[test]
+    fn fn_00b90330_constructs_the_shader() {
+        check(0x00b9_0330, 0x010b_3958, 0x010b_3934, 4);
+    }
+
+    #[test]
+    fn fn_00b90520_constructs_the_shader() {
+        check(0x00b9_0520, 0x010b_3af0, 0x010b_3ad0, 2);
+    }
+
+    #[test]
+    fn fn_00b906b0_constructs_the_shader() {
+        check(0x00b9_06b0, 0x010b_3c78, 0x010b_3c58, 2);
+    }
+
+    #[test]
+    fn fn_00b90830_constructs_the_shader() {
+        check(0x00b9_0830, 0x010b_3e18, 0x010b_3df4, 2);
+    }
+
+    #[test]
+    fn fn_00b909c0_constructs_the_shader() {
+        check(0x00b9_09c0, 0x010b_3fa8, 0x010b_3f88, 2);
+    }
+
+    #[test]
+    fn fn_00b90b50_constructs_the_shader() {
+        check(0x00b9_0b50, 0x010b_4138, 0x010b_4114, 2);
+    }
+
+    #[test]
+    fn fn_00b90ce0_constructs_the_shader() {
+        check(0x00b9_0ce0, 0x010b_42c8, 0x010b_42a4, 3);
+    }
+
+    #[test]
+    fn fn_00b90e70_constructs_the_shader() {
+        check(0x00b9_0e70, 0x010b_4460, 0x010b_443c, 2);
+    }
+
+    #[test]
+    fn fn_00b91000_constructs_the_shader() {
+        check(0x00b9_1000, 0x010b_4600, 0x010b_45dc, 3);
+    }
+
+    #[test]
+    fn fn_00b911a0_constructs_the_shader() {
+        check(0x00b9_11a0, 0x010b_47a0, 0x010b_477c, 2);
+    }
+
+    #[test]
+    fn fn_00b91340_constructs_the_shader() {
+        check(0x00b9_1340, 0x010b_4938, 0x010b_4914, 3);
+    }
+
+    #[test]
+    fn fn_00b914e0_constructs_the_shader() {
+        check(0x00b9_14e0, 0x010b_4ad0, 0x010b_4aac, 2);
+    }
+
+    #[test]
+    fn fn_00b91680_constructs_the_shader() {
+        check(0x00b9_1680, 0x010b_4c68, 0x010b_4c48, 5);
+    }
+
+    #[test]
+    fn fn_00b917c0_constructs_the_shader() {
+        check(0x00b9_17c0, 0x010b_4de8, 0x010b_4dc8, 2);
+    }
+
+    #[test]
+    fn fn_00b91900_constructs_the_shader() {
+        check(0x00b9_1900, 0x010b_4f80, 0x010b_4f60, 3);
+    }
+
+    #[test]
+    fn fn_00b91a40_constructs_the_shader() {
+        check(0x00b9_1a40, 0x010b_5140, 0x010b_511c, 2);
+    }
+
+    #[test]
+    fn fn_00b91b80_constructs_the_shader() {
+        check(0x00b9_1b80, 0x010b_52c0, 0x010b_52a0, 3);
+    }
+
+    #[test]
+    fn fn_00b91cf0_constructs_the_shader() {
+        check(0x00b9_1cf0, 0x010b_5480, 0x010b_5460, 2);
+    }
+
+    #[test]
+    fn fn_00b91e40_constructs_the_shader() {
+        check(0x00b9_1e40, 0x010b_5640, 0x010b_5620, 2);
+    }
+
+    #[test]
+    fn fn_00b92180_constructs_the_shader() {
+        check(0x00b9_2180, 0x010b_57d0, 0x010b_57b0, 3);
+    }
+
+    #[test]
+    fn fn_00b92500_constructs_the_shader() {
+        check(0x00b9_2500, 0x010b_5b10, 0x010b_5af0, 5);
+    }
+
+    #[test]
+    fn fn_00b92690_constructs_the_shader() {
+        check(0x00b9_2690, 0x010b_5cb8, 0x010b_5c94, 2);
+    }
+
+    #[test]
+    fn fn_00b927e0_constructs_the_shader() {
+        check(0x00b9_27e0, 0x010b_5ea8, 0x010b_5e84, 2);
+    }
+
+    #[test]
+    fn fn_00b92930_constructs_the_shader() {
+        check(0x00b9_2930, 0x010b_6048, 0x010b_6028, 2);
+    }
+
+    #[test]
+    fn fn_00b92a80_constructs_the_shader() {
+        check(0x00b9_2a80, 0x010b_61f0, 0x010b_61d0, 2);
+    }
+
+    #[test]
+    fn fn_00b92bd0_constructs_the_shader() {
+        check(0x00b9_2bd0, 0x010b_6398, 0x010b_6374, 2);
+    }
+
+    #[test]
+    fn fn_00b92d90_constructs_the_shader() {
+        check(0x00b9_2d90, 0x010b_6548, 0x010b_6524, 2);
+    }
+
+    #[test]
+    fn fn_00b92ee0_constructs_the_shader() {
+        check(0x00b9_2ee0, 0x010b_66f0, 0x010b_66cc, 3);
+    }
+
+    #[test]
+    fn fn_00b93030_constructs_the_shader() {
+        check(0x00b9_3030, 0x010b_68a0, 0x010b_687c, 2);
+    }
+
+    #[test]
+    fn fn_00b93180_constructs_the_shader() {
+        check(0x00b9_3180, 0x010b_6a40, 0x010b_6a20, 2);
+    }
+
+    #[test]
+    fn fn_00b932d0_constructs_the_shader() {
+        check(0x00b9_32d0, 0x010b_6bd8, 0x010b_6bb8, 3);
+    }
+
+    #[test]
+    fn fn_00b93600_constructs_the_shader() {
+        check(0x00b9_3600, 0x010b_6d90, 0x010b_6d70, 4);
+    }
+
+    #[test]
+    fn fn_00b93950_constructs_the_shader() {
+        check(0x00b9_3950, 0x010b_6f38, 0x010b_6f14, 4);
+    }
+
+    #[test]
+    fn fn_00b93aa0_constructs_the_shader() {
+        check(0x00b9_3aa0, 0x010b_70d8, 0x010b_70b8, 4);
+    }
+
+    #[test]
+    fn fn_00b93bf0_constructs_the_shader() {
+        check(0x00b9_3bf0, 0x010b_7278, 0x010b_7258, 4);
+    }
+
+    #[test]
+    fn fn_00b93d40_constructs_the_shader() {
+        check(0x00b9_3d40, 0x010b_7418, 0x010b_73f4, 2);
+    }
+
+    #[test]
+    fn fn_00b93e90_constructs_the_shader() {
+        check(0x00b9_3e90, 0x010b_7598, 0x010b_7578, 2);
+    }
+
+    #[test]
+    fn fn_00b93fe0_constructs_the_shader() {
+        check(0x00b9_3fe0, 0x010b_7720, 0x010b_7700, 2);
+    }
+
+    #[test]
+    fn fn_00b94130_constructs_the_shader() {
+        check(0x00b9_4130, 0x010b_78b8, 0x010b_7898, 2);
+    }
+
+    #[test]
+    fn fn_00b94280_constructs_the_shader() {
+        check(0x00b9_4280, 0x010b_7a50, 0x010b_7a2c, 2);
+    }
+
+    #[test]
+    fn fn_00b943d0_constructs_the_shader() {
+        check(0x00b9_43d0, 0x010b_7bf0, 0x010b_7bcc, 2);
     }
 }

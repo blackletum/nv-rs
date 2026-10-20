@@ -296,6 +296,130 @@ pub fn ni_source_cube_map_load_from_files(
     });
 }
 
+use crate::units::nimain::nipixeldata::NiPixelData;
+
+/// `NiPixelData::NiPixelData` (`00a7c190`, the engine map's `_ov2`; `thiscall`, `RET 0x14`:
+/// width, height, the address of a pixel format, mipmap levels, faces) and `_memcpy`
+/// (`00ec44d0`, `cdecl`: destination, source, size).
+const NI_PIXEL_DATA_CONSTRUCT_00A7C190: u32 = 0x00a7_c190;
+const MEMCPY: u32 = 0x00ec_44d0;
+/// `NiSourceTexture::m_spSrcPixelData` (Xbox PDB, +0x3c; the same on PC).
+const SOURCE_PIXEL_DATA: u32 = 0x3c;
+
+/// `NiPointer<T>::operator=` expanded inline on the pointer at `slot`: nothing when `object`
+/// is already there; else the old object's reference given up (deleted through its vtable
+/// slot +4 at zero), `object` stored and, when not null, a reference taken on it.
+fn assign_ni_pointer(e: &mut Engine, slot: u32, object: u32) {
+    let old = e.mem.u32(slot);
+    if old == object {
+        return;
+    }
+    if old != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(old, 4, &args![]);
+        }
+    }
+    e.mem.set_u32(slot, object);
+    if object != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+    }
+}
+
+// Translated from 00a60940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::LoadFromPixelData` (Xbox PDB), `thiscall`, six stack words: the six
+/// faces' `NiPixelData`. Makes the cube map's pixel data (0x74 bytes from `00aa13e0`;
+/// `NiPixelData::NiPixelData` `00a7c190` with the first face's width and height, the first
+/// word of each of its arrays, the address of its pixel format at +8, its mipmap level count
+/// and 6 faces; null when the allocation fails) and assigns it to `m_spSrcPixelData` (+0x3c,
+/// the `NiPointer` assignment inline). Then, with a reference on each face held in six stack
+/// `NiPointer`s (cleared, then assigned in order), copies for each face f and each of its
+/// mipmap levels m (none when its level count is 0; the count read again after each level)
+/// the level's bytes (offset m + 1 minus offset m of the face) from the face's pixels plus
+/// offset m to the cube map's pixels (read again for each level) plus its offset m plus f
+/// times its offset at its own level count (one face's size) with `_memcpy`. Finally the six
+/// stack pointers are released, the last first. A null face is read through as the exe does.
+pub fn ni_source_cube_map_load_from_pixel_data(
+    e: &mut Engine,
+    this: Ptr,
+    face_0: Ptr<NiPixelData>,
+    face_1: Ptr<NiPixelData>,
+    face_2: Ptr<NiPixelData>,
+    face_3: Ptr<NiPixelData>,
+    face_4: Ptr<NiPixelData>,
+    face_5: Ptr<NiPixelData>,
+) {
+    let base = this.addr();
+    let block = e.call(NI_ALLOCATE, &args![0x74u32]).u32();
+    let data = if block != 0 {
+        let levels = e.get(face_0, NiPixelData::m_uiMipmapLevels);
+        let heights = e.get(face_0, NiPixelData::m_puiHeight);
+        let height = e.mem.u32(heights);
+        let widths = e.get(face_0, NiPixelData::m_puiWidth);
+        let width = e.mem.u32(widths);
+        let format = face_0.addr().wrapping_add(8);
+        e.call(
+            NI_PIXEL_DATA_CONSTRUCT_00A7C190,
+            &args![block, width, height, format, levels, 6u32],
+        )
+        .u32()
+    } else {
+        0
+    };
+    assign_ni_pointer(e, base.wrapping_add(SOURCE_PIXEL_DATA), data);
+    let faces = [face_0, face_1, face_2, face_3, face_4, face_5];
+    e.with_stack(0x18, |e, held| {
+        let held = held.addr();
+        for index in 0..6u32 {
+            e.mem.set_u32(held + 4 * index, 0);
+        }
+        for (index, face) in faces.iter().enumerate() {
+            assign_ni_pointer(e, held + 4 * index as u32, face.addr());
+        }
+        for index in 0..6u32 {
+            let source = Ptr::<NiPixelData>::new(e.mem.u32(held + 4 * index));
+            if e.get(source, NiPixelData::m_uiMipmapLevels) == 0 {
+                continue;
+            }
+            let mut level = 0u32;
+            loop {
+                let target =
+                    Ptr::<NiPixelData>::new(e.mem.u32(base.wrapping_add(SOURCE_PIXEL_DATA)));
+                let offsets = e.get(source, NiPixelData::m_puiOffsetInBytes);
+                let next = e.mem.u32(offsets.wrapping_add(4 * level + 4));
+                let start = e.mem.u32(offsets.wrapping_add(4 * level));
+                let size = next.wrapping_sub(start);
+                let from = start.wrapping_add(e.get(source, NiPixelData::m_pucPixels));
+                let target_offsets = e.get(target, NiPixelData::m_puiOffsetInBytes);
+                let target_levels = e.get(target, NiPixelData::m_uiMipmapLevels);
+                let face_size = e.mem.u32(target_offsets.wrapping_add(4 * target_levels));
+                let to = face_size
+                    .wrapping_mul(index)
+                    .wrapping_add(e.mem.u32(target_offsets.wrapping_add(4 * level)))
+                    .wrapping_add(e.get(target, NiPixelData::m_pucPixels));
+                e.call(MEMCPY, &args![to, from, size]);
+                level += 1;
+                if level >= e.get(source, NiPixelData::m_uiMipmapLevels) {
+                    break;
+                }
+            }
+        }
+        for index in (0..6u32).rev() {
+            let face = e.mem.u32(held + 4 * index);
+            if face != 0 {
+                let left = e
+                    .call(IMPORT_INTERLOCKED_DECREMENT, &args![face.wrapping_add(4)])
+                    .u32();
+                if left == 0 {
+                    e.vcall(face, 4, &args![]);
+                }
+            }
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -310,6 +434,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a60cb0, ni_source_cube_map_get_rtti() -> Ptr),
         entry!(0x00a6_0870, ni_source_cube_map_save_binary(Ptr, Ptr)),
+        entry!(
+            0x00a6_0940,
+            ni_source_cube_map_load_from_pixel_data(
+                Ptr,
+                Ptr<NiPixelData>,
+                Ptr<NiPixelData>,
+                Ptr<NiPixelData>,
+                Ptr<NiPixelData>,
+                Ptr<NiPixelData>,
+                Ptr<NiPixelData>,
+            )
+        ),
     ]
 }
 
@@ -698,5 +834,155 @@ mod b000h_tests {
         // Two faces were read and released; the missing face's names are not freed.
         assert_eq!(calls(&e, DELETE).len(), 2);
         assert_eq!(calls(&e, FREE_00AA10F0).len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod load_from_pixel_data_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0e80_0000;
+    const VTABLE: u32 = 0x0e81_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// A pixel data object of `levels` levels, the level sizes 0x40, 0x10, 0x4 (offsets 0,
+    /// 0x40, 0x50, 0x54 per face), `faces` faces and one reference.
+    fn pixel_data(e: &mut Engine, levels: u32, faces: u32) -> u32 {
+        let data = e.mem.alloc(0x74);
+        e.mem.set_u32(data, VTABLE);
+        e.mem.set_u32(data + 4, 1);
+        let widths = e.mem.alloc(0xc);
+        let heights = e.mem.alloc(0xc);
+        e.mem.set_u32(widths, 8);
+        e.mem.set_u32(heights, 2);
+        let offsets = e.mem.alloc(0x10);
+        for (index, offset) in [0u32, 0x40, 0x50, 0x54].iter().enumerate() {
+            e.mem.set_u32(offsets + 4 * index as u32, *offset);
+        }
+        let pixels = e.mem.alloc(0x54 * faces);
+        e.mem.set_u32(data + 0x50, pixels);
+        e.mem.set_u32(data + 0x54, widths);
+        e.mem.set_u32(data + 0x58, heights);
+        e.mem.set_u32(data + 0x5c, offsets);
+        e.mem.set_u32(data + 0x60, levels);
+        data
+    }
+
+    fn engine(allocate: bool) -> Engine {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(DELETE, |_, _| Ret::default());
+        e.put_vtable(VTABLE, &[0, DELETE]);
+        e.register_double(NI_ALLOCATE, move |e, a| {
+            if allocate {
+                e.mem.alloc(a[0]).into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        // The constructor makes the block a three-level, six-face pixel data object.
+        e.register(NI_PIXEL_DATA_CONSTRUCT_00A7C190, |e, a| {
+            let made = pixel_data(e, 3, 6);
+            let block = a[0];
+            let words = e.mem.bytes(made, 0x74);
+            e.mem.write(block, &words);
+            e.mem.set_u32(block + 4, 0);
+            block.into_ret()
+        });
+        e.register(MEMCPY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn ni_source_cube_map_load_from_pixel_data_copies_every_level_of_every_face() {
+        let mut e = engine(true);
+        let this = e.mem.alloc(0x48);
+        let old = pixel_data(&mut e, 1, 1);
+        e.mem.set_u32(this + SOURCE_PIXEL_DATA, old);
+        let faces: Vec<u32> = (0..6).map(|_| pixel_data(&mut e, 3, 1)).collect();
+        let mut words = vec![this];
+        words.extend_from_slice(&faces);
+        e.call(0x00a6_0940, &words);
+        let made = e.mem.u32(this + SOURCE_PIXEL_DATA);
+        assert_ne!(made, old);
+        assert_eq!(e.mem.u32(made + 4), 1);
+        // The old pixel data lost its only reference.
+        assert_eq!(calls(&e, DELETE)[0], vec![old]);
+        assert_eq!(
+            calls(&e, NI_PIXEL_DATA_CONSTRUCT_00A7C190),
+            vec![vec![made, 8, 2, faces[0] + 8, 3, 6]]
+        );
+        let copies = calls(&e, MEMCPY);
+        assert_eq!(copies.len(), 18);
+        let target = e.mem.u32(made + 0x50);
+        let sizes = [0x40u32, 0x10, 0x4];
+        let starts = [0u32, 0x40, 0x50];
+        for face in 0..6u32 {
+            let source = e.mem.u32(faces[face as usize] + 0x50);
+            for level in 0..3u32 {
+                let copy = &copies[(face * 3 + level) as usize];
+                assert_eq!(
+                    copy,
+                    &vec![
+                        target + 0x54 * face + starts[level as usize],
+                        source + starts[level as usize],
+                        sizes[level as usize]
+                    ]
+                );
+            }
+        }
+        // The faces keep their own reference: taken and given back once each.
+        for face in &faces {
+            assert_eq!(e.mem.u32(face + 4), 1);
+        }
+        assert_eq!(calls(&e, DELETE).len(), 1);
+        let released: Vec<u32> = calls(&e, IMPORT_INTERLOCKED_DECREMENT)
+            .iter()
+            .map(|a| a[0] - 4)
+            .collect();
+        let mut last_first = faces.clone();
+        last_first.reverse();
+        assert_eq!(released[1..], last_first[..]);
+    }
+
+    #[test]
+    fn ni_source_cube_map_load_from_pixel_data_without_memory_reads_through_null() {
+        let mut e = engine(false);
+        // The copies then read the null pixel data's fields, as the exe does.
+        e.map(0, 0x1000);
+        let this = e.mem.alloc(0x48);
+        let faces: Vec<u32> = (0..6)
+            .map(|index| pixel_data(&mut e, u32::from(index == 2), 1))
+            .collect();
+        let mut words = vec![this];
+        words.extend_from_slice(&faces);
+        e.call(0x00a6_0940, &words);
+        assert_eq!(e.mem.u32(this + SOURCE_PIXEL_DATA), 0);
+        assert!(calls(&e, NI_PIXEL_DATA_CONSTRUCT_00A7C190).is_empty());
+        // Only face 2 has a level; faces without levels copy nothing.
+        let copies = calls(&e, MEMCPY);
+        assert_eq!(copies.len(), 1);
+        let source = e.mem.u32(faces[2] + 0x50);
+        assert_eq!(copies[0], vec![0, source, 0x40]);
+        assert!(calls(&e, DELETE).is_empty());
     }
 }
