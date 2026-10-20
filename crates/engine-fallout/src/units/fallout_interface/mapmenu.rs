@@ -20,9 +20,23 @@ pub fn fn_007a1aa0(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_007A1C30, &args![this, 1u32]);
 }
 
+/// The scene-graph node `Main::InitSceneGraph` keeps at `011dea14` ("LODRoot", `0086db48`).
+const LOD_ROOT: u32 = 0x011d_ea14;
+
+// Translated from 007a1480 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `mapmenu.cpp` by the map; `cdecl`, no arguments, plain
+/// `RET`): answers the word at `011dea14` (the "LODRoot" node `Main::InitSceneGraph` stores;
+/// `Main::InitTES` reads it at `0086cf98`).
+pub fn fn_007a1480(e: &mut Engine) -> u32 {
+    e.mem.u32(LOD_ROOT)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x007a_1aa0, fn_007a1aa0(Ptr))]
+    vec![
+        entry!(0x007a_1aa0, fn_007a1aa0(Ptr)),
+        entry!(0x007a_1480, fn_007a1480() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +59,18 @@ mod array_destructor_tests {
     #[test]
     fn fn_007a1aa0_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x007a_1aa0, ARRAY_VTABLE_01075530, ARRAY_RELEASE_007A1C30);
+    }
+}
+
+#[cfg(test)]
+mod lod_root_tests {
+    use super::*;
+
+    #[test]
+    fn answers_the_lod_root() {
+        let mut e = Engine::new();
+        e.map(LOD_ROOT & !0xfff, 0x1000);
+        e.mem.set_u32(LOD_ROOT, 0x1234_5678);
+        assert_eq!(e.call(0x007a_1480, &args![]).u32(), 0x1234_5678);
     }
 }

@@ -17,8 +17,10 @@
 //! The game state the move needs is made in the game's memory by the
 //! game's own code, in the order the game makes it ([`PlayerMovement::prepare`]):
 //!
-//! 1. `havok`: `InitHavokSystem` (`00624bf0`, which `WinMain` runs before
-//!    `InitTES`).
+//! 1. At start-up ([`PlayerMovement::start_up`]), as `main` runs them after `NiInit`: `main`
+//!    (`Main::Main` `0086c160`, kept at `011dea0c`), `scenegraph` (`Main::InitSceneGraph`
+//!    `0086d590`) and `tes` (`InitTES`'s head: `TES::TES` `0044fb20`, which runs
+//!    `InitHavokSystem` `00624bf0`, kept at `011dea10`).
 //! 2. `player`: as `Main::InitTES` (`0086cf20`) makes it: `operator new`
 //!    (0xE50 bytes), `PlayerCharacter::PlayerCharacter` (`00938180`), the
 //!    pointer at `011dea3c`, form id 0x14 (vtable +0x128, `(0x14, 1)`); then,
@@ -79,8 +81,33 @@ use std::rc::Rc;
 
 /// `operator new` (`00401000`).
 const NEW: u32 = 0x0040_1000;
-/// `InitHavokSystem` (`00624bf0`).
-const INIT_HAVOK_SYSTEM: u32 = 0x0062_4bf0;
+/// `Main::Main` (Xbox PDB, `0086c160`), the `Main` object's size and its global (`011dea0c`).
+const MAIN_CONSTRUCT: u32 = 0x0086_c160;
+const MAIN_SIZE: u32 = 0xa4;
+const MAIN_OBJECT: u32 = 0x011d_ea0c;
+/// The module handle `WinMain` gets (`main`'s first argument): the image base.
+const IMAGE_BASE: u32 = 0x0040_0000;
+/// `Main::InitSceneGraph` (Xbox PDB, `0086d590`).
+const INIT_SCENE_GRAPH: u32 = 0x0086_d590;
+/// `InitTES`'s head (`0086cf81`..`0086d076`): `Sky::GetInstance` (`0046dd00`, kept at
+/// `011dea20`), `Main::InitSky` (`00877730`), the getters `0086d470` (`011dea18`) and
+/// `007a1480` (`011dea14`), the helper chain (`004505a0`, `00a89af0`, `0045bc00`, slot +0xC),
+/// `TES::TES` (`0044fb20`, 0xC4 bytes, with `010724e8` and the water LOD node `011dea1c`) kept
+/// at `011dea10`, then `00450c50` on it.
+const SKY_GET_INSTANCE: u32 = 0x0046_dd00;
+const SKY_OBJECT: u32 = 0x011d_ea20;
+const INIT_SKY: u32 = 0x0087_7730;
+const OBJECT_LOD_ROOT: u32 = 0x0086_d470;
+const LOD_ROOT: u32 = 0x007a_1480;
+const SKY_HELPER: u32 = 0x0045_05a0;
+const HELPER_ATTACH: u32 = 0x00a8_9af0;
+const HELPER_FIND: u32 = 0x0045_bc00;
+const TES_SIZE: u32 = 0xc4;
+const TES_CONSTRUCT: u32 = 0x0044_fb20;
+const TES_DATA_PATH: u32 = 0x0107_24e8;
+const WATER_LOD_NODE: u32 = 0x011d_ea1c;
+const TES_OBJECT: u32 = 0x011d_ea10;
+const TES_AFTER: u32 = 0x0045_0c50;
 /// `PlayerCharacter::PlayerCharacter` (Xbox PDB, `00938180`) and its size.
 const PLAYER_CONSTRUCT: u32 = 0x0093_8180;
 const PLAYER_SIZE: u32 = 0xe50;
@@ -252,6 +279,11 @@ pub struct PlayerMovement {
     /// Frames the game's code moved the player, and frames it didn't.
     pub engine_frames: u64,
     pub fallback_frames: u64,
+    /// The `Main` object (`main`, `0086af75`) and the scene graph (`0086b071`), made at
+    /// start-up ([`PlayerMovement::start_up`]).
+    main_object: Stage<u32>,
+    scene_graph: Stage<()>,
+    /// `TES` as `InitTES` makes it (its `TES::TES` runs `InitHavokSystem`); stage `tes`.
     havok: Stage<()>,
     player: Stage<u32>,
     /// The cell made, by its form id.
@@ -283,6 +315,8 @@ impl Default for PlayerMovement {
             stops: BTreeMap::new(),
             engine_frames: 0,
             fallback_frames: 0,
+            main_object: Stage::NotTried,
+            scene_graph: Stage::NotTried,
             havok: Stage::NotTried,
             player: Stage::NotTried,
             cell: None,
@@ -394,6 +428,50 @@ impl PlayerMovement {
         out
     }
 
+    /// The game's start-up from `Main::Main` to `TES`, as `main` runs it after `NiInit`, each
+    /// part a stage that records what it reaches: `main`: `operator new(0xA4)` and `Main::Main`
+    /// (`0086c160`) with the main window (`engine::units::platform::create_window`, where `main`
+    /// calls `CreateWindowExA` at `0086af42`) and the module handle, kept at `011dea0c`
+    /// (`0086af4b`..`0086af9e`); then `before_scene_graph` (the renderer's start-up point,
+    /// [`crate::start_renderer_fpu`] in the host); `scenegraph`: `Main::InitSceneGraph`
+    /// (`0086d590`) on it (`0086b071`); `tes`: `InitTES`'s head up to `TES::TES` and
+    /// `00450c50` (`0086cf81`..`0086d076`), whose `TES::TES` runs `InitHavokSystem`. Not run
+    /// (listed): the rest of `main` between them (the renderer `0086d500`, `0086bbd0`,
+    /// `0086bae0`, `0086bf70`, `00702250`, `006519f0`, `00871c90`, `006a2920`, `0086c010`, the
+    /// movie, ...) and `InitTES`'s scope and log objects.
+    pub fn start_up(&mut self, e: &mut Engine, before_scene_graph: impl FnOnce(&mut Engine)) {
+        self.main_object = match self.guarded(e, "main", |e| {
+            let window = engine::units::platform::create_window(e);
+            let block = e.call(NEW, &[MAIN_SIZE]).u32();
+            let main = if block == 0 {
+                0
+            } else {
+                e.call(MAIN_CONSTRUCT, &[block, window, IMAGE_BASE]).u32()
+            };
+            e.mem.set_u32(MAIN_OBJECT, main);
+            Ok(main)
+        }) {
+            Ok(main) => Stage::Done(main),
+            Err(why) => Stage::Failed(why),
+        };
+        before_scene_graph(e);
+        if let Some(main) = self.main_object.done() {
+            self.scene_graph = match self.guarded(e, "scenegraph", |e| {
+                e.call(INIT_SCENE_GRAPH, &[main]);
+                Ok(())
+            }) {
+                Ok(()) => Stage::Done(()),
+                Err(why) => Stage::Failed(why),
+            };
+        }
+        if self.scene_graph.done().is_some() {
+            self.havok = match self.guarded(e, "tes", make_tes) {
+                Ok(()) => Stage::Done(()),
+                Err(why) => Stage::Failed(why),
+            };
+        }
+    }
+
     /// Makes what the move needs that isn't made yet (the module's stages),
     /// for the player in `cell` at `feet`. Each stage runs once (per cell for
     /// the cell's); one that stopped isn't run again. True when everything is
@@ -405,15 +483,6 @@ impl PlayerMovement {
         cell: Option<FormId>,
         input: &MoveInput,
     ) -> bool {
-        if self.havok == Stage::NotTried {
-            self.havok = match self.guarded(e, "havok", |e| {
-                e.call(INIT_HAVOK_SYSTEM, &[]);
-                Ok(())
-            }) {
-                Ok(()) => Stage::Done(()),
-                Err(why) => Stage::Failed(why),
-            };
-        }
         if self.player == Stage::NotTried {
             let made = self.make_player(e, order, input);
             self.player = match made {
@@ -440,7 +509,7 @@ impl PlayerMovement {
                     Err(why) => Stage::Failed(why),
                 }
             } else {
-                Stage::Failed("needs the havok stage".into())
+                Stage::Failed("needs the tes stage".into())
             };
             self.cell = Some((cell, stage));
             self.controller = Stage::NotTried;
@@ -840,10 +909,12 @@ impl PlayerMovement {
         };
         let mut line = format!(
             "Game's movement: {} frames moved by the game's code, {} by crates/physics; \
-             havok {}; player {}; AI threads {}; cell {cell}; controller {}; {} untranslated \
-             addresses reached.",
+             Main {}; scene graph {}; TES {}; player {}; AI threads {}; cell {cell}; \
+             controller {}; {} untranslated addresses reached.",
             self.engine_frames,
             self.fallback_frames,
+            word(&self.main_object),
+            word(&self.scene_graph),
             word(&self.havok),
             word(&self.player),
             word(&self.threads),
@@ -958,6 +1029,51 @@ impl crate::Host {
     }
 }
 
+/// `InitTES`'s head (`0086cf81`..`0086d076`): the sky, `InitSky`, the two scene-graph
+/// getters, the helper chain when `011dea14` holds a node, `TES::TES` into `011dea10`, then
+/// `00450c50` on it. Its scope object and log lines don't run.
+fn make_tes(e: &mut Engine) -> Result<(), String> {
+    let sky = e.call(SKY_GET_INSTANCE, &[]).u32();
+    e.mem.set_u32(SKY_OBJECT, sky);
+    e.call(INIT_SKY, &[]);
+    let object_lod_root = e.call(OBJECT_LOD_ROOT, &[]).u32();
+    let mut helper = e.call(LOD_ROOT, &[]).u32();
+    if helper != 0 {
+        let sky = e.mem.u32(SKY_OBJECT);
+        let result = e.call(SKY_HELPER, &[sky]).u32();
+        e.call(HELPER_ATTACH, &[result, helper]);
+        let object = e.call(HELPER_FIND, &[helper, 0]).u32();
+        helper = if object != 0 {
+            e.vcall(object, 0xc, &[]).u32()
+        } else {
+            0
+        };
+    }
+    let block = e.call(NEW, &[TES_SIZE]).u32();
+    let tes = if block == 0 {
+        0
+    } else {
+        let sky = e.mem.u32(SKY_OBJECT);
+        let water_lod = e.mem.u32(WATER_LOD_NODE);
+        e.call(
+            TES_CONSTRUCT,
+            &[
+                block,
+                TES_DATA_PATH,
+                object_lod_root,
+                helper,
+                sky,
+                water_lod,
+            ],
+        )
+        .u32()
+    };
+    e.mem.set_u32(TES_OBJECT, tes);
+    let tes = e.mem.u32(TES_OBJECT);
+    e.call(TES_AFTER, &[tes]);
+    Ok(())
+}
+
 /// The AI linear task threads as `main` makes them (the module, stage
 /// `threads`): `iNumHWThreads` set from `GetSystemInfo`'s processor count,
 /// 1 made 2 (`0086a950`..`0086a990`; `main`'s INI path set-up `00876ad0`
@@ -1070,6 +1186,81 @@ mod tests {
         assert!(m
             .summary()
             .contains("0 world steps by the game's code (AI thread 2), 1 by crates/physics"));
+    }
+
+    /// Start-up: `Main::Main` with the window and the module handle into `011dea0c`, the
+    /// renderer point, `InitSceneGraph` on `Main`, then `InitTES`'s head: the sky into
+    /// `011dea20`, `InitSky`, the two getters, `TES::TES` (no helper chain when `011dea14` is
+    /// empty) into `011dea10` and `00450c50` on it. A stop in the scene graph leaves `tes`
+    /// not tried.
+    #[test]
+    fn start_up_runs_main_the_scene_graph_and_tes_in_mains_order() {
+        let mut e = Engine::new();
+        e.mem.map(MAIN_OBJECT & !0xfff, 0x1000);
+        e.register(NEW, |_, a| (0x0200_0000 + a[0]).into_ret());
+        e.register(MAIN_CONSTRUCT, |_, a| a[0].into_ret());
+        for f in [INIT_SCENE_GRAPH, INIT_SKY, TES_AFTER] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(SKY_GET_INSTANCE, |_, _| 0x5000u32.into_ret());
+        e.register(OBJECT_LOD_ROOT, |_, _| 0x6000u32.into_ret());
+        e.register(LOD_ROOT, |_, _| Ret::default());
+        e.register(TES_CONSTRUCT, |_, a| a[0].into_ret());
+        e.mem.set_u32(WATER_LOD_NODE, 0x7000);
+        e.call_log = Some(vec![]);
+        let mut m = PlayerMovement::default();
+        let renderer_point = Rc::new(RefCell::new(false));
+        let seen = renderer_point.clone();
+        m.start_up(&mut e, |_| *seen.borrow_mut() = true);
+        assert!(*renderer_point.borrow());
+        let log = e.call_log.take().unwrap();
+        let order: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|(a, _)| {
+                [
+                    MAIN_CONSTRUCT,
+                    INIT_SCENE_GRAPH,
+                    SKY_GET_INSTANCE,
+                    INIT_SKY,
+                    OBJECT_LOD_ROOT,
+                    LOD_ROOT,
+                    TES_CONSTRUCT,
+                    TES_AFTER,
+                ]
+                .contains(a)
+            })
+            .collect();
+        let main = 0x0200_0000 + MAIN_SIZE;
+        let tes = 0x0200_0000 + TES_SIZE;
+        assert_eq!(order[0].0, MAIN_CONSTRUCT);
+        assert_eq!(order[0].1[0], main);
+        assert_eq!(order[0].1[2], IMAGE_BASE);
+        assert_ne!(order[0].1[1], 0, "the window handle");
+        assert_eq!(
+            order[1..].to_vec(),
+            vec![
+                (INIT_SCENE_GRAPH, vec![main]),
+                (SKY_GET_INSTANCE, vec![]),
+                (INIT_SKY, vec![]),
+                (OBJECT_LOD_ROOT, vec![]),
+                (LOD_ROOT, vec![]),
+                (
+                    TES_CONSTRUCT,
+                    vec![tes, TES_DATA_PATH, 0x6000, 0, 0x5000, 0x7000]
+                ),
+                (TES_AFTER, vec![tes]),
+            ]
+        );
+        assert_eq!(e.mem.u32(MAIN_OBJECT), main);
+        assert_eq!(e.mem.u32(SKY_OBJECT), 0x5000);
+        assert_eq!(e.mem.u32(TES_OBJECT), tes);
+        assert_eq!(m.havok, Stage::Done(()));
+        // A stop in the scene graph: recorded, and `tes` isn't tried.
+        let mut m = PlayerMovement::default();
+        e.register(INIT_SCENE_GRAPH, |e, _| e.call(0x00ab_cdef, &[]));
+        m.start_up(&mut e, |_| {});
+        assert_eq!(m.misses[&0x00ab_cdef].stage, "scenegraph");
+        assert_eq!(m.havok, Stage::NotTried);
     }
 
     /// `threads`: `iNumHWThreads` from the processor count (1 made 2), then

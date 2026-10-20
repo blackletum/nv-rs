@@ -71,8 +71,14 @@ impl Host {
         // (it goes on past misses with zero results and records them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
         let ni_init = start_ni(&mut engine, &mut movement);
-        start_renderer_fpu(&mut engine);
-        start_game_objects(&mut engine);
+        // `main` after `NiInit`: `Main::Main`, the renderer (its FPU side here), the scene
+        // graph and `InitTES`'s `TES` (the movement's start-up stages).
+        movement.start_up(&mut engine, start_renderer_fpu);
+        // `TES::TES` makes the save/load game singleton (`011ddf38`); when it stopped before
+        // that, the host makes it as before ([`start_game_objects`]), for the forms.
+        if engine.mem.u32(SAVE_LOAD_GAME) == 0 {
+            start_game_objects(&mut engine);
+        }
         Ok(Host {
             engine,
             exe,
@@ -139,6 +145,9 @@ pub fn start_ni(e: &mut Engine, movement: &mut player_move::PlayerMovement) -> O
 pub fn start_renderer_fpu(e: &mut Engine) {
     engine::units::platform::direct3d_device_created(e, 0);
 }
+
+/// The save/load game singleton `BGSSaveLoadGame::Create` (`00847480`) stores (`011ddf38`).
+const SAVE_LOAD_GAME: u32 = 0x011d_df38;
 
 /// The objects of the game's start-up (`WinMain`) that making forms needs,
 /// made by the game's own code. Today one: `BGSSaveLoadGame::Create`

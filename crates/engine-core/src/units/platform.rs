@@ -375,6 +375,9 @@ pub enum KernelObject {
         /// [`run_as_thread`] swaps it in.
         x87_control_word: u16,
     },
+    /// The game's main window ([`create_window`]): only a handle; the window itself is the
+    /// viewer's (platform).
+    Window,
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -654,6 +657,7 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         Some(KernelObject::Thread { .. }) => {
             crate::thread_host::thread_ended(e, handle).unwrap_or(false)
         }
+        Some(KernelObject::Window) => false,
         None if handle == CURRENT_THREAD => false,
         None => return None,
     };
@@ -973,6 +977,15 @@ pub fn direct3d_device_created(e: &mut Engine, behavior_flags: u32) {
     if behavior_flags & D3DCREATE_FPU_PRESERVE == 0 {
         crate::units::crt::set_x87_control_word(e, DIRECT3D_CONTROL_WORD);
     }
+}
+
+// Platform: replaces the window `main` makes with `CreateWindowExA` (USER32 import, slot
+// `00fdf2b8`, called at `0086af42`)
+/// A handle for the game's main window, which `main` passes to `Main::Main` (`0086c160`, at
+/// `0086af75`). The host makes it where `main` would create the window; the window itself (its
+/// size from `AdjustWindowRect`, `00fdf310`, its messages) is the viewer's.
+pub fn create_window(e: &mut Engine) -> u32 {
+    e.kernel.insert(KernelObject::Window)
 }
 
 /// Changes a thread's suspend count by `delta` (both the handle's record and
@@ -1598,6 +1611,21 @@ mod tests {
     fn named_events_stop() {
         let mut e = kernel_engine();
         call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0x0100_0000]);
+    }
+
+    /// The main window's handle is an open object that nothing waits on.
+    #[test]
+    fn the_main_window_is_a_handle() {
+        let mut e = kernel_engine();
+        let window = create_window(&mut e);
+        assert_ne!(window, 0);
+        assert_eq!(e.kernel.object(window), Some(&KernelObject::Window));
+        assert!(!signalled(&e, window));
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[window, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(call(&mut e, CLOSE_HANDLE, &[window]), 1);
     }
 
     #[test]
