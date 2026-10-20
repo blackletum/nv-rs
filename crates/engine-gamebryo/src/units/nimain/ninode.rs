@@ -98,12 +98,54 @@ pub fn ni_node_attach_child(e: &mut Engine, this: Ptr, child: u32, first_availab
     }
 }
 
+/// The child array's vtable stored back by the destructor (`0101fbcc`).
+const CHILD_ARRAY_VTABLE: u32 = 0x0101_fbcc;
+/// Frees the child array's storage (`004b0220`, `cdecl`, one word: the data at +0xa0).
+const CHILD_ARRAY_FREE: u32 = 0x004b_0220;
+/// `NiAVObject`'s destructor body (`00a5a390`, `thiscall`), the tail jump.
+const NI_AV_OBJECT_DESTRUCT: u32 = 0x00a5_a390;
+
+// Translated from 00a5e930 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `NiNode`'s destructor body (unnamed; `thiscall`, no stack words; `00a5ece0` runs it): sets
+/// `NiNode`'s vtable, then for each index below the child array's size (+0xa6, re-read each
+/// pass) detaches the child through vtable slot +0xEC `(index, &out)` with `out` cleared first,
+/// and releases the answered child (`InterlockedDecrement` on +4; at zero its vtable slot +4).
+/// Then the child array's vtable `0101fbcc` at +0x9c, its data (+0xa0) freed by `004b0220`, and
+/// a tail jump to `NiAVObject`'s destructor body `00a5a390`.
+pub fn fn_00a5e930(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.mem.set_u32(this, NI_NODE_VTABLE);
+    let mut index = 0u32;
+    if e.mem.u16(this + 0xa6) != 0 {
+        loop {
+            let child = e.with_stack(4, |e, out| {
+                let out = out.addr();
+                e.mem.set_u32(out, 0);
+                e.vcall(this, 0xec, &args![index, out]);
+                e.mem.u32(out)
+            });
+            if child != 0 && e.call(INTERLOCKED_DECREMENT, &args![child + 4]).i32() == 0 {
+                e.vcall(child, 4, &[]);
+            }
+            index = index.wrapping_add(1);
+            if index >= u32::from(e.mem.u16(this + 0xa6)) {
+                break;
+            }
+        }
+    }
+    let data = e.mem.u32(this + 0xa0);
+    e.mem.set_u32(this + 0x9c, CHILD_ARRAY_VTABLE);
+    e.call(CHILD_ARRAY_FREE, &args![data]);
+    e.call(NI_AV_OBJECT_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a5ece0, ni_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00a5_ecb0, ni_node_ni_node(Ptr, u32) -> Ptr),
         entry!(0x00a5_ed10, ni_node_attach_child(Ptr, u32, u32)),
+        entry!(0x00a5_e930, fn_00a5e930(Ptr)),
     ]
 }
 
@@ -273,5 +315,75 @@ mod b000o_tests {
         e.call_log = Some(vec![]);
         e.call(0x00a5_ed10, &args![node, 0u32, 1u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+
+    /// Two children, the first released to zero (its slot +4 runs), the second still held;
+    /// then the array's vtable, the free of its data and `NiAVObject`'s destructor.
+    #[test]
+    fn fn_00a5e930_detaches_each_child_then_destroys_the_base() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xac);
+        let node_vtable = e.mem.alloc(0x100);
+        let child_vtable = e.mem.alloc(0x10);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(this, node_vtable);
+        e.mem.set_u16(this + 0xa6, 2);
+        e.mem.set_u32(this + 0xa0, 0x4444);
+        // The vtable the destructor sets is the exe's; point its slot +0xEC at a double.
+        e.map(NI_NODE_VTABLE & !0xfff, 0x2000);
+        e.mem.set_u32(NI_NODE_VTABLE + 0xec, 0x0e10_0000);
+        e.mem.set_u32(first, child_vtable);
+        e.mem.set_u32(first + 4, 1);
+        e.mem.set_u32(second, child_vtable);
+        e.mem.set_u32(second + 4, 2);
+        e.mem.set_u32(child_vtable + 4, 0x0e10_0004);
+        e.register_double(0x0e10_0000, move |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0);
+            e.mem.set_u32(a[2], if a[1] == 0 { first } else { second });
+            Ret::default()
+        });
+        e.register(0x0e10_0004, |_, _| Ret::default());
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.i32(a[0]).wrapping_sub(1);
+            e.mem.set_i32(a[0], v);
+            v.into_ret()
+        });
+        e.register(CHILD_ARRAY_FREE, |_, _| Ret::default());
+        e.register(NI_AV_OBJECT_DESTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_e930, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let calls = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(e.mem.u32(this), NI_NODE_VTABLE);
+        assert_eq!(calls(0x0e10_0000).len(), 2);
+        assert_eq!(calls(0x0e10_0004), vec![vec![first]]);
+        assert_eq!(e.mem.u32(this + 0x9c), CHILD_ARRAY_VTABLE);
+        assert_eq!(calls(CHILD_ARRAY_FREE), vec![vec![0x4444]]);
+        assert_eq!(calls(NI_AV_OBJECT_DESTRUCT), vec![vec![this]]);
+    }
+
+    /// No children: no detach, straight to the base.
+    #[test]
+    fn fn_00a5e930_without_children_skips_the_loop() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xac);
+        e.register(CHILD_ARRAY_FREE, |_, _| Ret::default());
+        e.register(NI_AV_OBJECT_DESTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_e930, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != INTERLOCKED_DECREMENT));
+        assert!(log.iter().any(|c| c.0 == NI_AV_OBJECT_DESTRUCT));
     }
 }
