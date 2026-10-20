@@ -85,17 +85,38 @@ pub fn get_module_handle_w(e: &mut Engine, name: Ptr) -> u32 {
     panic!("GetModuleHandleW({text:?}) is not provided");
 }
 
+// Platform: replaces KERNEL32.DLL LoadLibraryA (import)
+/// `LoadLibraryA(name)`: `D3D9.DLL` (any case, with or without `.DLL`, no path) is
+/// [`super::d3d9::D3D9_MODULE`], the platform's Direct3D 9 layer. Other modules are not
+/// provided.
+pub fn load_library_a(e: &mut Engine, name: Ptr) -> u32 {
+    let text = String::from_utf8_lossy(&e.mem.cstr(name.addr())).to_ascii_uppercase();
+    if text == "D3D9.DLL" || text == "D3D9" {
+        return super::d3d9::D3D9_MODULE;
+    }
+    panic!("LoadLibraryA({text:?}) is not provided");
+}
+
 // Platform: replaces KERNEL32.DLL GetProcAddress (import)
 /// `GetProcAddress(module, name)`: a KERNEL32 procedure of [`PROCS`] by name, its platform code
-/// address. A procedure by ordinal, another module or another name is not provided.
+/// address, or a `D3D9.DLL` one of [`super::d3d9::PROCS`]. A procedure by ordinal, another module or another name is not provided.
 pub fn get_proc_address(e: &mut Engine, module: u32, name: u32) -> u32 {
     if name < 0x1_0000 {
         panic!("GetProcAddress by ordinal ({name}) is not provided");
     }
+    let text = e.mem.cstr(name);
+    if module == super::d3d9::D3D9_MODULE {
+        return match super::d3d9::proc_address(e, &text) {
+            Some(address) => address,
+            None => panic!(
+                "GetProcAddress(D3D9, {:?}) is not provided",
+                String::from_utf8_lossy(&text)
+            ),
+        };
+    }
     if module != KERNEL32_MODULE {
         panic!("GetProcAddress on module {module:#x} is not provided");
     }
-    let text = e.mem.cstr(name);
     let Some(i) = PROCS.iter().position(|p| *p == text.as_slice()) else {
         panic!(
             "GetProcAddress(KERNEL32, {:?}) is not provided",
