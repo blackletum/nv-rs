@@ -142,6 +142,36 @@ mod tests {
         e.call(0x00aa_13e0, &args![0u32]);
         assert_eq!(seen.borrow()[0][1], 1);
     }
+
+    #[test]
+    fn the_system_description_holds_the_processor_count_and_the_counter_frequency() {
+        let mut e = Engine::new();
+        e.map(0x0000_7000, 0x100);
+        e.map(SYSTEM_FACTS_SLOT & !0xfff, 0x1000);
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, a| {
+            assert_eq!(a, [MEMORY_MANAGER_OBJECT, 8]);
+            0x7000u32.into_ret()
+        });
+        e.register(API_GET_SYSTEM_INFO, |e, a| {
+            e.mem.set_u32(a[0] + 0x14, 12);
+            Ret::default()
+        });
+        e.register(API_QUERY_PERFORMANCE_FREQUENCY, |e, a| {
+            e.mem.set_u64(a[0], 10_000_000);
+            1u32.into_ret()
+        });
+        e.call(0x00aa_1920, &args![]);
+        assert_eq!(e.mem.u32(SYSTEM_FACTS_SLOT), 0x7000);
+        assert_eq!(e.mem.u32(0x7000), 12);
+        assert_eq!(e.mem.f32(0x7004), 10_000_000.0);
+        // No block: 0 stored, nothing asked of the system.
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, _| 0u32.into_ret());
+        e.register(API_GET_SYSTEM_INFO, |_, _| {
+            panic!("no system query without a block")
+        });
+        e.call(0x00aa_1920, &args![]);
+        assert_eq!(e.mem.u32(SYSTEM_FACTS_SLOT), 0);
+    }
 }
 
 #[cfg(test)]
