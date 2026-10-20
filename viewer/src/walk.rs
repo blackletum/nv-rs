@@ -536,6 +536,9 @@ pub fn walk(
             // The mouse for the game's DirectInput mouse: the frame's motion and wheel
             // (120 a notch, `WHEEL_DELTA`) and the buttons in DirectInput's order.
             host.mouse(mouse_motion(&motion, &scroll), mouse_buttons(&mouse));
+            // A frame of the game's own main loop, when its `main` runs (it reads the keys
+            // and the mouse fed above).
+            host.main_frame();
             host.move_player(order, state.0.player_cell, &input)
         }
     };

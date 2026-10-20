@@ -71,10 +71,20 @@ impl Host {
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
         start_crt_threads(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
-        let ni_init = start_ni(&mut engine, &mut movement);
-        // `main` after `NiInit`: `Main::Main`, the renderer (its FPU side here), the scene
-        // graph and `InitTES`'s `TES` (the movement's start-up stages).
-        movement.start_up(&mut engine, start_renderer_fpu);
+        load_adapter_table(&mut engine);
+        let ni_init = if engine.is_translated(WIN_MAIN) {
+            // The game's own `main` (`WinMain`, after the CRT start-up above) as its main
+            // thread: `NiInit`, the INI files, the window, `Main`, the renderer, the scene
+            // graph, the world, then its message loop, one frame per `Host::main_frame`.
+            movement.start_main(&mut engine);
+            None
+        } else {
+            let ni_init = start_ni(&mut engine, &mut movement);
+            // `main` after `NiInit`: `Main::Main`, the renderer (its FPU side here), the scene
+            // graph and `InitTES`'s `TES` (the movement's start-up stages).
+            movement.start_up(&mut engine, start_renderer_fpu);
+            ni_init
+        };
         // `TES::TES` makes the save/load game singleton (`011ddf38`); when it stopped before
         // that, the host makes it as before ([`start_game_objects`]), for the forms.
         if engine.mem.u32(SAVE_LOAD_GAME) == 0 {
@@ -107,6 +117,30 @@ impl Host {
                 Some(why) => format!("not run ({why})"),
             }
         )
+    }
+}
+
+/// `main` (Xbox PDB, `0086a850`), the game's `WinMain`.
+const WIN_MAIN: u32 = 0x0086_a850;
+
+/// Where the player's Direct3D 9 adapter table is: `NV_D3D9_ADAPTER`, else
+/// `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` (made on this machine by `scripts/d3d9-capture`;
+/// it describes the player's hardware and stays local).
+pub fn adapter_table_path() -> Option<PathBuf> {
+    std::env::var_os("NV_D3D9_ADAPTER")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(|d| PathBuf::from(d).join("nv-rs").join("d3d9_adapter.tsv"))
+        })
+}
+
+/// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the
+/// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
+/// Direct3D 9 query stops that stage and its message says how to capture the table.
+fn load_adapter_table(e: &mut Engine) {
+    if let Some(text) = adapter_table_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        engine::units::platform::d3d9::load_adapter_table(e, &text);
     }
 }
 

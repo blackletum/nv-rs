@@ -87,6 +87,11 @@ const MAIN_SIZE: u32 = 0xa4;
 const MAIN_OBJECT: u32 = 0x011d_ea0c;
 /// The module handle `WinMain` gets (`main`'s first argument): the image base.
 const IMAGE_BASE: u32 = 0x0040_0000;
+/// `main` (Xbox PDB, `0086a850`): the game's `WinMain`, and the `SW_SHOWDEFAULT` the CRT's
+/// start-up hands it last. `main` reads none of its last three words (`main.rs`), so the
+/// previous instance and the command line are passed as 0.
+const WIN_MAIN: u32 = 0x0086_a850;
+const SW_SHOWDEFAULT: u32 = 10;
 /// `main`'s part between `Main::Main` and `InitSceneGraph` (`0086afa4`..`0086b066`): the TLS
 /// setting guard's enter and leave (`00404f00`/`00404f70`, a 4-byte object on `main`'s
 /// stack; enter with 0xD, 1, the source name `010829c4` and line 0x9F8), the 8-byte object
@@ -323,6 +328,11 @@ pub struct PlayerMovement {
     /// The AI linear task thread manager once its threads are made
     /// (`threads`, after `havok` as in the game).
     threads: Stage<u32>,
+    /// The game's `main` (`0086a850`) run as its main thread ([`PlayerMovement::start_main`]),
+    /// its frames (each a pass of its message loop) and how its last turn ended.
+    main_thread: Option<engine::thread_host::MainThread>,
+    pub main_frames: u64,
+    main_stage: Stage<()>,
     /// Frames the AI threads (and the world step on thread 2) ran, and
     /// frames they didn't ([`PlayerMovement::run_ai_threads`]).
     pub world_frames: u64,
@@ -352,6 +362,9 @@ impl Default for PlayerMovement {
             in_step: false,
             cell_refs: Vec::new(),
             threads: Stage::NotTried,
+            main_thread: None,
+            main_frames: 0,
+            main_stage: Stage::NotTried,
             world_frames: 0,
             world_fallback_frames: 0,
             world_failed: None,
@@ -932,6 +945,57 @@ impl PlayerMovement {
         }
     }
 
+    /// Starts the game's `main` (`0086a850`, `WinMain`: the module handle, no previous instance,
+    /// no command line pointer, `SW_SHOWDEFAULT`) as its main thread
+    /// (`engine::thread_host::start_main_thread`) and runs its start-up: everything up to the
+    /// first time its message loop finds the queue empty, the end of its first frame. Recorded
+    /// as stage `main`.
+    pub fn start_main(&mut self, e: &mut Engine) {
+        self.main_thread = Some(engine::thread_host::start_main_thread(
+            WIN_MAIN,
+            vec![IMAGE_BASE, 0, 0, SW_SHOWDEFAULT],
+        ));
+        self.main_frame(e);
+    }
+
+    /// Whether the game's `main` runs as the main thread ([`PlayerMovement::start_main`]).
+    pub fn main_runs(&self) -> bool {
+        self.main_thread.is_some()
+    }
+
+    /// One frame of the game's main loop (a pass of `main`'s message loop, `Main::OnIdle`
+    /// among it), until its message queue is empty again; true when it ended a frame. Once it
+    /// stopped it isn't resumed.
+    pub fn main_frame(&mut self, e: &mut Engine) -> bool {
+        if matches!(self.main_stage, Stage::Failed(_)) {
+            return false;
+        }
+        let Some(mut main) = self.main_thread.take() else {
+            return false;
+        };
+        let turn = self.guarded(e, "main", |e| {
+            match engine::thread_host::run_main_frame(e, &mut main) {
+                engine::thread_host::MainTurn::Frame => Ok(()),
+                engine::thread_host::MainTurn::Finished(code) => {
+                    Err(format!("main returned {code}"))
+                }
+                engine::thread_host::MainTurn::Stopped(why) => Err(why),
+            }
+        });
+        self.main_thread = Some(main);
+        match turn {
+            Ok(()) => {
+                self.main_frames += 1;
+                self.main_stage = Stage::Done(());
+                true
+            }
+            Err(why) => {
+                self.main_stage = Stage::Failed(why);
+                false
+            }
+        }
+    }
+
     /// Whether the stages are made, as a line.
     pub fn summary(&self) -> String {
         fn word<T>(s: &Stage<T>) -> String {
@@ -945,6 +1009,19 @@ impl PlayerMovement {
             Some((id, s)) => format!("{id}: {}", word(s)),
             None => "none".into(),
         };
+        if self.main_thread.is_some() {
+            // The game's `main` runs the start-up and the frames itself.
+            return format!(
+                "Game's movement: main {} frames; {}; {} untranslated addresses reached.",
+                self.main_frames,
+                match &self.main_stage {
+                    Stage::Failed(why) => format!("stopped ({why})"),
+                    Stage::Done(()) => "running".to_string(),
+                    Stage::NotTried => "not started".to_string(),
+                },
+                self.misses.len()
+            );
+        }
         let mut line = format!(
             "Game's movement: {} frames moved by the game's code, {} by crates/physics; \
              Main {}; renderer {}; scene graph {}; TES {}; player {}; AI threads {}; cell {cell}; \
@@ -1014,6 +1091,12 @@ impl PlayerMovement {
 }
 
 impl crate::Host {
+    /// One frame of the game's own main loop when its `main` runs as the main thread
+    /// ([`PlayerMovement::main_frame`]); false when it doesn't run or stopped.
+    pub fn main_frame(&mut self) -> bool {
+        self.movement.main_frame(&mut self.engine)
+    }
+
     /// The frame's move of the player through the game's code
     /// ([`PlayerMovement::step`]); `None`: the caller moves the player itself.
     pub fn move_player(
