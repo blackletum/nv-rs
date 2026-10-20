@@ -2220,6 +2220,8 @@ pub fn fn_004de2b0(e: &mut Engine, this: u32, value: u8) -> u32 {
 pub fn fn_004de2d0(e: &mut Engine, this: u32, value: u8) -> u32 {
     e.call(0x004d_e2b0, &args![this, u32::from(value)]);
     this
+}
+
 // ---- The Eyefinity query (batch b000s) -------------------------------------
 
 /// `004dd240` (this unit, called by address until it is translated): the
@@ -5114,6 +5116,10 @@ mod display_size_tests {
         assert_eq!(e.call(0x004d_e2d0, &args![setting, 1u32]).u32(), setting);
         assert_eq!(e.mem.u8(setting + 4), 1);
         assert_eq!(e.call(0x004d_e2d0, &args![0u32, 1u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
 mod b000s_tests {
     use super::*;
 
