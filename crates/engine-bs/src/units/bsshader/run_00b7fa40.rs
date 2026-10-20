@@ -227,6 +227,41 @@ pub fn fn_00b7fd50(e: &mut Engine, this: Ptr) -> u32 {
         .u32()
 }
 
+/// The free `00aa10f0` (`cdecl`, block).
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+/// The map's base clean-up `00b7fbe0` (`thiscall`, no stack words).
+const MAP_BASE_CLEAN_UP_00B7FBE0: u32 = 0x00b7_fbe0;
+
+// Translated from 00b7fc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the clean-up of the shader package's string
+/// map (`this` is the package's +8). `thiscall`, no stack words. Sets the map's vtable
+/// `010af6cc`; when the byte at +0x10 (the package's +0x18) is set, walks every bucket of the
+/// array at +8 (count at +4, read again after each bucket) and, for each entry of a
+/// bucket's chain (next entry at +0), frees the entry's word at +4 (`00aa10f0`). Then runs
+/// the base clean-up `00b7fbe0` and answers what it answers (`EAX`).
+// Translation incomplete: 00b7fc50 - the C++ exception frame (FS:[0] chain, unwind state 0 around the walk) is not translated.
+pub fn fn_00b7fc50(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_VTABLE_010AF6CC);
+    if e.mem.u8(base.wrapping_add(0x10)) != 0 && e.mem.u32(base.wrapping_add(4)) != 0 {
+        let mut index = 0u32;
+        loop {
+            let buckets = e.mem.u32(base.wrapping_add(8));
+            let mut entry = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+            while entry != 0 {
+                let key = e.mem.u32(entry.wrapping_add(4));
+                entry = e.mem.u32(entry);
+                e.call(FREE_00AA10F0, &args![key]);
+            }
+            index = index.wrapping_add(1);
+            if index >= e.mem.u32(base.wrapping_add(4)) {
+                break;
+            }
+        }
+    }
+    e.call(MAP_BASE_CLEAN_UP_00B7FBE0, &args![base]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -234,6 +269,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_ff40, fn_00b7ff40(Ptr, i32) -> Ptr),
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
+        entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
     ]
 }
 
@@ -481,5 +517,57 @@ mod tests {
         e.call(0x00b7_fd50, &args![this]);
         assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
         assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50).len(), 1);
+    }
+
+    /// A map with three buckets: bucket 0 holds two entries (keys 0x10, 0x11), bucket 1 is
+    /// empty, bucket 2 holds one (key 0x20).
+    fn map_rig(owns: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MAP_BASE_CLEAN_UP_00B7FBE0, |_, _| 0x77u32.into_ret());
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let third = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x10);
+        e.mem.set_u32(second + 4, 0x11);
+        e.mem.set_u32(third + 4, 0x20);
+        e.mem.set_u32(buckets, first);
+        e.mem.set_u32(buckets + 8, third);
+        e.mem.set_u32(map, 0x1234);
+        e.mem.set_u32(map + 4, 3);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u8(map + 0x10, owns);
+        (e, map)
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_every_key_when_the_map_owns_them() {
+        let (mut e, map) = map_rig(1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_fc50, &args![map]).u32(), 0x77);
+        assert_eq!(e.mem.u32(map), MAP_VTABLE_010AF6CC);
+        assert_eq!(
+            calls(&e, FREE_00AA10F0),
+            vec![vec![0x10], vec![0x11], vec![0x20]]
+        );
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0), vec![vec![map]]);
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_nothing_when_the_map_does_not_own_its_keys() {
+        let (mut e, map) = map_rig(0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0).len(), 1);
+        // No buckets: nothing walked either.
+        let (mut e, map) = map_rig(1);
+        e.mem.set_u32(map + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
     }
 }
