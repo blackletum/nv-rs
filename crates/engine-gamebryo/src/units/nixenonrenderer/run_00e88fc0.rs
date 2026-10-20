@@ -71,12 +71,85 @@ pub fn fn_00e89670(e: &mut Engine, item: Ptr) {
     });
 }
 
+// Translated from 00e891f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (range inside the NiXenonRenderer subsystem), `thiscall` with no
+/// stack words (called from `00e7ecd0`): for each of 8 steps clears the byte at `+0x2c + i`
+/// and the byte at `+0x5c + i`, then the words at `+0x34` and `+4`.
+pub fn fn_00e891f0(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    for i in 0..8u32 {
+        e.mem.set_u8(this + 0x2c + i, 0);
+        e.mem.set_u8(this + 0x5c + i, 0);
+    }
+    e.mem.set_u32(this + 0x34, 0);
+    e.mem.set_u32(this + 4, 0);
+}
+
+// Translated from 00e89220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (range inside the NiXenonRenderer subsystem), `thiscall` with no
+/// stack words (called from `00e7ecd0`): for each of 5 steps clears the bytes at `+0x80 + i`,
+/// `+0xa4 + i` and `+0xb0 + i`, then the words at `+0x88`, `+0x64` and `+0xac`.
+pub fn fn_00e89220(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    for i in 0..5u32 {
+        e.mem.set_u8(this + 0x80 + i, 0);
+        e.mem.set_u8(this + 0xa4 + i, 0);
+        e.mem.set_u8(this + 0xb0 + i, 0);
+    }
+    e.mem.set_u32(this + 0x88, 0);
+    e.mem.set_u32(this + 0x64, 0);
+    e.mem.set_u32(this + 0xac, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e8_95f0, fn_00e895f0()),
         entry!(0x00e8_9670, fn_00e89670(Ptr)),
+        entry!(0x00e8_91f0, fn_00e891f0(Ptr)),
+        entry!(0x00e8_9220, fn_00e89220(Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    /// A 0xc0-byte block of 0xaa; the call clears exactly the bytes in `cleared`.
+    fn check(addr: u32, cleared: &[std::ops::Range<u32>]) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc0);
+        e.mem.write(this, &[0xaa; 0xc0]);
+        e.call(addr, &args![this]);
+        for offset in 0..0xc0u32 {
+            let want = if cleared.iter().any(|r| r.contains(&offset)) {
+                0
+            } else {
+                0xaa
+            };
+            assert_eq!(e.mem.u8(this + offset), want, "offset {offset:#x}");
+        }
+    }
+
+    #[test]
+    fn fn_00e891f0_clears_its_bytes_and_words() {
+        check(0x00e8_91f0, &[0x2c..0x38, 0x5c..0x64, 4..8]);
+    }
+
+    #[test]
+    fn fn_00e89220_clears_its_bytes_and_words() {
+        check(
+            0x00e8_9220,
+            &[
+                0x80..0x85,
+                0xa4..0xa9,
+                0xb0..0xb5,
+                0x88..0x8c,
+                0x64..0x68,
+                0xac..0xb0,
+            ],
+        );
+    }
 }
 
 #[cfg(test)]
