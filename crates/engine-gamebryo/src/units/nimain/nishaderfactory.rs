@@ -88,11 +88,19 @@ pub fn ni_shader_factory_release_global_shader_constant(e: &mut Engine, name: Pt
     true
 }
 
+// Translated from 00a9fff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderFactory::GetInstance` (Xbox PDB), no arguments: the factory singleton word at
+/// `011f6044`.
+pub fn ni_shader_factory_get_instance(e: &mut Engine) -> u32 {
+    e.mem.u32(SHADER_FACTORY)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa06c0, ni_shader_factory_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00aa_04e0, ni_shader_factory_release_global_shader_constant(Ptr) -> bool),
+        entry!(0x00a9_fff0, ni_shader_factory_get_instance() -> u32),
     ]
 }
 
@@ -233,5 +241,18 @@ mod release_tests {
         assert!(calls(&e, INTERLOCKED_INCREMENT).is_empty());
         assert!(calls(&e, INTERLOCKED_DECREMENT).is_empty());
         assert_eq!(e.mem.u32(entry + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod b000v_tests {
+    use super::*;
+
+    #[test]
+    fn get_instance_reads_the_singleton_word() {
+        let mut e = Engine::new();
+        e.map(SHADER_FACTORY, 4);
+        e.mem.set_u32(SHADER_FACTORY, 0x1234_5678);
+        assert_eq!(e.call(0x00a9_fff0, &args![]).u32(), 0x1234_5678);
     }
 }
