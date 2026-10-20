@@ -58,9 +58,39 @@ pub fn fn_00bd4750(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The shared shader constructor `00b79b00` (unnamed; `thiscall`, four stack words, each an
+/// object kept by an `NiPointer`).
+const SHADER_BASE_CONSTRUCT_00B79B00: u32 = 0x00b7_9b00;
+/// The shader's vtable (`010bc070`; no RTTI locator before it).
+const VTABLE_010BC070: u32 = 0x010b_c070;
+
+// Translated from 00bd44c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd3f80`): the constructor of shader 4, `thiscall` with
+/// one stack word (the declaration). Runs `00b79b00` with (the declaration, 0, 0, 0), stores
+/// the vtable `010bc070`, constructs the `NiPointer` arrays at +0x8c (0x1e) and +0x104 (0xa;
+/// both destructor `00b66f20`) and sets +0x68 to 5. Answers `this`.
+// Translation incomplete: 00bd44c0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the base and the arrays) is not translated.
+pub fn fn_00bd44c0(e: &mut Engine, this: Ptr, declaration: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(
+        SHADER_BASE_CONSTRUCT_00B79B00,
+        &args![base, declaration, 0u32, 0u32, 0u32],
+    );
+    e.mem.set_u32(base, VTABLE_010BC070);
+    construct_pointer_array(e, base + 0x8c, 0x1e, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x104, 0xa, DESTRUCT_00B66F20);
+    e.mem.set_u32(base + 0x68, 5);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bd_4750, fn_00bd4750() -> Ptr)]
+    vec![
+        entry!(0x00bd_44c0, fn_00bd44c0(Ptr, Ptr) -> Ptr),
+        entry!(0x00bd_4750, fn_00bd4750() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -97,5 +127,33 @@ mod tests {
                 (shader_slot(0xc0), vec![SHADER, d]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bd44c0_builds_the_shader() {
+        let mut e = rig();
+        e.register(SHADER_BASE_CONSTRUCT_00B79B00, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x12c);
+        let declaration = object(&mut e, 0);
+        assert_eq!(e.call(0x00bd_44c0, &args![this, declaration]).u32(), this);
+        assert_eq!(
+            calls(&e, SHADER_BASE_CONSTRUCT_00B79B00),
+            vec![vec![this, declaration, 0, 0, 0]]
+        );
+        assert_eq!(e.mem.u32(this), VTABLE_010BC070);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x8c, 0x1e, DESTRUCT_00B66F20),
+                pointer_array(this + 0x104, 0xa, DESTRUCT_00B66F20),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x68), 5);
     }
 }

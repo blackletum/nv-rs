@@ -68,9 +68,71 @@ pub fn fn_00bd2e70(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The shader's vtable (`010bbeb8`; no RTTI locator before it).
+const VTABLE_010BBEB8: u32 = 0x010b_beb8;
+
+// Translated from 00bd2b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd2b60`): the constructor of shader 5, `thiscall`, no
+/// stack words. Runs `BSShader::BSShader` (`00be2200`), stores the vtable `010bbeb8`,
+/// constructs the `NiPointer` arrays at +0x6c (4) and +0x7c (2; both destructor `00b66f20`),
+/// clears the word +0x84, stores 0.0 at +0x88 to +0xa4 and sets +0x68 to 8. Answers `this`.
+// Translation incomplete: 00bd2b60 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the base and the arrays) is not translated.
+pub fn fn_00bd2b60(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, VTABLE_010BBEB8);
+    construct_pointer_array(e, base + 0x6c, 4, DESTRUCT_00B66F20);
+    construct_pointer_array(e, base + 0x7c, 2, DESTRUCT_00B66F20);
+    e.mem.set_u32(base + 0x84, 0);
+    for offset in (0x88u32..=0xa4).step_by(4) {
+        e.mem.set_f32(base + offset, 0.0);
+    }
+    e.mem.set_u32(base + 0x68, 8);
+    this
+}
+
+// Translated from 00bd2d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd2b60`): shader 5's stages and passes (the creator
+/// `00bd2e70` calls it after the vtable slot +0x13c), `thiscall`, no stack words. Gives the
+/// pass pointer at +0x84 a new pass (`00e804d0`); makes one texture stage (`CreateNewStage`
+/// into a stack pointer, `SetupDefaultStage` with index 0 and 3, 2, 1, no filter mode) and puts
+/// it on the pass (`NiD3DPass::SetStage` with the pass's word at +0x14); assigns the shader's
+/// +0x6c to the pass's vertex shader `NiPointer` (+0x5c) and +0x7c to its pixel shader
+/// `NiPointer` (+0x44); then drops the stage reference.
+// Translation incomplete: 00bd2d50 - the C++ exception frame (FS:[0] chain, unwind state 0 for the stage pointer) is not translated.
+pub fn fn_00bd2d50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let slot = base + 0x84;
+    e.call(NEW_PASS_00E804D0, &args![slot]);
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.call(CREATE_NEW_STAGE, &args![local]);
+        let stage = e.mem.u32(local);
+        e.call(SETUP_DEFAULT_STAGE, &args![stage, 0u32, 3u32, 2u32, 1u32]);
+        let pass = e.mem.u32(slot);
+        let stage = e.mem.u32(local);
+        let position = e.mem.u32(pass + 0x14);
+        e.call(PASS_SET_STAGE, &args![pass, position, stage]);
+        let pass = e.mem.u32(slot);
+        let vertex = e.mem.u32(base + 0x6c);
+        ni_pointer_assign(e, pass + 0x5c, vertex);
+        let pass = e.mem.u32(slot);
+        let pixel = e.mem.u32(base + 0x7c);
+        ni_pointer_assign(e, pass + 0x44, pixel);
+        let stage = e.mem.u32(local);
+        stage_release(e, stage);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bd_2e70, fn_00bd2e70() -> Ptr)]
+    vec![
+        entry!(0x00bd_2d50, fn_00bd2d50(Ptr)),
+        entry!(0x00bd_2b60, fn_00bd2b60(Ptr) -> Ptr),
+        entry!(0x00bd_2e70, fn_00bd2e70() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -107,5 +169,64 @@ mod tests {
             ]
         );
         assert_eq!(e.mem.u32(CONTEXT_SEEN), CONTEXT_SHADER_5);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bd2b60_builds_the_shader() {
+        let mut e = rig();
+        let this = e.mem.alloc(0xa8);
+        e.mem.write(this, &[0xcc; 0xa8]);
+        assert_eq!(e.call(0x00bd_2b60, &args![this]).u32(), this);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), VTABLE_010BBEB8);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![
+                pointer_array(this + 0x6c, 4, DESTRUCT_00B66F20),
+                pointer_array(this + 0x7c, 2, DESTRUCT_00B66F20),
+            ]
+        );
+        for offset in (0x84u32..=0xa4).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x68), 8);
+    }
+}
+
+#[cfg(test)]
+mod stages_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bd2d50_builds_one_pass_with_one_stage() {
+        let mut e = pass_rig();
+        let this = e.mem.alloc(0xa8);
+        let vertex = object(&mut e, 1);
+        let pixel = object(&mut e, 1);
+        e.mem.set_u32(this + 0x6c, vertex);
+        e.mem.set_u32(this + 0x7c, pixel);
+        e.call(SHADER_METHOD_00BD2D50, &args![this]);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0), vec![vec![this + 0x84]]);
+        let pass = e.mem.u32(this + 0x84);
+        let set = calls(&e, PASS_SET_STAGE);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0][..2], [pass, 0]);
+        let stage = set[0][2];
+        assert_eq!(
+            calls(&e, SETUP_DEFAULT_STAGE),
+            vec![vec![stage, 0, 3, 2, 1]]
+        );
+        assert!(calls(&e, SET_FILTER_MODE).is_empty());
+        assert_eq!(e.mem.u32(stage + 0x60), 1);
+        assert_eq!(e.mem.u32(pass + 0x5c), vertex);
+        assert_eq!(e.mem.u32(pass + 0x44), pixel);
+        assert_eq!(e.mem.u32(vertex + 4), 2);
     }
 }

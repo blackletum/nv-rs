@@ -448,12 +448,226 @@ pub fn fn_00b6c2c0(
     }
 }
 
+/// The renderer's target through its vtable slot +0xc8, then that target's slot +0xb0 with 0;
+/// the word at `offset` of what it answers, 0 when either answers null.
+fn renderer_surface_word(e: &mut Engine, renderer: Ptr, offset: u32) -> u32 {
+    let target = e.vcall(renderer.addr(), 0xc8, &args![]).u32();
+    if target == 0 {
+        return 0;
+    }
+    let surface = e.vcall(target, 0xb0, &args![0u32]).u32();
+    if surface == 0 {
+        return 0;
+    }
+    e.mem.u32(surface + offset)
+}
+
+// Translated from 00b6c1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6c0d0`), `thiscall` on the renderer, no stack words: the
+/// renderer's slot +0xc8, that object's slot +0xb0 with 0, and the word at +0x8 of the answer
+/// (the width its callers use); 0 when either call answers null.
+pub fn fn_00b6c1a0(e: &mut Engine, renderer: Ptr) -> u32 {
+    renderer_surface_word(e, renderer, 0x8)
+}
+
+// Translated from 00b6c1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6c0d0`): as `00b6c1a0`, with the word at +0xc (the
+/// height its callers use).
+pub fn fn_00b6c1d0(e: &mut Engine, renderer: Ptr) -> u32 {
+    renderer_surface_word(e, renderer, 0xc)
+}
+
+// Translated from 00b6c200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6c0d0`), `cdecl`, one word: 1 for a negative value; 0 for
+/// 0, 1 and values above 0x10; the value itself for 2 to 0x10 (the arms of the switch, jump
+/// table at `00b6c278` read in Ghidra).
+pub fn fn_00b6c200(value: i32) -> u32 {
+    if value < 0 {
+        return 1;
+    }
+    match value {
+        2..=0x10 => value as u32,
+        _ => 0,
+    }
+}
+
+/// `fn_00b6c200` registered with the engine's argument form.
+fn fn_00b6c200_entry(_e: &mut Engine, value: i32) -> u32 {
+    fn_00b6c200(value)
+}
+
+/// Bytes and words `00b6d170` sets around the texture's making and puts back after it.
+const MAKING_FLAG_011F4AC0: u32 = 0x011f_4ac0;
+const MAKING_FORMAT_011AB3C8: u32 = 0x011a_b3c8;
+const FLAG_011AB3C4: u32 = 0x011a_b3c4;
+const SETTING_011BF400: u32 = 0x011b_f400;
+/// The byte that keeps the asked width and height (`011f9183`); without it both become the
+/// smallest power of two not below the larger one.
+const KEEP_SIZE_011F9183: u32 = 0x011f_9183;
+/// The renderer word (`011f9508`).
+const RENDERER_011F9508: u32 = 0x011f_9508;
+/// The texture makers: `00ee8330` (`cdecl`: width, renderer, the three-word block) and the
+/// 0x40-byte object's constructor `00b6b380` (`thiscall`, three words), or `00b6b610`
+/// (`cdecl`, nine words) with a name from `00a5b690` (`cdecl`, the string `01011584`).
+const MAKE_SURFACE_00EE8330: u32 = 0x00ee_8330;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const TEXTURE_CONSTRUCT_00B6B380: u32 = 0x00b6_b380;
+const MAKE_TEXTURE_00B6B610: u32 = 0x00b6_b610;
+const MAKE_FIXED_STRING_00A5B690: u32 = 0x00a5_b690;
+const EMPTY_NAME_01011584: u32 = 0x0101_1584;
+/// The word the name is compared with before its release (`0109b220`).
+const NULL_NAME_0109B220: u32 = 0x0109_b220;
+/// Imported `InterlockedDecrement` (import slot).
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00b6d170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6c0d0`): the rendered-texture maker
+/// `BorrowRenderedTexture` (`00b6d870`) calls; `thiscall` on the texture manager with ten
+/// stack words (`RET 0x28`), of which the first, fifth and seventh are not read.
+///
+/// The width and height are kept when the byte at `011f9183` is set; otherwise both become the
+/// smallest power of two (from 1) not below the larger of them. A three-word block (2, 2, 2)
+/// goes to the maker. A nonzero `format` sets the byte `011f4ac0` and is stored in
+/// `011ab3c8`; flag 8 clears the byte `011ab3c4`; flag 0x80 clears the word `011bf400`;
+/// without flag 0x100 the manager's word at +0xa8 is passed (else 0); with flag 0x40 the
+/// `multisample` count 2, 4 or 8 becomes 1, 2 or 3 (others 0; 0 without the flag). With flag
+/// 0x10 `00ee8330(width, renderer 011f9508, block)` makes a surface and, when it is not null, a
+/// 0x40-byte object is allocated and constructed on it (`00b6b380(surface, 1, word)`; a null
+/// allocation answers 0). Otherwise `00b6b610` gets the address of a name from
+/// `00a5b690("")`, the width, height, the block, the multisample value, the asked height's
+/// upper bytes with the low byte `!(flags >> 2) & 1` (the exe rewrites only the low byte of
+/// that argument's slot), the word and the last two arguments; the name is then released
+/// (`InterlockedDecrement` on its word at -8) unless it equals the word at `0109b220`.
+/// Afterwards the byte `011f4ac0` is cleared when `format` is nonzero, `011ab3c4` set for flag
+/// 8 and `011bf400` set to 1 for flag 0x80. Answers the object (0 when nothing was made).
+// Translation incomplete: 00b6d170 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the allocation and the name) is not translated.
+pub fn fn_00b6d170(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    _unused_5: u32,
+    flags: u32,
+    _unused_7: u32,
+    multisample: u32,
+    last_but_one: u32,
+    last: u32,
+) -> u32 {
+    let (made_width, made_height) = if e.global::<u8>(KEEP_SIZE_011F9183) != 0 {
+        (width, height)
+    } else {
+        let larger = if width > height { width } else { height };
+        let mut size = 1u32;
+        while size < larger {
+            size = size.wrapping_add(size);
+        }
+        (size, size)
+    };
+    if format != 0 {
+        e.set_global::<u8>(MAKING_FLAG_011F4AC0, 1);
+        e.set_global::<u32>(MAKING_FORMAT_011AB3C8, format);
+    }
+    let flag_8 = flags & 8;
+    if flag_8 != 0 {
+        e.set_global::<u8>(FLAG_011AB3C4, 0);
+    }
+    let flag_80 = flags & 0x80;
+    if flag_80 != 0 {
+        e.set_global::<u32>(SETTING_011BF400, 0);
+    }
+    let word = if flags & 0x100 == 0 {
+        e.mem.u32(this.addr() + 0xa8)
+    } else {
+        0
+    };
+    let samples = if flags & 0x40 != 0 {
+        match multisample {
+            2 => 1u32,
+            4 => 2,
+            8 => 3,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    let bit_word = (height & 0xffff_ff00) | (u32::from(!((flags >> 2) as u8)) & 1);
+    let made = e.with_stack(0x10, |e, frame| {
+        let block = frame.addr();
+        for offset in [0u32, 4, 8] {
+            e.mem.set_u32(block + offset, 2);
+        }
+        let name_slot = block + 0xc;
+        if flags & 0x10 != 0 {
+            let renderer = e.global::<u32>(RENDERER_011F9508);
+            let surface = e
+                .call(MAKE_SURFACE_00EE8330, &args![made_width, renderer, block])
+                .u32();
+            if surface == 0 {
+                return 0;
+            }
+            let object = e.call(NI_ALLOCATE, &args![0x40u32]).u32();
+            if object == 0 {
+                return 0;
+            }
+            e.call(
+                TEXTURE_CONSTRUCT_00B6B380,
+                &args![object, surface, 1u32, word],
+            )
+            .u32()
+        } else {
+            let name = e
+                .call(MAKE_FIXED_STRING_00A5B690, &args![EMPTY_NAME_01011584])
+                .u32();
+            e.mem.set_u32(name_slot, name);
+            let made = e
+                .call(
+                    MAKE_TEXTURE_00B6B610,
+                    &args![
+                        name_slot,
+                        made_width,
+                        made_height,
+                        block,
+                        samples,
+                        bit_word,
+                        word,
+                        last_but_one,
+                        last
+                    ],
+                )
+                .u32();
+            let name = e.mem.u32(name_slot);
+            if name != e.global::<u32>(NULL_NAME_0109B220) {
+                e.call(IMPORT_INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+            }
+            made
+        }
+    });
+    if format != 0 {
+        e.set_global::<u8>(MAKING_FLAG_011F4AC0, 0);
+    }
+    if flag_8 != 0 {
+        e.set_global::<u8>(FLAG_011AB3C4, 1);
+    }
+    if flag_80 != 0 {
+        e.set_global::<u32>(SETTING_011BF400, 1);
+    }
+    made
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b6_c2c0,
-        fn_00b6c2c0(Ptr, u32, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00b6_c1a0, fn_00b6c1a0(Ptr) -> u32),
+        entry!(0x00b6_c1d0, fn_00b6c1d0(Ptr) -> u32),
+        entry!(0x00b6_c200, fn_00b6c200_entry(i32) -> u32),
+        entry!(0x00b6_d170, fn_00b6d170(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(
+            0x00b6_c2c0,
+            fn_00b6c2c0(Ptr, u32, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -682,5 +896,233 @@ mod tests {
         assert_eq!(fistp_qword_truncate(f64::NAN), 0x8000_0000_0000_0000);
         assert_eq!(signed_quarter(0xffff_fffb), 0xffff_ffff);
         assert_eq!(signed_half(0xffff_fffd), 0xffff_ffff);
+    }
+}
+
+#[cfg(test)]
+mod b000h_tests {
+    use super::*;
+
+    const TARGET_SLOT_C8: u32 = 0x0e10_0000;
+    const SURFACE_SLOT_B0: u32 = 0x0e10_0010;
+
+    /// A renderer whose slot +0xc8 answers the target (or null) and a target whose slot +0xb0
+    /// answers a surface (or null) with the words 7 and 9 at +8 and +0xc.
+    fn surfaces(target: bool, surface: bool) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let renderer = e.mem.alloc(4);
+        let target_object = e.mem.alloc(4);
+        let surface_object = e.mem.alloc(0x10);
+        e.mem.set_u32(surface_object + 8, 7);
+        e.mem.set_u32(surface_object + 0xc, 9);
+        e.put_vtable(0x0e00_0000, &vec![TARGET_SLOT_C8; 0x33]);
+        e.put_vtable(0x0e00_1000, &vec![SURFACE_SLOT_B0; 0x2d]);
+        e.mem.set_u32(renderer, 0x0e00_0000);
+        e.mem.set_u32(target_object, 0x0e00_1000);
+        let t = if target { target_object } else { 0 };
+        let s = if surface { surface_object } else { 0 };
+        e.register_double(TARGET_SLOT_C8, move |_, _| t.into_ret());
+        e.register_double(SURFACE_SLOT_B0, move |_, a| {
+            assert_eq!(a[1], 0);
+            s.into_ret()
+        });
+        (e, renderer)
+    }
+
+    #[test]
+    fn fn_00b6c1a0_and_00b6c1d0_read_the_surface_words() {
+        let (mut e, renderer) = surfaces(true, true);
+        assert_eq!(e.call(0x00b6_c1a0, &args![renderer]).u32(), 7);
+        assert_eq!(e.call(0x00b6_c1d0, &args![renderer]).u32(), 9);
+        let (mut e, renderer) = surfaces(true, false);
+        assert_eq!(e.call(0x00b6_c1a0, &args![renderer]).u32(), 0);
+        assert_eq!(e.call(0x00b6_c1d0, &args![renderer]).u32(), 0);
+        let (mut e, renderer) = surfaces(false, true);
+        assert_eq!(e.call(0x00b6_c1a0, &args![renderer]).u32(), 0);
+        assert_eq!(e.call(0x00b6_c1d0, &args![renderer]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00b6c200_maps_the_switch() {
+        let mut e = Engine::new();
+        let mut ask = |v: i32| e.call(0x00b6_c200, &args![v]).u32();
+        assert_eq!(ask(-5), 1);
+        assert_eq!(ask(i32::MIN), 1);
+        assert_eq!(ask(0), 0);
+        assert_eq!(ask(1), 0);
+        for v in 2..=0x10 {
+            assert_eq!(ask(v), v as u32);
+        }
+        assert_eq!(ask(0x11), 0);
+        assert_eq!(ask(0x7fff_ffff), 0);
+    }
+
+    const MANAGER_WORD: u32 = 0x0abc_0000;
+    const SURFACE: u32 = 0x0d00_0000;
+    const OBJECT: u32 = 0x0d10_0000;
+    const NAME: u32 = 0x0d20_0008;
+    const RENDERER: u32 = 0x0d30_0000;
+    const SEEN: u32 = 0x0d40_0000;
+
+    /// Copies the three-word block and the globals the maker changes into `SEEN`.
+    fn record(e: &mut Engine, block: u32) {
+        for i in 0..3 {
+            let w = e.mem.u32(block + 4 * i);
+            e.mem.set_u32(SEEN + 4 * i, w);
+        }
+        let flag = e.global::<u8>(MAKING_FLAG_011F4AC0);
+        e.mem.set_u8(SEEN + 0xc, flag);
+        let format = e.global::<u32>(MAKING_FORMAT_011AB3C8);
+        e.mem.set_u32(SEEN + 0x10, format);
+        let byte = e.global::<u8>(FLAG_011AB3C4);
+        e.mem.set_u8(SEEN + 0x14, byte);
+        let word = e.global::<u32>(SETTING_011BF400);
+        e.mem.set_u32(SEEN + 0x18, word);
+    }
+
+    /// The texture manager, the globals and doubles for every maker.
+    fn maker(keep_size: bool, surface: u32, allocation: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        for page in [
+            0x011f_4000u32,
+            0x011a_b000,
+            0x011b_f000,
+            0x011f_9000,
+            0x0109_b000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.map(SEEN, 0x100);
+        e.map(NAME - 8, 0x10);
+        e.set_global::<u8>(KEEP_SIZE_011F9183, u8::from(keep_size));
+        e.set_global::<u32>(RENDERER_011F9508, RENDERER);
+        e.set_global::<u8>(FLAG_011AB3C4, 1);
+        e.set_global::<u32>(SETTING_011BF400, 1);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0xa8, MANAGER_WORD);
+        e.register_double(MAKE_SURFACE_00EE8330, move |e, a| {
+            record(e, a[2]);
+            surface.into_ret()
+        });
+        e.register_double(NI_ALLOCATE, move |_, _| allocation.into_ret());
+        e.register(TEXTURE_CONSTRUCT_00B6B380, |_, a| a[0].into_ret());
+        e.register(MAKE_FIXED_STRING_00A5B690, |_, _| NAME.into_ret());
+        e.register(MAKE_TEXTURE_00B6B610, |e, a| {
+            record(e, a[3]);
+            assert_eq!(e.mem.u32(a[0]), NAME);
+            OBJECT.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Runs `00b6d170` with (width, height, format, flags, multisample) and fillers elsewhere.
+    fn make(e: &mut Engine, this: u32, words: [u32; 5]) -> u32 {
+        let [width, height, format, flags, multisample] = words;
+        e.call(
+            0x00b6_d170,
+            &args![
+                this,
+                1u32,
+                width,
+                height,
+                format,
+                5u32,
+                flags,
+                7u32,
+                multisample,
+                0x99u32,
+                0x77u32
+            ],
+        )
+        .u32()
+    }
+
+    #[test]
+    fn fn_00b6d170_named_path_rounds_the_size_and_passes_the_words() {
+        let (mut e, this) = maker(false, 0, 0);
+        let made = make(&mut e, this, [0x300, 0x1_0120, 0, 0x40, 4]);
+        assert_eq!(made, OBJECT);
+        let named = calls(&e, MAKE_TEXTURE_00B6B610);
+        assert_eq!(named.len(), 1);
+        let a = &named[0];
+        assert_eq!(&a[1..3], &[0x2_0000, 0x2_0000]);
+        assert_eq!(a[4], 2);
+        // Flag 4 clear: the low byte is 1, the upper bytes are the asked height's.
+        assert_eq!(a[5], 0x1_0101);
+        assert_eq!(&a[6..], &[MANAGER_WORD, 0x99, 0x77]);
+        assert_eq!(e.mem.u32(SEEN), 2);
+        assert_eq!(e.mem.u32(SEEN + 4), 2);
+        assert_eq!(e.mem.u32(SEEN + 8), 2);
+        assert_eq!(
+            calls(&e, MAKE_FIXED_STRING_00A5B690),
+            vec![vec![EMPTY_NAME_01011584]]
+        );
+        assert_eq!(
+            calls(&e, IMPORT_INTERLOCKED_DECREMENT),
+            vec![vec![NAME - 8]]
+        );
+        assert!(calls(&e, MAKE_SURFACE_00EE8330).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6d170_flags_change_the_globals_only_while_making() {
+        let (mut e, this) = maker(true, 0, 0);
+        let made = make(
+            &mut e,
+            this,
+            [0x300, 0x200, 0x15, 0x100 | 0x80 | 0x8 | 0x4, 3],
+        );
+        assert_eq!(made, OBJECT);
+        let a = &calls(&e, MAKE_TEXTURE_00B6B610)[0];
+        assert_eq!(&a[1..3], &[0x300, 0x200]);
+        assert_eq!(a[4], 0);
+        assert_eq!(a[5], 0x200);
+        assert_eq!(a[6], 0);
+        assert_eq!(e.mem.u8(SEEN + 0xc), 1);
+        assert_eq!(e.mem.u32(SEEN + 0x10), 0x15);
+        assert_eq!(e.mem.u8(SEEN + 0x14), 0);
+        assert_eq!(e.mem.u32(SEEN + 0x18), 0);
+        assert_eq!(e.global::<u8>(MAKING_FLAG_011F4AC0), 0);
+        assert_eq!(e.global::<u8>(FLAG_011AB3C4), 1);
+        assert_eq!(e.global::<u32>(SETTING_011BF400), 1);
+    }
+
+    #[test]
+    fn fn_00b6d170_name_equal_to_the_null_word_is_not_released() {
+        let (mut e, this) = maker(true, 0, 0);
+        e.set_global::<u32>(NULL_NAME_0109B220, NAME);
+        make(&mut e, this, [4, 4, 0, 0x40, 8]);
+        assert_eq!(calls(&e, MAKE_TEXTURE_00B6B610)[0][4], 3);
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6d170_surface_path() {
+        let (mut e, this) = maker(false, SURFACE, OBJECT);
+        assert_eq!(make(&mut e, this, [3, 2, 0, 0x10, 2]), OBJECT);
+        assert_eq!(calls(&e, MAKE_SURFACE_00EE8330)[0][..2], [4, RENDERER]);
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0x40]]);
+        assert_eq!(
+            calls(&e, TEXTURE_CONSTRUCT_00B6B380),
+            vec![vec![OBJECT, SURFACE, 1, MANAGER_WORD]]
+        );
+        assert!(calls(&e, MAKE_TEXTURE_00B6B610).is_empty());
+        // No surface: nothing allocated; a failed allocation answers 0.
+        let (mut e, this) = maker(false, 0, OBJECT);
+        assert_eq!(make(&mut e, this, [3, 2, 0, 0x10, 2]), 0);
+        assert!(calls(&e, NI_ALLOCATE).is_empty());
+        let (mut e, this) = maker(false, SURFACE, 0);
+        assert_eq!(make(&mut e, this, [3, 2, 0, 0x10, 2]), 0);
+        assert!(calls(&e, TEXTURE_CONSTRUCT_00B6B380).is_empty());
     }
 }

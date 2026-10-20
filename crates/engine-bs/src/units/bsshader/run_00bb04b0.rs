@@ -51,9 +51,45 @@ pub fn fn_00bb0660(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+/// `BSShader::BSShader` (engine map, `00be2200`, `thiscall`, no stack words).
+const BS_SHADER_CONSTRUCT: u32 = 0x00be_2200;
+/// The shader's vtable (`010b8e80`; no RTTI locator before it).
+const SHADER_VTABLE_010B8E80: u32 = 0x010b_8e80;
+/// The three words copied to +0xa0 (`011a9b7c`, `011a9b80`, `011a9b84`).
+const WORDS_011A9B7C: u32 = 0x011a_9b7c;
+
+// Translated from 00bb04b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bb04b0`): the constructor of shader 0x1e, `thiscall`, no
+/// stack words. Runs `BSShader::BSShader` (`00be2200`), stores the vtable `010b8e80`, clears
+/// the word +0x9c, stores 0.0 (`FLDZ`) at +0xa0, +0xa4, +0xa8, sets +0x68 to 0x12, stores
+/// 0.0 at +0x90, +0x94, +0x98, then copies the words at `011a9b7c`, `011a9b80`, `011a9b84`
+/// to +0xa0, +0xa4, +0xa8 and sets the byte +0x24 to 1. Answers `this`.
+pub fn fn_00bb04b0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, SHADER_VTABLE_010B8E80);
+    e.mem.set_u32(base + 0x9c, 0);
+    for offset in [0xa0u32, 0xa4, 0xa8] {
+        e.mem.set_f32(base + offset, 0.0);
+    }
+    e.mem.set_u32(base + 0x68, 0x12);
+    for offset in [0x90u32, 0x94, 0x98] {
+        e.mem.set_f32(base + offset, 0.0);
+    }
+    for index in 0..3u32 {
+        let word = e.global::<u32>(WORDS_011A9B7C + 4 * index);
+        e.mem.set_u32(base + 0xa0 + 4 * index, word);
+    }
+    e.mem.set_u8(base + 0x24, 1);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bb_0660, fn_00bb0660() -> Ptr)]
+    vec![
+        entry!(0x00bb_04b0, fn_00bb04b0(Ptr) -> Ptr),
+        entry!(0x00bb_0660, fn_00bb0660() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -87,5 +123,37 @@ mod tests {
                 (shader_slot(0xc0), vec![SHADER, d]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00bb04b0_sets_the_fields() {
+        let mut e = Engine::new();
+        e.register(BS_SHADER_CONSTRUCT, |_, a| a[0].into_ret());
+        e.map(0x011a_9000, 0x1000);
+        for index in 0..3u32 {
+            e.set_global::<u32>(WORDS_011A9B7C + 4 * index, 0x100 + index);
+        }
+        let this = e.mem.alloc(0xac);
+        e.mem.write(this, &[0xcc; 0xac]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00bb_04b0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), SHADER_VTABLE_010B8E80);
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        assert_eq!(e.mem.u32(this + 0x68), 0x12);
+        for offset in [0x90u32, 0x94, 0x98, 0x9c] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0xa0), 0x100);
+        assert_eq!(e.mem.u32(this + 0xa4), 0x101);
+        assert_eq!(e.mem.u32(this + 0xa8), 0x102);
+        let log = e.call_log.take().unwrap();
+        let constructed: Vec<_> = log.iter().filter(|c| c.0 == BS_SHADER_CONSTRUCT).collect();
+        assert_eq!(constructed.len(), 1);
+        assert_eq!(constructed[0].1, vec![this]);
     }
 }

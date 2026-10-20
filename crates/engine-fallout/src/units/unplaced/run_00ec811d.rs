@@ -337,10 +337,7 @@ pub fn mbsicmp_l(e: &mut Engine, first: Ptr, second: Ptr, locale: u32) -> i32 {
             return result;
         }
         let (mut a, mut b) = (first.addr(), second.addr());
-        loop {
-            let Some(first_char) = mbsicmp_char(e, update, buffer, mbcinfo, &mut a) else {
-                break;
-            };
+        while let Some(first_char) = mbsicmp_char(e, update, buffer, mbcinfo, &mut a) {
             let Some(second_char) = mbsicmp_char(e, update, buffer, mbcinfo, &mut b) else {
                 break;
             };

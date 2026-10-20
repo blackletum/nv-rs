@@ -142,9 +142,74 @@ pub fn fn_00bbd0d0(e: &mut Engine) -> Ptr {
     Ptr::new(shader)
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::*;
+
+/// The lighting 3.0 shader's vtable (`010ba0f8`; no RTTI locator before it).
+const LIGHTING30_VTABLE_010BA0F8: u32 = 0x010b_a0f8;
+/// The shader model setting (`011f91c0`) and the word set to 5 below model 7 (`011ae60c`).
+const SHADER_MODEL_011F91C0: u32 = 0x011f_91c0;
+const WORD_SETTING_011AE60C: u32 = 0x011a_e60c;
+
+// Translated from 00bbc640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lighting30shader.cpp`): the lighting 3.0 shader's
+/// constructor (the creator `00bbd0d0` runs it), `thiscall` with four stack words (four
+/// declarations). Runs `BSShader::BSShader` (`00be2200`), stores the vtable `010ba0f8`, clears
+/// +0x6c to +0x98, sets +0x68 to 0x11; assigns the first declaration to the `NiPointer`s at
+/// +0x28, +0x7c and +0x80, the second to +0x8c and +0x90, the third to +0x84 and +0x88 and the
+/// fourth to +0x94 and +0x98; clears the `NiPointer`s at +0x6c, +0x70, +0x74 and +0x78; clears
+/// the words `01200854` to `01200860`, the byte `01200864`, the words `01200848` and
+/// `0120084c` and the 16-bit `01200850`; sets `011ae60c` to 5 when the shader model setting
+/// (`011f91c0`) is below 7 (signed); clears +0x9c and sets +0xa0 to 1. Answers `this`.
+// Translation incomplete: 00bbc640 - the C++ exception frame (FS:[0] chain, unwind state 0xc for the base and the pointers) is not translated.
+pub fn fn_00bbc640(
+    e: &mut Engine,
+    this: Ptr,
+    first: Ptr,
+    second: Ptr,
+    third: Ptr,
+    fourth: Ptr,
+) -> Ptr {
+    let base = this.addr();
+    e.call(BS_SHADER_CONSTRUCT, &args![base]);
+    e.mem.set_u32(base, LIGHTING30_VTABLE_010BA0F8);
+    for offset in (0x6cu32..=0x98).step_by(4) {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u32(base + 0x68, 0x11);
+    for (declaration, slots) in [
+        (first, &[0x28u32, 0x7c, 0x80][..]),
+        (second, &[0x8c, 0x90][..]),
+        (third, &[0x84, 0x88][..]),
+        (fourth, &[0x94, 0x98][..]),
+    ] {
+        for slot in slots {
+            ni_pointer_assign(e, base + slot, declaration.addr());
+        }
+    }
+    for offset in [0x6cu32, 0x70, 0x74, 0x78] {
+        ni_pointer_clear(e, base + offset);
+    }
+    for word in [0x0120_0854u32, 0x0120_0858, 0x0120_085c, 0x0120_0860] {
+        e.set_global::<u32>(word, 0);
+    }
+    e.set_global::<u8>(0x0120_0864, 0);
+    e.set_global::<u32>(0x0120_0848, 0);
+    e.set_global::<u32>(0x0120_084c, 0);
+    e.set_global::<u16>(0x0120_0850, 0);
+    if e.global::<i32>(SHADER_MODEL_011F91C0) < 7 {
+        e.set_global::<u32>(WORD_SETTING_011AE60C, 5);
+    }
+    e.mem.set_u32(base + 0x9c, 0);
+    e.mem.set_u32(base + 0xa0, 1);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bb_d0d0, fn_00bbd0d0() -> Ptr)]
+    vec![
+        entry!(0x00bb_c640, fn_00bbc640(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00bb_d0d0, fn_00bbd0d0() -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -245,5 +310,76 @@ mod tests {
         assign_member(&mut e, member, new);
         assert!(e.call_log.as_ref().unwrap().is_empty());
         assert_eq!(e.mem.u32(new + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn construct(model: i32) -> (Engine, u32, [u32; 4]) {
+        let mut e = rig();
+        for page in [0x0120_0000u32, 0x011f_9000, 0x011a_e000] {
+            e.map(page, 0x1000);
+        }
+        e.mem.write(0x0120_0848, &[0xee; 0x20]);
+        e.set_global::<u32>(WORD_SETTING_011AE60C, 9);
+        e.set_global::<i32>(SHADER_MODEL_011F91C0, model);
+        let this = e.mem.alloc(0xa4);
+        e.mem.write(this, &[0xcc; 0xa4]);
+        e.mem.set_u32(this + 0x28, 0);
+        let declarations = [
+            object(&mut e, 0),
+            object(&mut e, 0),
+            object(&mut e, 0),
+            object(&mut e, 0),
+        ];
+        let words = [
+            this,
+            declarations[0],
+            declarations[1],
+            declarations[2],
+            declarations[3],
+        ];
+        assert_eq!(e.call(0x00bb_c640, &words).u32(), this);
+        (e, this, declarations)
+    }
+
+    #[test]
+    fn fn_00bbc640_builds_the_shader() {
+        let (e, this, d) = construct(3);
+        assert_eq!(calls(&e, BS_SHADER_CONSTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), LIGHTING30_VTABLE_010BA0F8);
+        assert_eq!(e.mem.u32(this + 0x68), 0x11);
+        for (offset, declaration) in [
+            (0x28u32, d[0]),
+            (0x7c, d[0]),
+            (0x80, d[0]),
+            (0x8c, d[1]),
+            (0x90, d[1]),
+            (0x84, d[2]),
+            (0x88, d[2]),
+            (0x94, d[3]),
+            (0x98, d[3]),
+        ] {
+            assert_eq!(e.mem.u32(this + offset), declaration, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(d[0] + 4), 3);
+        assert_eq!(e.mem.u32(d[1] + 4), 2);
+        for offset in [0x6cu32, 0x70, 0x74, 0x78, 0x9c] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0xa0), 1);
+        assert_eq!(e.mem.bytes(0x0120_0848, 0xa), vec![0; 0xa]);
+        assert_eq!(e.mem.bytes(0x0120_0854, 0x11), vec![0; 0x11]);
+        assert_eq!(e.global::<u16>(0x0120_0852), 0xeeee);
+        assert_eq!(e.global::<u32>(WORD_SETTING_011AE60C), 5);
+    }
+
+    #[test]
+    fn fn_00bbc640_keeps_the_word_from_model_7() {
+        let (e, _, _) = construct(7);
+        assert_eq!(e.global::<u32>(WORD_SETTING_011AE60C), 9);
     }
 }
