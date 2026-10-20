@@ -2186,9 +2186,49 @@ pub fn fn_004de080(e: &mut Engine) -> u8 {
     u8::from(e.global::<u8>(EYEFINITY_FLAG) != 0 && e.global::<u8>(EYEFINITY_SECOND_FLAG) != 0)
 }
 
+/// The two floats `fn_004de0c0` and `fn_004de0d0` load (`0118948c`, `01189490`; Renderer::Init
+/// rounds them to the display width and height when `fn_004de070` answers true).
+const FLOAT_0118948C: u32 = 0x0118_948c;
+const FLOAT_01189490: u32 = 0x0118_9490;
+
+// Translated from 004de0c0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no words): `FLD float ptr [0118948c]`, answered in `ST0`
+/// (the load quiets a signalling NaN).
+pub fn fn_004de0c0(e: &mut Engine) -> f32 {
+    f32::from_bits(x87_quiet_bits(e.mem.u32(FLOAT_0118948C)))
+}
+
+// Translated from 004de0d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no words): `FLD float ptr [01189490]`, answered in `ST0`.
+pub fn fn_004de0d0(e: &mut Engine) -> f32 {
+    f32::from_bits(x87_quiet_bits(e.mem.u32(FLOAT_01189490)))
+}
+
+// Translated from 004de2b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): stores the byte at `this` +4
+/// when `this` is not null; answers `this` (`EAX`).
+pub fn fn_004de2b0(e: &mut Engine, this: u32, value: u8) -> u32 {
+    if this != 0 {
+        e.mem.set_u8(this + 4, value);
+    }
+    this
+}
+
+// Translated from 004de2d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`; Renderer::Init's bool setting
+/// set): `004de2b0(value)` on `this` (the byte zero-extended, `MOVZX`), answers `this`.
+pub fn fn_004de2d0(e: &mut Engine, this: u32, value: u8) -> u32 {
+    e.call(0x004d_e2b0, &args![this, u32::from(value)]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_e0c0, fn_004de0c0() -> f32),
+        entry!(0x004d_e0d0, fn_004de0d0() -> f32),
+        entry!(0x004d_e2b0, fn_004de2b0(u32, u8) -> u32),
+        entry!(0x004d_e2d0, fn_004de2d0(u32, u8) -> u32),
         entry!(0x004d_c5c0, fn_004dc5c0()),
         entry!(0x004d_c650, fn_004dc650()),
         entry!(0x004d_e290, fn_004de290(Ptr, f32) -> Ptr),
@@ -4325,5 +4365,29 @@ mod display_mode_tests {
             calls_to(&e, STRING_COPY),
             vec![vec![ERROR_MESSAGE, MESSAGE_BAD_ADAPTER]]
         );
+    }
+}
+
+#[cfg(test)]
+mod display_size_tests {
+    use super::*;
+
+    #[test]
+    fn the_float_getters_load_their_globals() {
+        let mut e = Engine::new();
+        e.map(FLOAT_0118948C & !0xfff, 0x1000);
+        e.mem.set_u32(FLOAT_0118948C, 1280.0f32.to_bits());
+        e.mem.set_u32(FLOAT_01189490, 720.0f32.to_bits());
+        assert_eq!(e.call(0x004d_e0c0, &[]).f64(), 1280.0);
+        assert_eq!(e.call(0x004d_e0d0, &[]).f64(), 720.0);
+    }
+
+    #[test]
+    fn the_bool_setting_set_stores_its_byte_unless_null() {
+        let mut e = Engine::new();
+        let setting = e.mem.alloc(8);
+        assert_eq!(e.call(0x004d_e2d0, &args![setting, 1u32]).u32(), setting);
+        assert_eq!(e.mem.u8(setting + 4), 1);
+        assert_eq!(e.call(0x004d_e2d0, &args![0u32, 1u32]).u32(), 0);
     }
 }
