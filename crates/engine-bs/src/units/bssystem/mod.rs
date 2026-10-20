@@ -6,6 +6,8 @@ pub mod archive_xenon;
 pub mod bsfile;
 pub mod bsfilecache;
 pub mod bssearchpath;
+pub mod bstaskletmanager;
+pub mod bstaskletmanager_xenon;
 pub mod filefinder;
 pub mod run_00afcfe0;
 pub mod run_00afd230;
@@ -25,6 +27,8 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(bsfile::funcs());
     out.extend(bsfilecache::funcs());
     out.extend(bssearchpath::funcs());
+    out.extend(bstaskletmanager::funcs());
+    out.extend(bstaskletmanager_xenon::funcs());
     out.extend(filefinder::funcs());
     out.extend(run_00afcfe0::funcs());
     out.extend(run_00afd230::funcs());

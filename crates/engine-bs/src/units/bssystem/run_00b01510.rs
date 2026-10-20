@@ -1,10 +1,488 @@
 //! `BSSystem/run_00b01510` (Xbox PDB source unit), subsystem `BSSystem`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
+//!
+//! The PC tasklet manager (vtable `010a4880`, made by `BSTaskletManager::QInstance` `00b00a00`):
+//! up to six worker threads (start `00b023f0`, made suspended) and one starter thread (start
+//! `00b023b0`) that resumes them once its semaphore is released. A worker takes the first task
+//! of the 64 priority lists (`+0x6c`, tails at `+0x16c`) under the critical section at `+0x54`,
+//! each time the work semaphore (`+0x26c`: count, handle, maximum) lets it. Their Windows calls
+//! (threads, semaphores, critical sections, `Sleep`) go to the platform layer and the thread
+//! host.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// KERNEL32 import slots (`stdcall`).
+const INITIALIZE_CRITICAL_SECTION: u32 = 0x00fd_f054;
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+const CREATE_SEMAPHORE_A: u32 = 0x00fd_f0b4;
+const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+const CREATE_THREAD: u32 = 0x00fd_f124;
+const RESUME_THREAD: u32 = 0x00fd_f158;
+const EXIT_THREAD: u32 = 0x00fd_f148;
+const SLEEP: u32 = 0x00fd_f104;
+const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+const INFINITE: u32 = 0xffff_ffff;
+const CREATE_SUSPENDED: u32 = 4;
+
+/// The two vtables: the base part's (`010a48ac`, `00b02720`) and the manager's (`010a4880`).
+const BASE_VTABLE: u32 = 0x010a_48ac;
+const MANAGER_VTABLE: u32 = 0x010a_4880;
+/// The worker and starter thread starts.
+const WORKER_START: u32 = 0x00b0_23f0;
+const STARTER_START: u32 = 0x00b0_23b0;
+/// `BSTaskletManager`'s two hook lists the worker runs around its loop (`00b00c90`, `00b00cf0`).
+const WORKER_ENTER_HOOKS: u32 = 0x00b0_0c90;
+const WORKER_LEAVE_HOOKS: u32 = 0x00b0_0cf0;
+/// The manager's fields.
+const STARTER: u32 = 0x14;
+const THREAD_LIMIT: u32 = 0x18;
+const THREAD_COUNT: u32 = 0x1c;
+const THREAD_HANDLES: u32 = 0x20;
+const THREAD_IDS: u32 = 0x38;
+const STOPPING: u32 = 0x50;
+const LOCK: u32 = 0x54;
+const LISTS: u32 = 0x6c;
+const TAILS: u32 = 0x16c;
+const WORK: u32 = 0x26c;
+
+/// A counted semaphore record as `00b02720` and `00b01d50` lay it out: the count at `+0`, the
+/// handle at `+4`, the maximum at `+8`; `CreateSemaphoreA(0, count, maximum, 0)`.
+fn create_counted_semaphore(e: &mut Engine, record: u32) {
+    let maximum = e.mem.u32(record + 8);
+    let count = e.mem.u32(record);
+    let handle = e
+        .call(CREATE_SEMAPHORE_A, &args![0u32, count, maximum, 0u32])
+        .u32();
+    e.mem.set_u32(record + 4, handle);
+}
+
+/// `ReleaseSemaphore(handle, 1, 0)` on a counted record, then `InterlockedIncrement` on its count.
+fn release_counted(e: &mut Engine, record: u32) {
+    let handle = e.mem.u32(record + 4);
+    e.call(RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+    e.call(INTERLOCKED_INCREMENT, &args![record]);
+}
+
+/// `WaitForSingleObject(handle, INFINITE)` on a counted record, then `InterlockedDecrement`.
+fn wait_counted(e: &mut Engine, record: u32) {
+    let handle = e.mem.u32(record + 4);
+    e.call(WAIT_FOR_SINGLE_OBJECT, &args![handle, INFINITE]);
+    e.call(INTERLOCKED_DECREMENT, &args![record]);
+}
+
+// Translated from 00b02720 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; the tasklet manager's base
+/// constructor): the vtable `010a48ac`, the bytes `+4` and `+5` cleared, and the semaphore record
+/// at `+8` (count 0, maximum 1, `CreateSemaphoreA`). Answers `this`.
+pub fn fn_00b02720(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, BASE_VTABLE);
+    e.mem.set_u8(base + 4, 0);
+    e.mem.set_u8(base + 5, 0);
+    let record = base + 8;
+    e.mem.set_u32(record, 0);
+    e.mem.set_u32(record + 8, 1);
+    create_counted_semaphore(e, record);
+    this
+}
+
+// Translated from 00b01d50 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word, `RET 4`; the tasklet manager's
+/// constructor, `QInstance` asks for 6): the base (`00b02720`), the vtable `010a4880`, no starter
+/// (`+0x14`), the thread limit `+0x18` = `threads` capped at 6, no threads yet (`+0x1c`), the
+/// stopping byte `+0x50` cleared, the critical section at `+0x54`, the work semaphore record at
+/// `+0x26c` (count 0, maximum 0x7FFFFFFF), the 64 list heads at `+0x6c` and the six handle and
+/// id words (`+0x20`, `+0x38`) cleared. Then up to the limit, one suspended worker thread each
+/// (`CreateThread(0, 0, 00b023f0, this, CREATE_SUSPENDED, &id)`), stopping at the first that
+/// fails, counted in `+0x1c`; the byte `+4` says whether any was made, and then the starter
+/// thread (`00b023b0`, running) goes to `+0x14`. Answers `this`.
+pub fn fn_00b01d50(e: &mut Engine, this: Ptr, threads: u32) -> Ptr {
+    let base = this.addr();
+    fn_00b02720(e, this);
+    e.mem.set_u32(base, MANAGER_VTABLE);
+    e.mem.set_u32(base + STARTER, 0);
+    let limit = if threads > 6 { 6 } else { threads };
+    e.mem.set_u32(base + THREAD_LIMIT, limit);
+    e.mem.set_u32(base + THREAD_COUNT, 0);
+    e.mem.set_u8(base + STOPPING, 0);
+    e.call(INITIALIZE_CRITICAL_SECTION, &args![base + LOCK]);
+    let work = base + WORK;
+    e.mem.set_u32(work, 0);
+    e.mem.set_u32(work + 8, 0x7fff_ffff);
+    create_counted_semaphore(e, work);
+    for i in 0..0x40u32 {
+        e.mem.set_u32(base + LISTS + 4 * i, 0);
+    }
+    for i in 0..6u32 {
+        e.mem.set_u32(base + THREAD_HANDLES + 4 * i, 0);
+        e.mem.set_u32(base + THREAD_IDS + 4 * i, 0);
+    }
+    let mut i = 0u32;
+    while i < e.mem.u32(base + THREAD_LIMIT) {
+        let id_out = base + THREAD_IDS + 4 * i;
+        let handle = e
+            .call(
+                CREATE_THREAD,
+                &args![0u32, 0u32, WORKER_START, base, CREATE_SUSPENDED, id_out],
+            )
+            .u32();
+        e.mem.set_u32(base + THREAD_HANDLES + 4 * i, handle);
+        if e.mem.u32(base + THREAD_HANDLES + 4 * i) == 0 {
+            break;
+        }
+        let count = e.mem.u32(base + THREAD_COUNT);
+        e.mem.set_u32(base + THREAD_COUNT, count.wrapping_add(1));
+        i += 1;
+    }
+    let any = e.mem.u32(base + THREAD_COUNT) != 0;
+    e.mem.set_u8(base + 4, u8::from(any));
+    if e.mem.u8(base + 4) != 0 {
+        e.with_stack(4, |e, id| {
+            let handle = e
+                .call(
+                    CREATE_THREAD,
+                    &args![0u32, 0u32, STARTER_START, base, 0u32, id],
+                )
+                .u32();
+            e.mem.set_u32(base + STARTER, handle);
+        });
+    }
+    this
+}
+
+// Translated from 00b023b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The starter thread's start (`stdcall`, one word: the manager; it never returns): waits on the
+/// base semaphore record at `+8` (`WaitForSingleObject` INFINITE, `InterlockedDecrement`),
+/// resumes the workers (`00b02420`) and ends with `ExitThread(0)`.
+pub fn fn_00b023b0(e: &mut Engine, manager: u32) -> u32 {
+    wait_counted(e, manager + 8);
+    fn_00b02420(e, Ptr::new(manager));
+    e.call(EXIT_THREAD, &args![0u32]);
+    // `ExitThread` does not come back on a game thread.
+    0
+}
+
+// Translated from 00b023f0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A worker thread's start (`stdcall`, one word: the manager; it never returns): the tasklet
+/// manager's enter hooks (`00b00c90`), the work loop (`00b02460`), the leave hooks (`00b00cf0`),
+/// then `ExitThread(0)`.
+pub fn fn_00b023f0(e: &mut Engine, manager: u32) -> u32 {
+    e.call(WORKER_ENTER_HOOKS, &args![manager]);
+    fn_00b02460(e, Ptr::new(manager));
+    e.call(WORKER_LEAVE_HOOKS, &args![manager]);
+    e.call(EXIT_THREAD, &args![0u32]);
+    // `ExitThread` does not come back on a game thread.
+    0
+}
+
+// Translated from 00b02420 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`): `ResumeThread` on each of
+/// the `+0x1c` worker handles at `+0x20`.
+pub fn fn_00b02420(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut i = 0u32;
+    while i < e.mem.u32(base + THREAD_COUNT) {
+        let handle = e.mem.u32(base + THREAD_HANDLES + 4 * i);
+        e.call(RESUME_THREAD, &args![handle]);
+        i += 1;
+    }
+}
+
+// Translated from 00b02460 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A worker's loop (`thiscall`, no stack words, plain `RET` once the stopping byte `+0x50` is
+/// set): waits for work (the record at `+0x26c`); unless stopping, takes the first task of the
+/// 64 lists under the lock (the list head moves to the task's `+0x14`; its group is the task's
+/// `+8`). A task with a group whose byte `+0x2e` is clear is run: when its byte `+0xc` is set,
+/// slot `+4` decides (else it runs), then `+0xc` is cleared and slot `+8` runs it. Then, with a
+/// group: a task whose byte `+4` is set in a group still open goes back to its list
+/// (`00b02130`); otherwise slot `+0xc` finishes it, `+8` and `+0x10` are cleared and its group
+/// counts it done (`00b02670`). Each pass ends with `Sleep(0)`.
+pub fn fn_00b02460(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    loop {
+        if e.mem.u8(base + STOPPING) != 0 {
+            return;
+        }
+        let mut task = 0u32;
+        let mut group = 0u32;
+        wait_counted(e, base + WORK);
+        if e.mem.u8(base + STOPPING) == 0 {
+            e.call(ENTER_CRITICAL_SECTION, &args![base + LOCK]);
+            let mut slot = base + LISTS;
+            let mut i = 0u32;
+            while i < 0x40 {
+                task = e.mem.u32(slot);
+                if task != 0 {
+                    let next = e.mem.u32(task + 0x14);
+                    e.mem.set_u32(slot, next);
+                    group = e.mem.u32(task + 8);
+                    break;
+                }
+                i += 1;
+                slot += 4;
+            }
+            e.call(LEAVE_CRITICAL_SECTION, &args![base + LOCK]);
+            // The exe tests the task twice (`00b02524`, `00b02530`).
+            let tested = [task != 0, group != 0, task != 0];
+            if tested.iter().all(|&t| t) && e.mem.u8(group + 0x2e) == 0 {
+                let go = if e.mem.u8(task + 0xc) == 0 {
+                    true
+                } else {
+                    e.vcall(task, 4, &args![]).u8() != 0
+                };
+                if go {
+                    e.mem.set_u8(task + 0xc, 0);
+                    e.vcall(task, 8, &args![]);
+                }
+            }
+            if task != 0 && group != 0 {
+                if e.mem.u8(task + 4) != 0 && e.mem.u8(group + 0x2e) == 0 {
+                    fn_00b02130(e, this, task);
+                } else {
+                    e.vcall(task, 0xc, &args![]);
+                    e.mem.set_u32(task + 8, 0);
+                    e.mem.set_u32(task + 0x10, 0);
+                    fn_00b02670(e, Ptr::new(group));
+                }
+            }
+        }
+        e.call(SLEEP, &args![0u32]);
+    }
+}
+
+// Translated from 00b02130 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word, `RET 4`: the task): a task without a
+/// group (`+8`) answers 0. Otherwise, under the lock, it goes to the end of the list its group's
+/// priority picks (`+0x30`, capped at 0x3F; an empty list's tail is its head), its `+0x14`
+/// cleared and its byte `+4` cleared; then the work semaphore is released once. Answers 1.
+pub fn fn_00b02130(e: &mut Engine, this: Ptr, task: u32) -> u8 {
+    let base = this.addr();
+    if e.mem.u32(task + 8) == 0 {
+        return 0;
+    }
+    e.call(ENTER_CRITICAL_SECTION, &args![base + LOCK]);
+    let group = e.mem.u32(task + 8);
+    let mut list = e.mem.u32(group + 0x30);
+    if list >= 0x40 {
+        list = 0x3f;
+    }
+    if e.mem.u32(base + LISTS + 4 * list) == 0 {
+        e.mem
+            .set_u32(base + TAILS + 4 * list, base + LISTS + 4 * list);
+    }
+    let tail = e.mem.u32(base + TAILS + 4 * list);
+    e.mem.set_u32(tail, task);
+    e.mem.set_u32(base + TAILS + 4 * list, task + 0x14);
+    e.mem.set_u32(task + 0x14, 0);
+    e.mem.set_u8(task + 4, 0);
+    e.call(LEAVE_CRITICAL_SECTION, &args![base + LOCK]);
+    release_counted(e, base + WORK);
+    1
+}
+
+// Translated from 00b02670 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; on a task group): under the
+/// group's critical section (`+0x14`) counts one more task done (`+0x38`); when the group isn't
+/// held open (byte `+0x2d`) and that reaches its task count (`+0x34`), its semaphore record at
+/// `+8` is released once.
+pub fn fn_00b02670(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(ENTER_CRITICAL_SECTION, &args![base + 0x14]);
+    let done = e.mem.u32(base + 0x38).wrapping_add(1);
+    e.mem.set_u32(base + 0x38, done);
+    let finished = e.mem.u8(base + 0x2d) == 0 && e.mem.u32(base + 0x38) == e.mem.u32(base + 0x34);
+    e.call(LEAVE_CRITICAL_SECTION, &args![base + 0x14]);
+    if finished {
+        release_counted(e, base + 8);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(0x00b0_1d50, fn_00b01d50(Ptr, u32) -> Ptr),
+        entry!(0x00b0_2130, fn_00b02130(Ptr, u32) -> u8),
+        entry!(0x00b0_23b0, fn_00b023b0(u32) -> u32),
+        entry!(0x00b0_23f0, fn_00b023f0(u32) -> u32),
+        entry!(0x00b0_2420, fn_00b02420(Ptr)),
+        entry!(0x00b0_2460, fn_00b02460(Ptr)),
+        entry!(0x00b0_2670, fn_00b02670(Ptr)),
+        entry!(0x00b0_2720, fn_00b02720(Ptr) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// An engine whose KERNEL32 imports record their calls; `CreateThread` answers handles from
+    /// 0x100 and `CreateSemaphoreA` 0x80.
+    fn engine() -> (Engine, Log) {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        let log: Log = Rc::default();
+        for f in [
+            INITIALIZE_CRITICAL_SECTION,
+            ENTER_CRITICAL_SECTION,
+            LEAVE_CRITICAL_SECTION,
+            RELEASE_SEMAPHORE,
+            RESUME_THREAD,
+            EXIT_THREAD,
+            WAIT_FOR_SINGLE_OBJECT,
+            INTERLOCKED_INCREMENT,
+            INTERLOCKED_DECREMENT,
+            CREATE_SEMAPHORE_A,
+            CREATE_THREAD,
+            SLEEP,
+            WORKER_ENTER_HOOKS,
+            WORKER_LEAVE_HOOKS,
+        ] {
+            let log = log.clone();
+            e.register_double(f, move |_, a| {
+                let mut log = log.borrow_mut();
+                let n = log.iter().filter(|(c, _)| *c == f).count() as u32;
+                log.push((f, a.to_vec()));
+                match f {
+                    CREATE_THREAD => (0x100 + n).into_ret(),
+                    CREATE_SEMAPHORE_A => 0x80u32.into_ret(),
+                    _ => Ret::default(),
+                }
+            });
+        }
+        (e, log)
+    }
+
+    fn calls(log: &Log, f: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|(c, _)| *c == f)
+            .map(|(_, a)| a.clone())
+            .collect()
+    }
+
+    /// Six suspended workers (a request of 9 is capped), then the running starter; the
+    /// semaphores have counts 0 and maxima 1 and 0x7FFFFFFF.
+    #[test]
+    fn the_constructor_makes_capped_suspended_workers_and_a_starter() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        assert_eq!(e.call(0x00b0_1d50, &args![m, 9u32]).u32(), m);
+        assert_eq!(e.mem.u32(m), MANAGER_VTABLE);
+        assert_eq!(e.mem.u32(m + THREAD_LIMIT), 6);
+        assert_eq!(e.mem.u32(m + THREAD_COUNT), 6);
+        assert_eq!(e.mem.u8(m + 4), 1);
+        assert_eq!(
+            calls(&log, CREATE_SEMAPHORE_A),
+            [vec![0, 0, 1, 0], vec![0, 0, 0x7fff_ffff, 0]]
+        );
+        let threads = calls(&log, CREATE_THREAD);
+        assert_eq!(threads.len(), 7);
+        for (i, t) in threads[..6].iter().enumerate() {
+            assert_eq!(
+                t,
+                &vec![
+                    0,
+                    0,
+                    WORKER_START,
+                    m,
+                    CREATE_SUSPENDED,
+                    m + THREAD_IDS + 4 * i as u32
+                ]
+            );
+            assert_eq!(
+                e.mem.u32(m + THREAD_HANDLES + 4 * i as u32),
+                0x100 + i as u32
+            );
+        }
+        assert_eq!(&threads[6][..5], &[0, 0, STARTER_START, m, 0]);
+        assert_eq!(e.mem.u32(m + STARTER), 0x106);
+        assert_eq!(e.mem.u32(m + WORK + 4), 0x80);
+    }
+
+    /// The starter waits on its semaphore, resumes every worker and exits; a worker runs the
+    /// hooks around its loop (stopped at once here) and exits.
+    #[test]
+    fn the_thread_starts_resume_and_run_the_loop() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        e.mem.set_u32(m + THREAD_COUNT, 2);
+        e.mem.set_u32(m + THREAD_HANDLES, 0x200);
+        e.mem.set_u32(m + THREAD_HANDLES + 4, 0x204);
+        e.mem.set_u32(m + 0xc, 0x90);
+        e.call(0x00b0_23b0, &args![m]);
+        assert_eq!(calls(&log, WAIT_FOR_SINGLE_OBJECT), [vec![0x90, INFINITE]]);
+        assert_eq!(calls(&log, INTERLOCKED_DECREMENT), [vec![m + 8]]);
+        assert_eq!(calls(&log, RESUME_THREAD), [vec![0x200], vec![0x204]]);
+        assert_eq!(calls(&log, EXIT_THREAD), [vec![0]]);
+        e.mem.set_u8(m + STOPPING, 1);
+        e.call(0x00b0_23f0, &args![m]);
+        assert_eq!(calls(&log, WORKER_ENTER_HOOKS), [vec![m]]);
+        assert_eq!(calls(&log, WORKER_LEAVE_HOOKS), [vec![m]]);
+        assert_eq!(calls(&log, EXIT_THREAD).len(), 2);
+    }
+
+    /// One pass of the loop: the first task of list 2 runs (no decide byte), is finished and
+    /// counted on its group; the next pass sees the stopping byte (set by `Sleep`'s double).
+    #[test]
+    fn a_worker_runs_the_first_task_and_counts_it_done() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        let (task, group, vtable) = (0x1400u32, 0x1500u32, 0x1600u32);
+        e.mem.set_u32(m + LISTS + 8, task);
+        e.mem.set_u32(task, vtable);
+        e.mem.set_u32(task + 8, group);
+        e.mem.set_u32(task + 0x14, 0x1450);
+        e.mem.set_u32(group + 0x34, 1);
+        e.mem.set_u32(group + 0xc, 0x91);
+        e.put_vtable(vtable, &[0, 0x00ab_0004, 0x00ab_0008, 0x00ab_000c]);
+        for f in [0x00ab_0004u32, 0x00ab_0008, 0x00ab_000c] {
+            let log = log.clone();
+            e.register_double(f, move |_, a| {
+                log.borrow_mut().push((f, a.to_vec()));
+                Ret::default()
+            });
+        }
+        e.register(SLEEP, move |e, _| {
+            e.mem.set_u8(0x1000 + STOPPING, 1);
+            Ret::default()
+        });
+        e.call(0x00b0_2460, &args![m]);
+        assert_eq!(e.mem.u32(m + LISTS + 8), 0x1450, "the list moves on");
+        assert!(calls(&log, 0x00ab_0004).is_empty(), "no decide byte");
+        assert_eq!(calls(&log, 0x00ab_0008), [vec![task]]);
+        assert_eq!(calls(&log, 0x00ab_000c), [vec![task]]);
+        assert_eq!((e.mem.u32(task + 8), e.mem.u32(task + 0x10)), (0, 0));
+        assert_eq!(e.mem.u32(group + 0x38), 1);
+        assert_eq!(calls(&log, RELEASE_SEMAPHORE), [vec![0x91, 1, 0]]);
+        assert_eq!(calls(&log, INTERLOCKED_INCREMENT), [vec![group + 8]]);
+    }
+
+    /// Requeueing: a task goes to the end of its group's list (capped at 0x3F) and the work
+    /// semaphore is released; a task without a group answers 0.
+    #[test]
+    fn a_task_goes_back_to_the_end_of_its_list() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        let (task, group) = (0x1400u32, 0x1500u32);
+        e.mem.set_u32(m + WORK + 4, 0x92);
+        assert_eq!(e.call(0x00b0_2130, &args![m, task]).u32() & 0xff, 0);
+        e.mem.set_u32(task + 8, group);
+        e.mem.set_u32(group + 0x30, 0x55);
+        e.mem.set_u8(task + 4, 1);
+        e.mem.set_u32(task + 0x14, 0xdead);
+        assert_eq!(e.call(0x00b0_2130, &args![m, task]).u32() & 0xff, 1);
+        assert_eq!(e.mem.u32(m + LISTS + 4 * 0x3f), task);
+        assert_eq!(e.mem.u32(m + TAILS + 4 * 0x3f), task + 0x14);
+        assert_eq!((e.mem.u32(task + 0x14), e.mem.u8(task + 4)), (0, 0));
+        assert_eq!(calls(&log, RELEASE_SEMAPHORE), [vec![0x92, 1, 0]]);
+        assert_eq!(calls(&log, INTERLOCKED_INCREMENT), [vec![m + WORK]]);
+    }
 }

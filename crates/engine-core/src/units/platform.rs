@@ -378,6 +378,210 @@ fn raise_exception(_e: &mut Engine, code: u32, flags: u32, count: u32, _argument
     }
 }
 
+// The user-interface and registry calls the game's input start-up makes (`00a22660`): the
+// Windows defaults of a machine with nothing changed, read-only. The window is the viewer's.
+
+/// `HKEY_CURRENT_USER`, the Win32 error codes these return, and `REG_SZ`.
+const HKEY_CURRENT_USER: u32 = 0x8000_0001;
+const ERROR_SUCCESS: u32 = 0;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_INVALID_HANDLE: u32 = 6;
+const ERROR_MORE_DATA: u32 = 234;
+const REG_SZ: u32 = 1;
+/// The double-click time Windows starts with (milliseconds).
+pub const DEFAULT_DOUBLE_CLICK_TIME: u32 = 500;
+/// `HKCU\Control Panel\Mouse` values Windows starts with, the ones a key here answers.
+const MOUSE_VALUES: [(&[u8], &[u8]); 1] = [(b"MouseSensitivity", b"10")];
+
+// Platform: replaces USER32.DLL GetActiveWindow (import)
+/// The game's main window ([`create_window`]), 0 before there is one.
+fn get_active_window(e: &mut Engine) -> u32 {
+    e.kernel.main_window
+}
+
+// Platform: replaces USER32.DLL SwapMouseButton (import)
+/// Sets whether the buttons are swapped and answers whether they were (not at first).
+fn swap_mouse_button(e: &mut Engine, swap: u32) -> u32 {
+    let was = e.kernel.mouse_buttons_swapped;
+    e.kernel.mouse_buttons_swapped = swap != 0;
+    u32::from(was)
+}
+
+// Platform: replaces USER32.DLL GetDoubleClickTime (import)
+fn get_double_click_time(_e: &mut Engine) -> u32 {
+    DEFAULT_DOUBLE_CLICK_TIME
+}
+
+// Platform: replaces ADVAPI32.DLL RegOpenKeyExA (import)
+/// Opens `HKCU\Control Panel\Mouse` (the only key provided, read-only, with the Windows
+/// defaults); any other key is `ERROR_FILE_NOT_FOUND`.
+fn reg_open_key_ex_a(
+    e: &mut Engine,
+    root: u32,
+    name: Ptr,
+    _options: u32,
+    _access: u32,
+    out: Ptr,
+) -> u32 {
+    let name = e.mem.cstr(name.addr());
+    if root != HKEY_CURRENT_USER || !name.eq_ignore_ascii_case(br"Control Panel\Mouse") {
+        return ERROR_FILE_NOT_FOUND;
+    }
+    let key = e.kernel.insert(KernelObject::RegistryKey);
+    e.mem.set_u32(out.addr(), key);
+    ERROR_SUCCESS
+}
+
+// Platform: replaces ADVAPI32.DLL RegQueryValueExA (import)
+/// A string value of the mouse key ([`MOUSE_VALUES`], `REG_SZ`, with its terminating zero):
+/// the type through `kind`, the bytes into `data` when `*size` holds them (else
+/// `ERROR_MORE_DATA`), the size needed in `*size` either way; no data buffer asks the size only.
+fn reg_query_value_ex_a(
+    e: &mut Engine,
+    key: u32,
+    name: Ptr,
+    _reserved: u32,
+    kind: Ptr,
+    data: Ptr,
+    size: Ptr,
+) -> u32 {
+    if !matches!(e.kernel.objects.get(&key), Some(KernelObject::RegistryKey)) {
+        return ERROR_INVALID_HANDLE;
+    }
+    let name = e.mem.cstr(name.addr());
+    let Some((_, value)) = MOUSE_VALUES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+    else {
+        return ERROR_FILE_NOT_FOUND;
+    };
+    let needed = value.len() as u32 + 1;
+    if !kind.is_null() {
+        e.mem.set_u32(kind.addr(), REG_SZ);
+    }
+    if data.is_null() {
+        if !size.is_null() {
+            e.mem.set_u32(size.addr(), needed);
+        }
+        return ERROR_SUCCESS;
+    }
+    let room = e.mem.u32(size.addr());
+    e.mem.set_u32(size.addr(), needed);
+    if room < needed {
+        return ERROR_MORE_DATA;
+    }
+    e.mem.set_cstr(data.addr(), value);
+    ERROR_SUCCESS
+}
+
+// Platform: replaces ADVAPI32.DLL RegCloseKey (import)
+fn reg_close_key(e: &mut Engine, key: u32) -> u32 {
+    match e.kernel.objects.get(&key) {
+        Some(KernelObject::RegistryKey) => {
+            e.kernel.objects.remove(&key);
+            ERROR_SUCCESS
+        }
+        _ => ERROR_INVALID_HANDLE,
+    }
+}
+
+/// ASCII white space taken off both ends (`<[u8]>::trim_ascii` is newer than the MSRV).
+trait TrimSpaces {
+    fn trim_spaces(&self) -> &Self;
+}
+
+impl TrimSpaces for [u8] {
+    fn trim_spaces(&self) -> &[u8] {
+        let start = self
+            .iter()
+            .position(|b| !b.is_ascii_whitespace())
+            .unwrap_or(self.len());
+        let end = self
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map_or(start, |i| i + 1);
+        &self[start..end.max(start)]
+    }
+}
+
+/// The value of `key` in section `section` of the INI text `text` (names compared without case,
+/// spaces around names and values trimmed, one pair of surrounding quotes taken off), as
+/// `GetPrivateProfileStringA` finds it.
+fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let mut inside = false;
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.trim_spaces();
+        if let Some(rest) = line.strip_prefix(b"[") {
+            let name = rest.split(|&b| b == b']').next().unwrap_or(rest);
+            inside = name.trim_spaces().eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let Some(at) = line.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        if line[..at].trim_spaces().eq_ignore_ascii_case(key) {
+            let value = line[at + 1..].trim_spaces();
+            let value = match value {
+                [b'"', middle @ .., b'"'] => middle,
+                _ => value,
+            };
+            return Some(value.to_vec());
+        }
+    }
+    None
+}
+
+// Platform: replaces KERNEL32.DLL GetPrivateProfileStringA (import)
+/// The value of `key` in `section` of the INI file `file` on the player's disk (read-only), or
+/// `default` (none: empty) when the file, the section or the key isn't there: copied into
+/// `buffer`, cut to `size - 1` bytes and zero-terminated; answers the bytes copied. Listing a
+/// file's sections or keys (a null section or key) is not provided.
+fn get_private_profile_string_a(
+    e: &mut Engine,
+    section: Ptr,
+    key: Ptr,
+    default: Ptr,
+    buffer: Ptr,
+    size: u32,
+    file: Ptr,
+) -> u32 {
+    if section.is_null() || key.is_null() {
+        panic!("GetPrivateProfileStringA with a null section or key is not provided");
+    }
+    let section = e.mem.cstr(section.addr());
+    let key = e.mem.cstr(key.addr());
+    let path = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
+    let found = std::fs::read(&path)
+        .ok()
+        .and_then(|text| ini_value(&text, &section, &key));
+    let value = match found {
+        Some(value) => value,
+        None if default.is_null() => Vec::new(),
+        None => e.mem.cstr(default.addr()),
+    };
+    if size == 0 {
+        return 0;
+    }
+    let copied = value.len().min(size as usize - 1);
+    e.mem.set_cstr(buffer.addr(), &value[..copied]);
+    copied as u32
+}
+
+// Platform: replaces KERNEL32.DLL WritePrivateProfileStringA (import)
+/// Answers success without writing: the platform never changes the player's files.
+fn write_private_profile_string_a(
+    _e: &mut Engine,
+    _section: Ptr,
+    _key: Ptr,
+    _value: Ptr,
+    _file: Ptr,
+) -> u32 {
+    1
+}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_ms
@@ -454,6 +658,8 @@ pub enum KernelObject {
     /// The game's main window ([`create_window`]): only a handle; the window itself is the
     /// viewer's (platform).
     Window,
+    /// An open registry key ([`reg_open_key_ex_a`]): `HKCUControl PanelMouse`.
+    RegistryKey,
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -487,6 +693,10 @@ pub struct Kernel {
     /// game's ANSI form; `Engine::with_exe` sets it to the executable's
     /// folder, where Steam starts the game.
     pub current_directory: Vec<u8>,
+    /// The game's main window ([`create_window`]), which `GetActiveWindow` answers.
+    pub main_window: u32,
+    /// Whether `SwapMouseButton` swapped the buttons.
+    mouse_buttons_swapped: bool,
 }
 
 impl Kernel {
@@ -734,6 +944,7 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
             crate::thread_host::thread_ended(e, handle).unwrap_or(false)
         }
         Some(KernelObject::Window) => false,
+        Some(KernelObject::RegistryKey) => false,
         None if handle == CURRENT_THREAD => false,
         None => return None,
     };
@@ -1061,7 +1272,9 @@ pub fn direct3d_device_created(e: &mut Engine, behavior_flags: u32) {
 /// `0086af75`). The host makes it where `main` would create the window; the window itself (its
 /// size from `AdjustWindowRect`, `00fdf310`, its messages) is the viewer's.
 pub fn create_window(e: &mut Engine) -> u32 {
-    e.kernel.insert(KernelObject::Window)
+    let window = e.kernel.insert(KernelObject::Window);
+    e.kernel.main_window = window;
+    window
 }
 
 /// Changes a thread's suspend count by `delta` (both the handle's record and
@@ -1305,6 +1518,46 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (k, "Sleep", entry!(0, sleep(u32)).1),
         (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
+        (
+            k,
+            "GetPrivateProfileStringA",
+            entry!(0, get_private_profile_string_a(Ptr, Ptr, Ptr, Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "WritePrivateProfileStringA",
+            entry!(0, write_private_profile_string_a(Ptr, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetActiveWindow",
+            entry!(0, get_active_window() -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "SwapMouseButton",
+            entry!(0, swap_mouse_button(u32) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "GetDoubleClickTime",
+            entry!(0, get_double_click_time() -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "RegOpenKeyExA",
+            entry!(0, reg_open_key_ex_a(u32, Ptr, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "RegQueryValueExA",
+            entry!(0, reg_query_value_ex_a(u32, Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "ADVAPI32.dll",
+            "RegCloseKey",
+            entry!(0, reg_close_key(u32) -> u32).1,
+        ),
         (
             k,
             "RaiseException",
@@ -2162,6 +2415,153 @@ mod tests {
             &mut e,
             VIRTUAL_ALLOC,
             &[0, 0x1000, MEM_COMMIT | 0x10_0000, PAGE_READWRITE],
+        );
+    }
+}
+
+#[cfg(test)]
+mod os_defaults_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(0x1000, 0x1000);
+        e
+    }
+
+    #[test]
+    fn the_active_window_is_the_main_window() {
+        let mut e = engine();
+        assert_eq!(get_active_window(&mut e), 0);
+        let window = create_window(&mut e);
+        assert_eq!(get_active_window(&mut e), window);
+        assert_eq!(swap_mouse_button(&mut e, 0), 0);
+        assert_eq!(swap_mouse_button(&mut e, 1), 0);
+        assert_eq!(swap_mouse_button(&mut e, 0), 1);
+        assert_eq!(get_double_click_time(&mut e), 500);
+    }
+
+    /// `HKCU\Control Panel\Mouse` opens and answers `MouseSensitivity` = "10" (`REG_SZ`, three
+    /// bytes with the zero); a short buffer gets `ERROR_MORE_DATA`; other keys and values aren't
+    /// there.
+    #[test]
+    fn the_mouse_key_has_the_windows_defaults() {
+        let mut e = engine();
+        e.mem.set_cstr(0x1000, br"control panel\mouse");
+        e.mem.set_cstr(0x1040, b"MouseSensitivity");
+        e.mem.set_cstr(0x1060, br"Software\Other");
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                HKEY_CURRENT_USER,
+                Ptr::new(0x1060),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                0x8000_0002,
+                Ptr::new(0x1000),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                HKEY_CURRENT_USER,
+                Ptr::new(0x1000),
+                0,
+                0,
+                Ptr::new(0x1100)
+            ),
+            ERROR_SUCCESS
+        );
+        let key = e.mem.u32(0x1100);
+        let (kind, data, size) = (Ptr::new(0x1104), Ptr::new(0x1200), Ptr::new(0x1108));
+        e.mem.set_u32(size.addr(), 2);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_MORE_DATA
+        );
+        assert_eq!(e.mem.u32(size.addr()), 3);
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_SUCCESS
+        );
+        assert_eq!(e.mem.cstr(data.addr()), b"10");
+        assert_eq!(
+            (e.mem.u32(kind.addr()), e.mem.u32(size.addr())),
+            (REG_SZ, 3)
+        );
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1060), 0, kind, data, size),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(reg_close_key(&mut e, key), ERROR_SUCCESS);
+        assert_eq!(reg_close_key(&mut e, key), ERROR_INVALID_HANDLE);
+    }
+
+    #[test]
+    fn ini_values_are_found_by_section_and_key() {
+        let text = b"; comment\r\n[General]\r\n sLanguage = ENGLISH \r\n[Controls]\r\nForward=\"0011FF00\"\r\nBack=1F\r\n";
+        assert_eq!(
+            ini_value(text, b"controls", b"forward").unwrap(),
+            b"0011FF00"
+        );
+        assert_eq!(ini_value(text, b"Controls", b"Back").unwrap(), b"1F");
+        assert_eq!(
+            ini_value(text, b"General", b"sLanguage").unwrap(),
+            b"ENGLISH"
+        );
+        assert_eq!(ini_value(text, b"General", b"Back"), None);
+    }
+
+    /// A missing file gives the default, cut to the buffer; writing changes nothing and answers 1.
+    #[test]
+    fn profile_strings_fall_back_to_the_default() {
+        let mut e = engine();
+        e.mem.set_cstr(0x1000, b"Controls");
+        e.mem.set_cstr(0x1020, b"Forward");
+        e.mem.set_cstr(0x1040, b"default");
+        e.mem.set_cstr(0x1060, br"Z:\no\such\file.ini");
+        let n = get_private_profile_string_a(
+            &mut e,
+            Ptr::new(0x1000),
+            Ptr::new(0x1020),
+            Ptr::new(0x1040),
+            Ptr::new(0x1100),
+            4,
+            Ptr::new(0x1060),
+        );
+        assert_eq!(n, 3);
+        assert_eq!(e.mem.cstr(0x1100), b"def");
+        let n = get_private_profile_string_a(
+            &mut e,
+            Ptr::new(0x1000),
+            Ptr::new(0x1020),
+            Ptr::NULL,
+            Ptr::new(0x1100),
+            0x40,
+            Ptr::new(0x1060),
+        );
+        assert_eq!((n, e.mem.u8(0x1100)), (0, 0));
+        assert_eq!(
+            write_private_profile_string_a(
+                &mut e,
+                Ptr::new(0x1000),
+                Ptr::new(0x1020),
+                Ptr::new(0x1040),
+                Ptr::new(0x1060)
+            ),
+            1
         );
     }
 }
