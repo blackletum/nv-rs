@@ -104,6 +104,8 @@ pub struct Adapter {
     /// The Windows directory and the folders by CSIDL (`SHGetFolderPathA`: result, path).
     windows_directory: Vec<u8>,
     folders: HashMap<u32, (u32, Vec<u8>)>,
+    /// `GetTimeZoneInformation`'s answer when captured and the `TIME_ZONE_INFORMATION` bytes.
+    time_zone: Option<(u32, Vec<u8>)>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -147,6 +149,7 @@ impl Adapter {
                     a.caps.insert(words(f[1])[1], (hex(2), bytes(f[3])));
                 }
                 "GetWindowsDirectoryA" => a.windows_directory = bytes(f[3]),
+                "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
                 "SHGetFolderPathA" => {
                     a.folders.insert(words(f[1])[0], (hex(2), bytes(f[3])));
                 }
@@ -251,6 +254,15 @@ pub fn windows_directory(e: &mut Engine) -> Vec<u8> {
         "the adapter table has no Windows directory: {CAPTURE_HINT}"
     );
     dir
+}
+
+/// The player's time zone from the table (`GetTimeZoneInformation`'s 172 bytes); the run stops
+/// when the table has none.
+pub fn time_zone(e: &mut Engine) -> Vec<u8> {
+    match adapter(e).time_zone.as_ref() {
+        Some((_, bytes)) if bytes.len() == 172 => bytes.clone(),
+        _ => panic!("the adapter table has no time zone (GetTimeZoneInformation): {CAPTURE_HINT}"),
+    }
 }
 
 /// The player's folder for a CSIDL (`SHGetFolderPathA`'s result and path), if the table has it.

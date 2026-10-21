@@ -42,6 +42,7 @@ extern "system" {
 extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
     fn GetWindowsDirectoryA(buffer: *mut u8, size: u32) -> u32;
+    fn GetTimeZoneInformation(info: *mut u8) -> u32;
 }
 #[link(name = "shell32")]
 extern "system" {
@@ -62,6 +63,16 @@ unsafe fn folders(o: &mut impl Write) {
         let len = buffer.iter().position(|&b| b == 0).unwrap_or(0);
         writeln!(o, "SHGetFolderPathA\t{folder:x} 0\t{:x}\t{}", hr as u32, hex(&buffer[..len])).unwrap();
     }
+}
+
+/// The player's time zone: `GetTimeZoneInformation`'s answer (`TIME_ZONE_ID_*`) and the 172
+/// bytes of the `TIME_ZONE_INFORMATION` it wrote, hex. The platform's `GetTimeZoneInformation`,
+/// `FileTimeToLocalFileTime` and the CRT's `_tzset` read it; which bias is in effect is worked
+/// out from its rules and the real clock when the game asks.
+unsafe fn time_zone(o: &mut impl Write) {
+    let mut info = vec![0u8; 172];
+    let id = GetTimeZoneInformation(info.as_mut_ptr());
+    writeln!(o, "GetTimeZoneInformation\t\t{id:x}\t{}", hex(&info)).unwrap();
 }
 
 /// `WNDCLASSA`.
@@ -179,6 +190,7 @@ fn main() {
         }
         windows(&mut o);
         folders(&mut o);
+        time_zone(&mut o);
         let d3d = Direct3DCreate9(32);
         assert!(!d3d.is_null());
         let vt = *d3d;
