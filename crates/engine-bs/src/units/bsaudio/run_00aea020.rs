@@ -12,62 +12,99 @@ pub fn fn_00aea210(e: &mut Engine, this: Ptr) {
     e.call(0x00ad_7000, &args![this]);
 }
 
-/// `00aea020`'s function-local static: its guard word (`011f7124`, bit 0), the object
-/// (`011f7080`), its `_atexit` destructor (`00fdbfe0`) and the global that points at it
-/// (`011f6d98`).
-const AUDIO_GUARD: u32 = 0x011f_7124;
-const AUDIO_OBJECT: u32 = 0x011f_7080;
-const AUDIO_DESTRUCTOR: u32 = 0x00fd_bfe0;
-const AUDIO_POINTER: u32 = 0x011f_6d98;
-/// `_atexit` (`00ec658f`, `cdecl`, one word), `memset` (`00ec61c0`, `cdecl`, three words) and
-/// the import slot of KERNEL32 `GetTickCount` (`stdcall`, no words).
-const ATEXIT: u32 = 0x00ec_658f;
-const MEMSET: u32 = 0x00ec_61c0;
+/// `GetTickCount` (import slot).
 const GET_TICK_COUNT: u32 = 0x00fd_f060;
-/// The base constructor `00ad6f40` (`thiscall`, no stack words).
-const AUDIO_BASE_CONSTRUCT: u32 = 0x00ad_6f40;
+/// The audio singleton's storage (`011f7080`), its construction guard (bit 0 of
+/// `011f7124`), the pointer to it (`011f6d98`), `_atexit` (`00ec658f`) and the destructor it
+/// registers (`00fdbfe0`).
+const AUDIO_STORAGE: u32 = 0x011f_7080;
+const AUDIO_GUARD: u32 = 0x011f_7124;
+const AUDIO_POINTER: u32 = 0x011f_6d98;
+const ATEXIT: u32 = 0x00ec_658f;
+const AUDIO_STORAGE_DESTRUCTOR: u32 = 0x00fd_bfe0;
+/// The base constructor `00ad6f40` (`thiscall`, no stack words) and `memset` (`00ec61c0`).
+const AUDIO_BASE_CONSTRUCTOR: u32 = 0x00ad_6f40;
+const MEMSET: u32 = 0x00ec_61c0;
+/// The timer's starting count, 600000 (ten minutes in milliseconds).
+const TIMER_START: u32 = 600_000;
 
-// Translated from 00aea020 (disassembled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00aea020 - the FS:[0] exception frame (the unwind of the static's
-// construction) is not modeled.
-/// Unnamed in the engine map (`cdecl`, no arguments, plain `RET`; `Main::Main`'s audio set-up
-/// `0086ce40` calls it): the first time (bit 0 of `011f7124` clear) sets the bit, constructs the
-/// object at `011f7080` (`00aea1b0`) and gives its destructor `00fdbfe0` to `_atexit`; then, every
-/// time, points `011f6d98` at it.
+// Translated from 00aea020 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00aea020 - the FS:[0] exception frame (C++ unwinding of the static's construction) is not translated
+/// Unnamed in the engine map (`run_00aea020`): the audio singleton's getter set-up (no
+/// arguments). On the first run (bit 0 of `011f7124` clear) it sets the bit, constructs the
+/// `BSWin32Audio` object at `011f7080` (`00aea1b0`) and registers its destructor `00fdbfe0`
+/// with `_atexit`; then `011f6d98` points at the object.
 pub fn fn_00aea020(e: &mut Engine) {
-    if e.mem.u32(AUDIO_GUARD) & 1 == 0 {
+    let guard = e.mem.u32(AUDIO_GUARD);
+    if guard & 1 == 0 {
         let guard = e.mem.u32(AUDIO_GUARD);
         e.mem.set_u32(AUDIO_GUARD, guard | 1);
-        e.call(0x00ae_a1b0, &args![AUDIO_OBJECT]);
-        e.call(ATEXIT, &args![AUDIO_DESTRUCTOR]);
+        fn_00aea1b0(e, Ptr::new(AUDIO_STORAGE));
+        e.call(ATEXIT, &args![AUDIO_STORAGE_DESTRUCTOR]);
     }
-    e.mem.set_u32(AUDIO_POINTER, AUDIO_OBJECT);
+    e.mem.set_u32(AUDIO_POINTER, AUDIO_STORAGE);
 }
 
-// Translated from 00aea1b0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`): the base constructor
-/// `00ad6f40`, the vtable `010a39d8` (RTTI `.?AVBSWin32Audio@@`), `+0x38`, `+0x3c` and `+0xa0`
-/// cleared and the 0x60 bytes from `+0x40` zeroed (`memset`). Answers `this`.
-pub fn fn_00aea1b0(e: &mut Engine, this: Ptr) -> Ptr {
-    let base = this.addr();
-    e.call(AUDIO_BASE_CONSTRUCT, &args![this]);
-    e.mem.set_u32(base, 0x010a_39d8);
-    e.mem.set_u32(base + 0x38, 0);
-    e.mem.set_u32(base + 0x3c, 0);
-    e.mem.set_u32(base + 0xa0, 0);
-    e.call(MEMSET, &args![base + 0x40, 0u32, 0x60u32]);
+/// The three-word timer reset shared by `00aea0a0`, `00aea0d0` and `00aea150`: +8 cleared,
+/// +0 set to 600000 and +4 to the tick count.
+fn reset_timer(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this.wrapping_add(8), 0);
+    e.mem.set_u32(this, TIMER_START);
+    let now = e.call(GET_TICK_COUNT, &args![]).u32();
+    e.mem.set_u32(this.wrapping_add(4), now);
+}
+
+// Translated from 00aea0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aea020`): a timer's constructor (`thiscall`, no stack
+/// words): flags (+8) cleared, the count (+0) set to 600000 and the last tick (+4) to
+/// `GetTickCount`. Answers `this`.
+pub fn fn_00aea0a0(e: &mut Engine, this: Ptr) -> Ptr {
+    reset_timer(e, this.addr());
     this
 }
 
-// Translated from 00aea0a0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`): `+8` cleared, `+0` set to
-/// 600000 (0x927C0) and `+4` to `GetTickCount()`. Answers `this`.
-pub fn fn_00aea0a0(e: &mut Engine, this: Ptr) -> Ptr {
+// Translated from 00aea0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aea020`): the same timer reset as `00aea0a0`, without a
+/// result (`thiscall`, no stack words).
+pub fn fn_00aea0d0(e: &mut Engine, this: Ptr) {
+    reset_timer(e, this.addr());
+}
+
+// Translated from 00aea100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aea020`): advances the timer (`thiscall`, no stack
+/// words): unless flag bit 0 (+8) is set, the count (+0) grows by the ticks since the last
+/// tick (+4); the last tick becomes `GetTickCount` either way.
+pub fn fn_00aea100(e: &mut Engine, this: Ptr) {
     let base = this.addr();
-    e.mem.set_u32(base + 8, 0);
-    e.mem.set_u32(base, 0x0009_27c0);
-    let ticks = e.call(GET_TICK_COUNT, &args![]).u32();
-    e.mem.set_u32(base + 4, ticks);
+    let now = e.call(GET_TICK_COUNT, &args![]).u32();
+    let elapsed = now.wrapping_sub(e.mem.u32(base.wrapping_add(4)));
+    if e.mem.u32(base.wrapping_add(8)) & 1 == 0 {
+        let count = e.mem.u32(base);
+        e.mem.set_u32(base, count.wrapping_add(elapsed));
+    }
+    e.mem.set_u32(base.wrapping_add(4), now);
+}
+
+// Translated from 00aea150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aea020`): the same timer reset as `00aea0d0`
+/// (`thiscall`, no stack words).
+pub fn fn_00aea150(e: &mut Engine, this: Ptr) {
+    reset_timer(e, this.addr());
+}
+
+// Translated from 00aea1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00aea020`): the `BSWin32Audio` constructor (`thiscall`, no
+/// stack words; its virtual table `010a39d8`): the base constructor `00ad6f40`, the virtual
+/// table, +0x38, +0x3c and +0xa0 cleared and the 0x60 bytes from +0x40 cleared (`memset`).
+/// Answers `this`.
+pub fn fn_00aea1b0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(AUDIO_BASE_CONSTRUCTOR, &args![this]);
+    e.mem.set_u32(base, 0x010a_39d8);
+    e.mem.set_u32(base.wrapping_add(0x38), 0);
+    e.mem.set_u32(base.wrapping_add(0x3c), 0);
+    e.mem.set_u32(base.wrapping_add(0xa0), 0);
+    e.call(MEMSET, &args![base.wrapping_add(0x40), 0u32, 0x60u32]);
     this
 }
 
@@ -76,8 +113,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ae_a210, fn_00aea210(Ptr)),
         entry!(0x00ae_a020, fn_00aea020()),
-        entry!(0x00ae_a1b0, fn_00aea1b0(Ptr) -> Ptr),
         entry!(0x00ae_a0a0, fn_00aea0a0(Ptr) -> Ptr),
+        entry!(0x00ae_a0d0, fn_00aea0d0(Ptr)),
+        entry!(0x00ae_a100, fn_00aea100(Ptr)),
+        entry!(0x00ae_a150, fn_00aea150(Ptr)),
+        entry!(0x00ae_a1b0, fn_00aea1b0(Ptr) -> Ptr),
     ]
 }
 
@@ -114,53 +154,103 @@ mod tests {
 }
 
 #[cfg(test)]
-mod audio_static_tests {
+mod b049_tests {
     use super::*;
 
-    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
         e.call_log
             .as_ref()
             .unwrap()
             .iter()
-            .filter(|(a, _)| *a == callee)
-            .map(|(_, w)| w.clone())
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
             .collect()
     }
 
-    /// The first call constructs the static and registers its destructor; every call points
-    /// `011f6d98` at it.
     #[test]
-    fn the_static_is_made_once_and_pointed_at() {
+    fn fn_00aea020_constructs_the_singleton_once() {
         let mut e = Engine::new();
         e.map(0x011f_6000, 0x2000);
-        for f in [0x00ae_a1b0, ATEXIT] {
-            e.register(f, |_, _| Ret::default());
-        }
+        e.register(AUDIO_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(ATEXIT, |_, _| Ret::default());
         e.call_log = Some(vec![]);
         e.call(0x00ae_a020, &args![]);
-        e.call(0x00ae_a020, &args![]);
-        assert_eq!(calls(&e, 0x00ae_a1b0), [vec![AUDIO_OBJECT]]);
-        assert_eq!(calls(&e, ATEXIT), [vec![AUDIO_DESTRUCTOR]]);
         assert_eq!(e.mem.u32(AUDIO_GUARD) & 1, 1);
-        assert_eq!(e.mem.u32(AUDIO_POINTER), AUDIO_OBJECT);
+        assert_eq!(e.mem.u32(AUDIO_STORAGE), 0x010a_39d8);
+        assert_eq!(e.mem.u32(AUDIO_POINTER), AUDIO_STORAGE);
+        assert_eq!(calls_to(&e, ATEXIT), vec![vec![AUDIO_STORAGE_DESTRUCTOR]]);
+        // The second run only sets the pointer.
+        e.mem.set_u32(AUDIO_POINTER, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00ae_a020, &args![]);
+        assert!(calls_to(&e, AUDIO_BASE_CONSTRUCTOR).is_empty());
+        assert!(calls_to(&e, ATEXIT).is_empty());
+        assert_eq!(e.mem.u32(AUDIO_POINTER), AUDIO_STORAGE);
+    }
+
+    /// Runs the timer reset at `address` on a timer whose flags are set; answers the timer
+    /// and the result.
+    fn reset_timer_at(address: u32) -> (u32, u32) {
+        let mut e = Engine::new();
+        e.register(GET_TICK_COUNT, |_, _| 1234u32.into_ret());
+        let timer = e.mem.alloc(12);
+        e.mem.set_u32(timer + 8, 7);
+        let back = e.call(address, &args![timer]).u32();
+        assert_eq!(e.mem.u32(timer), 600_000);
+        assert_eq!(e.mem.u32(timer + 4), 1234);
+        assert_eq!(e.mem.u32(timer + 8), 0);
+        (timer, back)
     }
 
     #[test]
-    fn the_constructor_and_the_timer_set_their_fields() {
+    fn fn_00aea0a0_constructs_a_timer() {
+        let (timer, back) = reset_timer_at(0x00ae_a0a0);
+        assert_eq!(back, timer);
+    }
+
+    #[test]
+    fn fn_00aea0d0_resets_a_timer() {
+        reset_timer_at(0x00ae_a0d0);
+    }
+
+    #[test]
+    fn fn_00aea150_resets_a_timer() {
+        reset_timer_at(0x00ae_a150);
+    }
+
+    #[test]
+    fn fn_00aea100_counts_unless_paused() {
         let mut e = Engine::new();
-        e.map(0x0000_1000, 0x200);
-        for i in 0..0x50u32 {
-            e.mem.set_u32(0x1000 + 4 * i, 0xffff_ffff);
-        }
-        e.register(AUDIO_BASE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(GET_TICK_COUNT, |_, _| 1500u32.into_ret());
+        let timer = e.mem.alloc(12);
+        e.mem.set_u32(timer, 100);
+        e.mem.set_u32(timer + 4, 1000);
+        e.call(0x00ae_a100, &args![timer]);
+        assert_eq!(e.mem.u32(timer), 600);
+        assert_eq!(e.mem.u32(timer + 4), 1500);
+        // Paused (bit 0 of +8): only the last tick moves.
+        e.mem.set_u32(timer + 4, 1000);
+        e.mem.set_u32(timer + 8, 1);
+        e.call(0x00ae_a100, &args![timer]);
+        assert_eq!(e.mem.u32(timer), 600);
+        assert_eq!(e.mem.u32(timer + 4), 1500);
+    }
+
+    #[test]
+    fn fn_00aea1b0_constructs_the_win32_audio_object() {
+        let mut e = Engine::new();
+        e.register(AUDIO_BASE_CONSTRUCTOR, |_, _| Ret::default());
         e.register(MEMSET, |_, _| Ret::default());
-        e.register(GET_TICK_COUNT, |_, _| 1234u32.into_ret());
+        let this = e.mem.alloc(0xa4);
+        e.mem.write(this, &[0xcd; 0xa4]);
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x00ae_a1b0, &args![0x1000u32]).u32(), 0x1000);
-        assert_eq!(e.mem.u32(0x1000), 0x010a_39d8);
-        assert_eq!([0x38, 0x3c, 0xa0].map(|o| e.mem.u32(0x1000 + o)), [0, 0, 0]);
-        assert_eq!(calls(&e, MEMSET), [vec![0x1040, 0, 0x60]]);
-        assert_eq!(e.call(0x00ae_a0a0, &args![0x1100u32]).u32(), 0x1100);
-        assert_eq!([0, 4, 8].map(|o| e.mem.u32(0x1100 + o)), [600_000, 1234, 0]);
+        assert_eq!(e.call(0x00ae_a1b0, &args![this]).u32(), this);
+        assert_eq!(calls_to(&e, AUDIO_BASE_CONSTRUCTOR), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), 0x010a_39d8);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        assert_eq!(e.mem.u32(this + 0xa0), 0);
+        assert_eq!(calls_to(&e, MEMSET), vec![vec![this + 0x40, 0, 0x60]]);
     }
 }

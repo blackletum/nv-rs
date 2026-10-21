@@ -303,18 +303,6 @@ pub fn fn_00b80040(
     pass_render_state(e, this.addr(), 0x14, destination_blend);
 }
 
-/// `00aa1360` (`cdecl`, two words): compares two C strings, 0 when equal.
-const STRING_COMPARE: u32 = 0x00aa_1360;
-
-// Translated from 00b7fce0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map: a string map's key compare (slot `+8` of `NiStream`'s loader
-/// map vtable `0109bf4c`, so `thiscall` with `ECX` unused; two stack words, `RET 8`): the
-/// two keys through `00aa1360`, then `NEG`/`SBB`/`INC`: 1 when it answered 0 (equal), else 0.
-pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> u32 {
-    let order = e.call(STRING_COMPARE, &args![first, second]).u32();
-    u32::from(order == 0)
-}
-
 /// The hash map `GetAt` on the package's shader map (`00a53c30`, unnamed; `thiscall` on the map:
 /// key, address of the result word; `RET 8`).
 const SHADER_MAP_GET_AT_00A53C30: u32 = 0x00a5_3c30;
@@ -334,6 +322,18 @@ pub fn fn_00b7fac0(e: &mut Engine, this: Ptr, name: u32) -> u32 {
     })
 }
 
+/// `NiStricmp` (`00aa1360`, `cdecl`, two words): case-insensitive compare, 0 when equal.
+const NI_STRICMP: u32 = 0x00aa_1360;
+
+// Translated from 00b7fce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the string maps' key compare, a virtual
+/// method (`thiscall`, two stack words, `RET 8`) that twenty vtables share; `this` is not
+/// read. True (1) when `NiStricmp` (`00aa1360`) finds the two keys equal, else 0
+/// (`NEG`/`SBB`/`INC` on its result).
+pub fn fn_00b7fce0(e: &mut Engine, _this: Ptr, key1: u32, key2: u32) -> bool {
+    e.call(NI_STRICMP, &args![key1, key2]).u32() == 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -343,9 +343,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
         entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
-        entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> u32),
         entry!(0x00b8_0040, fn_00b80040(Ptr, u32, u32, u32)),
         entry!(0x00b7_fac0, fn_00b7fac0(Ptr, u32) -> u32),
+        entry!(0x00b7_fce0, fn_00b7fce0(Ptr, u32, u32) -> bool),
     ]
 }
 
@@ -705,21 +705,6 @@ mod blend_tests {
 }
 
 #[cfg(test)]
-mod tests_branch {
-    use super::*;
-
-    #[test]
-    fn equal_keys_answer_1() {
-        let mut e = Engine::new();
-        e.register(STRING_COMPARE, |_, a| {
-            (if a[0] == a[1] { 0u32 } else { 0xffff_ffff }).into_ret()
-        });
-        assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 7u32]).u32(), 1);
-        assert_eq!(e.call(0x00b7_fce0, &args![0u32, 7u32, 8u32]).u32(), 0);
-    }
-}
-
-#[cfg(test)]
 mod package_find_tests {
     use super::*;
 
@@ -750,5 +735,36 @@ mod package_find_tests {
             .map(|c| c.1[0])
             .collect();
         assert_eq!(maps, vec![package + 8, package + 8]);
+    }
+}
+
+#[cfg(test)]
+mod b048_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b7fce0_is_true_when_stricmp_answers_zero() {
+        let mut e = Engine::new();
+        e.register(NI_STRICMP, |_, a| {
+            u32::from(a[0] != a[1]).wrapping_neg().into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00b7_fce0, &args![0x5000u32, 0x10u32, 0x10u32])
+                .u32(),
+            1
+        );
+        assert_eq!(
+            e.call(0x00b7_fce0, &args![0x5000u32, 0x10u32, 0x20u32])
+                .u32(),
+            0
+        );
+        let log = e.call_log.take().unwrap();
+        let compares: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == NI_STRICMP)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(compares, vec![vec![0x10, 0x10], vec![0x10, 0x20]]);
     }
 }
