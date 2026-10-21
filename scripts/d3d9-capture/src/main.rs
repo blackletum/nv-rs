@@ -37,6 +37,7 @@ extern "system" {
     fn GetClassLongA(window: *mut c_void, index: i32) -> u32;
     fn AdjustWindowRectEx(rect: *mut [i32; 4], style: u32, menu: i32, ex_style: u32) -> i32;
     fn DefWindowProcA(window: *mut c_void, message: u32, w: usize, l: isize) -> isize;
+    fn EnumDisplayDevicesA(device: *const u8, index: u32, info: *mut u8, flags: u32) -> i32;
 }
 #[link(name = "kernel32")]
 extern "system" {
@@ -73,6 +74,23 @@ unsafe fn time_zone(o: &mut impl Write) {
     let mut info = vec![0u8; 172];
     let id = GetTimeZoneInformation(info.as_mut_ptr());
     writeln!(o, "GetTimeZoneInformation\t\t{id:x}\t{}", hex(&info)).unwrap();
+}
+
+/// The display devices as `EnumDisplayDevicesA(NULL, index, info, 0)` lists them (the game's
+/// renderer start-up looks for the primary one): each index's answer and the 0x1A8-byte
+/// `DISPLAY_DEVICEA` after the call (`cb` set, the rest zero before it), hex, through the first
+/// index that answers 0.
+unsafe fn display_devices(o: &mut impl Write) {
+    for index in 0..64u32 {
+        let mut info = vec![0u8; 0x1a8];
+        info[0] = 0xa8;
+        info[1] = 1;
+        let answer = EnumDisplayDevicesA(std::ptr::null(), index, info.as_mut_ptr(), 0);
+        writeln!(o, "EnumDisplayDevicesA\t{index:x} 0\t{:x}\t{}", answer as u32, hex(&info)).unwrap();
+        if answer == 0 {
+            break;
+        }
+    }
 }
 
 /// `WNDCLASSA`.
@@ -191,6 +209,7 @@ fn main() {
         windows(&mut o);
         folders(&mut o);
         time_zone(&mut o);
+        display_devices(&mut o);
         let d3d = Direct3DCreate9(32);
         assert!(!d3d.is_null());
         let vt = *d3d;

@@ -106,6 +106,8 @@ pub struct Adapter {
     folders: HashMap<u32, (u32, Vec<u8>)>,
     /// `GetTimeZoneInformation`'s answer when captured and the `TIME_ZONE_INFORMATION` bytes.
     time_zone: Option<(u32, Vec<u8>)>,
+    /// `EnumDisplayDevicesA(NULL, index, .., 0)`'s answer and `DISPLAY_DEVICEA` bytes by index.
+    display_devices: HashMap<u32, (u32, Vec<u8>)>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -150,6 +152,9 @@ impl Adapter {
                 }
                 "GetWindowsDirectoryA" => a.windows_directory = bytes(f[3]),
                 "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
+                "EnumDisplayDevicesA" => {
+                    a.display_devices.insert(words(f[1])[0], (hex(2), bytes(f[3])));
+                }
                 "SHGetFolderPathA" => {
                     a.folders.insert(words(f[1])[0], (hex(2), bytes(f[3])));
                 }
@@ -254,6 +259,29 @@ pub fn windows_directory(e: &mut Engine) -> Vec<u8> {
         "the adapter table has no Windows directory: {CAPTURE_HINT}"
     );
     dir
+}
+
+// Platform: replaces USER32.DLL EnumDisplayDevicesA (import)
+/// `EnumDisplayDevicesA(device, index, info, flags)` for the adapters (`device` NULL, flags 0):
+/// the player's devices as the machine table recorded them (`scripts/d3d9-capture`): a listed
+/// index answers TRUE and its 0x1A8-byte `DISPLAY_DEVICEA`; the first index past them answers
+/// FALSE and writes nothing (measured: the capture's buffer after the failing call was as it
+/// went in). A device name, flags, another `cb` or an index the capture didn't reach are not
+/// provided.
+pub fn enum_display_devices_a(e: &mut Engine, device: Ptr, index: u32, info: Ptr, flags: u32) -> u32 {
+    assert!(
+        device.addr() == 0 && flags == 0 && e.mem.u32(info.addr()) == 0x1a8,
+        "EnumDisplayDevicesA(device {:#x}, {index}, cb {:#x}, flags {flags:#x}) is not provided",
+        device.addr(),
+        e.mem.u32(info.addr())
+    );
+    let Some((answer, bytes)) = adapter(e).display_devices.get(&index).cloned() else {
+        panic!("EnumDisplayDevicesA({index}) was not captured in the adapter table: {CAPTURE_HINT}");
+    };
+    if answer != 0 {
+        e.mem.write(info.addr(), &bytes);
+    }
+    answer
 }
 
 /// The player's time zone from the table (`GetTimeZoneInformation`'s 172 bytes); the run stops
@@ -718,5 +746,32 @@ mod tests {
         assert!(e.is_translated(PROC_CODE));
         assert!(!e.is_translated(ex));
         assert_eq!(proc_address(&mut e, b"D3DPERF_BeginEvent"), None);
+    }
+}
+
+#[cfg(test)]
+mod tests_display_devices {
+    use super::*;
+
+    #[test]
+    fn display_devices_come_from_the_table_and_end_with_false() {
+        let mut e = Engine::new();
+        let mut device = vec![0u8; 0x1a8];
+        device[0] = 0xa8;
+        device[1] = 1;
+        device[0xa4] = 5;
+        let hex: String = device.iter().map(|x| format!("{x:02x}")).collect();
+        let empty: String = [0xa8u8, 1, 0, 0].iter().map(|x| format!("{x:02x}")).collect();
+        let table = format!(
+            "EnumDisplayDevicesA\t0 0\t1\t{hex}\nEnumDisplayDevicesA\t1 0\t0\t{empty}\n"
+        );
+        load_adapter_table(&mut e, &table);
+        let info = e.mem.alloc(0x1a8);
+        e.mem.set_u32(info, 0x1a8);
+        assert_eq!(enum_display_devices_a(&mut e, Ptr::new(0), 0, Ptr::new(info), 0), 1);
+        assert_eq!(e.mem.u8(info + 0xa4), 5);
+        e.mem.set_u8(info + 0xa4, 9);
+        assert_eq!(enum_display_devices_a(&mut e, Ptr::new(0), 1, Ptr::new(info), 0), 0);
+        assert_eq!(e.mem.u8(info + 0xa4), 9);
     }
 }

@@ -1865,6 +1865,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, get_system_metrics(u32) -> u32).1,
         ),
         (
+            "USER32.dll",
+            "EnumDisplayDevicesA",
+            entry!(0, d3d9::enum_display_devices_a(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
             k,
             "LoadLibraryA",
             entry!(0, loader::load_library_a(Ptr) -> u32).1,
