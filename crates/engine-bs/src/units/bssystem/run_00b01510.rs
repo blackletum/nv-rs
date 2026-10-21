@@ -429,6 +429,95 @@ pub fn fn_00b01f50(e: &mut Engine, this: Ptr) {
     e.call(CLOSE_HANDLE, &args![starter]);
 }
 
+/// The memory manager (`011f6238`) and its deallocate (`00aa4060`, thiscall: block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00b01c40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x04 (`thiscall`, one word, `RET 4`): stores the byte `value` at
+/// `+0x45`.
+pub fn fn_00b01c40(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x45), value);
+}
+
+// Translated from 00b01c60 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x08 (`thiscall`, no stack words, plain `RET`): does nothing.
+pub fn fn_00b01c60(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00b01c70 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x0C (`thiscall`, two words, `RET 8`): answers 0 (`XOR EAX,EAX`);
+/// neither word is read.
+pub fn fn_00b01c70(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    0
+}
+
+// Translated from 00b01c80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x10 (`thiscall`, one word, `RET 4`): does nothing.
+pub fn fn_00b01c80(_e: &mut Engine, _this: Ptr, _unused_1: u32) {}
+
+// Translated from 00b01c90 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x14 (`thiscall`, one word, `RET 4`): answers 0 (`XOR EAX,EAX`);
+/// the word (the path `00b011b0` passes) is not read.
+pub fn fn_00b01c90(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> u32 {
+    0
+}
+
+// Translated from 00b01ca0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x18 (`thiscall`, two words, `RET 8`): does nothing.
+pub fn fn_00b01ca0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) {}
+
+// Translated from 00b01cb0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x1C (`thiscall`, one word, `RET 4`): answers false (`XOR AL,AL`).
+pub fn fn_00b01cb0(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> bool {
+    false
+}
+
+// Translated from 00b01cc0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x20 (`thiscall`, one word, `RET 4`): does nothing.
+pub fn fn_00b01cc0(_e: &mut Engine, _this: Ptr, _unused_1: u32) {}
+
+// Translated from 00b01cd0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x24 (`thiscall`, no stack words, plain `RET`): does nothing.
+pub fn fn_00b01cd0(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00b01ce0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x28 (`thiscall`, one word, `RET 4`): does nothing.
+pub fn fn_00b01ce0(_e: &mut Engine, _this: Ptr, _unused_1: u32) {}
+
+// Translated from 00b01cf0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x2C (`thiscall`, four words, `RET 0x10`): does nothing.
+pub fn fn_00b01cf0(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) {
+}
+
+// Translated from 00b01d00 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x30 (`thiscall`, no stack words, plain `RET`): does nothing.
+pub fn fn_00b01d00(_e: &mut Engine, _this: Ptr) {}
+
+// Translated from 00b01d10 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x34 (`thiscall`, one word, `RET 4`): answers false (`XOR AL,AL`).
+pub fn fn_00b01d10(_e: &mut Engine, _this: Ptr, _unused_1: u32) -> bool {
+    false
+}
+
+// Translated from 00b01d20 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x00 (`thiscall`, one word, `RET 4`): the scalar deleting
+/// destructor. Runs the destructor (`fn_00b01c20`), then with bit 0 of `flags` frees `this`
+/// through the memory manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn fn_00b01d20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b01c20(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -437,6 +526,20 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_1be0, fn_00b01be0(Ptr, u32, u32) -> u32),
         entry!(0x00b0_1c00, fn_00b01c00(Ptr) -> Ptr),
         entry!(0x00b0_1c20, fn_00b01c20(Ptr)),
+        entry!(0x00b0_1c40, fn_00b01c40(Ptr, u8)),
+        entry!(0x00b0_1c60, fn_00b01c60(Ptr)),
+        entry!(0x00b0_1c70, fn_00b01c70(Ptr, u32, u32) -> u32),
+        entry!(0x00b0_1c80, fn_00b01c80(Ptr, u32)),
+        entry!(0x00b0_1c90, fn_00b01c90(Ptr, u32) -> u32),
+        entry!(0x00b0_1ca0, fn_00b01ca0(Ptr, u32, u32)),
+        entry!(0x00b0_1cb0, fn_00b01cb0(Ptr, u32) -> bool),
+        entry!(0x00b0_1cc0, fn_00b01cc0(Ptr, u32)),
+        entry!(0x00b0_1cd0, fn_00b01cd0(Ptr)),
+        entry!(0x00b0_1ce0, fn_00b01ce0(Ptr, u32)),
+        entry!(0x00b0_1cf0, fn_00b01cf0(Ptr, u32, u32, u32, u32)),
+        entry!(0x00b0_1d00, fn_00b01d00(Ptr)),
+        entry!(0x00b0_1d10, fn_00b01d10(Ptr, u32) -> bool),
+        entry!(0x00b0_1d20, fn_00b01d20(Ptr, u32) -> Ptr),
         entry!(0x00b0_1d50, fn_00b01d50(Ptr, u32) -> Ptr),
         entry!(0x00b0_1f50, fn_00b01f50(Ptr)),
         entry!(0x00b0_2130, fn_00b02130(Ptr, u32) -> u8),
@@ -793,5 +896,43 @@ mod tests_stop {
         assert!(calls(&log, RELEASE_SEMAPHORE).is_empty());
         assert!(calls(&log, WAIT_FOR_MULTIPLE_OBJECTS).is_empty());
         assert_eq!(calls(&log, CLOSE_HANDLE), [vec![0x200], vec![0x300]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_file_cache_slots {
+    use super::*;
+
+    #[test]
+    fn the_lookup_slot_answers_zero_and_the_flag_slots_false() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x70);
+        assert_eq!(e.call(0x00b0_1c90, &args![this, 0x1234u32]).u32(), 0);
+        assert_eq!(e.call(0x00b0_1c70, &args![this, 1u32, 2u32]).u32(), 0);
+        assert!(!e.call(0x00b0_1cb0, &args![this, 1u32]).bool());
+        assert!(!e.call(0x00b0_1d10, &args![this, 1u32]).bool());
+        e.call(0x00b0_1c40, &args![this, 0x5au32]);
+        assert_eq!(e.mem.u8(this + 0x45), 0x5a);
+    }
+
+    #[test]
+    fn the_deleting_destructor_frees_only_with_bit_zero() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x70);
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.register(0x00b0_1020, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_1d20, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), WIN32_FILE_CACHE_VTABLE);
+        e.call(0x00b0_1d20, &args![this, 1u32]);
+        let frees: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == MEMORY_MANAGER_DEALLOCATE)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(frees, [vec![MEMORY_MANAGER, this]]);
     }
 }

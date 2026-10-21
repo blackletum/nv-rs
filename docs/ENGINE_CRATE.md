@@ -327,7 +327,10 @@ vtable, ready, position 0) over an in-memory copy of the parts of the file
 the host supplies, at their real offsets (the record and the 0x18 bytes
 after it, from `esm`); `BSFile::ReadF` (`00b00650`) and its seek (vtable
 +0x14, `00b00590`) are stand-ins that read and move in it, and a read of
-anything not supplied stops loudly. Bridged: `TESFile::OpenTES`
+anything not supplied stops loudly. Both are also translated
+(`bssystem::bsfile`, for the files the game opens itself through the CRT,
+the archives); `host::game_file` routes the two addresses to the stand-ins
+for its in-memory files only (`platform::is_memory_file`). Bridged: `TESFile::OpenTES`
 (`00470c70`, which finds the file, constructs the `BSFile` and reads the
 file's `TES4` header and masters); `host::game_file::GameFile::open`
 constructs the `TESFile` with the game's constructor (no name: it opens

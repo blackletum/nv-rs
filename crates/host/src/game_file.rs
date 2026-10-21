@@ -21,7 +21,10 @@
 //! Compressed records need zlib (`TESFile::DecompressCurrentForm`), which
 //! isn't translated: [`GameFile::supply`] refuses them.
 
-use engine::units::platform::{open_memory_file, supply_file_bytes};
+use engine::abi::RetVal;
+use engine::units::bssystem::bsfile;
+use engine::units::platform::{self, is_memory_file, open_memory_file, supply_file_bytes};
+use engine::{Ptr, Ret};
 use engine::Engine;
 use esm::{LoadedPlugin, RecordEntry};
 
@@ -45,6 +48,32 @@ const SET_OFFSET: u32 = 0x0047_23a0;
 const RECORD_HEADER_SIZE: usize = 0x18;
 /// A record's compressed flag (`fn_00472100`).
 const RECORD_COMPRESSED: u32 = 0x0004_0000;
+
+/// An in-memory `BSFile` ([`open_memory_file`]), with `BSFile::ReadF` (`00b00650`) and the
+/// seek (`00b00590`) routed: the platform stand-ins for the in-memory files
+/// (`platform::is_memory_file`), the game's own (translated, `bssystem::bsfile`) for the
+/// files the game opens itself (the archives).
+fn open_bs_file(e: &mut Engine, name: &str, size: u32) -> u32 {
+    let file = open_memory_file(e, name, size);
+    e.register(0x00b0_0650, |e, a| {
+        let (this, buffer, size) = (Ptr::new(a[0]), Ptr::new(a[1]), a[2]);
+        let read = if is_memory_file(e, a[0]) {
+            platform::bsfile_read_f(e, this, buffer, size)
+        } else {
+            bsfile::bs_file_read_f(e, Ptr::new(a[0]), buffer, size)
+        };
+        RetVal::into_ret(read)
+    });
+    e.register(0x00b0_0590, |e, a| {
+        if is_memory_file(e, a[0]) {
+            platform::bsfile_seek(e, Ptr::new(a[0]), a[1] as i32, a[2] as i32);
+        } else {
+            bsfile::fn_00b00590(e, Ptr::new(a[0]), a[1], a[2]);
+        }
+        Ret::default()
+    });
+    file
+}
 
 /// A plugin's `TESFile` in the game's memory.
 #[derive(Debug, Clone, Copy)]
@@ -71,7 +100,7 @@ impl GameFile {
             .map_err(|_| format!("{name}: larger than 4 GB"))?;
         let block = e.call(NEW, &[TES_FILE_SIZE]).u32();
         let file = e.call(TES_FILE_CONSTRUCT, &[block, 0, 0, 0]).u32();
-        let bs_file = open_memory_file(e, &name, size);
+        let bs_file = open_bs_file(e, &name, size);
         e.mem.set_u32(file + M_PFILE, bs_file);
         e.mem.set_u32(file + M_FILESIZE, size);
         e.mem.set_u8(file + C_COMPILE_INDEX, index);
@@ -100,7 +129,7 @@ impl GameFile {
             .map_err(|_| format!("{name}: larger than 4 GB"))?;
         let block = e.call(NEW, &[TES_FILE_SIZE]).u32();
         let file = e.call(TES_FILE_CONSTRUCT, &[block, 0, 0, 0]).u32();
-        let bs_file = open_memory_file(e, &name, size);
+        let bs_file = open_bs_file(e, &name, size);
         e.mem.set_u32(file + M_PFILE, bs_file);
         e.mem.set_u8(file + C_COMPILE_INDEX, plugin.load_index);
         // The `TES4` record and the 0x18 bytes after it.

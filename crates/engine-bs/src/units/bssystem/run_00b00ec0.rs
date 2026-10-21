@@ -115,6 +115,13 @@ pub fn fn_00b012f0(e: &mut Engine, _this: Ptr, first: u32, second: u32) {
     e.set_global(STORED_SECOND, second);
 }
 
+// Translated from 00b01370 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSWin32FileCache` vtable +0x3C (`thiscall`, no stack words, plain `RET`): clears the word at
+/// `+0x60`.
+pub fn fn_00b01370(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr().wrapping_add(0x60), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -124,6 +131,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_11b0, fn_00b011b0(Ptr, u32) -> bool),
         entry!(0x00b0_11e0, fn_00b011e0(Ptr, i32) -> bool),
         entry!(0x00b0_12f0, fn_00b012f0(Ptr, u32, u32)),
+        entry!(0x00b0_1370, fn_00b01370(Ptr)),
     ]
 }
 
@@ -203,5 +211,19 @@ mod tests {
         e.call(0x00b0_12f0, &args![0u32, 3u32, 4u32]);
         assert_eq!(e.global::<u32>(STORED_FIRST), 3);
         assert_eq!(e.global::<u32>(STORED_SECOND), 4);
+    }
+}
+
+#[cfg(test)]
+mod tests_file_cache_slot {
+    use super::*;
+
+    #[test]
+    fn slot_0x3c_clears_the_word_at_0x60() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x70);
+        e.mem.set_u32(this + 0x60, 7);
+        e.call(0x00b0_1370, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x60), 0);
     }
 }

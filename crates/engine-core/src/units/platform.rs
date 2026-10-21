@@ -239,7 +239,19 @@ impl MemoryFile {
 /// after a buffered read: an object with the game's `BSFile` vtable, ready
 /// (+0x2C), at position 0. Its reads and seeks go through [`bsfile_read_f`]
 /// and [`bsfile_seek`]; supply its bytes with [`supply_file_bytes`].
+///
+/// `BSFile::ReadF` (`00b00650`) and the seek (`00b00590`) are translated in `engine-bs`
+/// (`bssystem::bsfile`) for the game's real files. An engine without them (this crate's own
+/// tests) gets [`bsfile_read_f`] and [`bsfile_seek`] registered there here; with them, the
+/// program that makes memory files routes those two addresses to the stand-ins for the files
+/// [`is_memory_file`] names (the host's `game_file` does).
 pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
+    if !e.is_translated(0x00b0_0650) {
+        e.register(0x00b0_0650, entry!(0, bsfile_read_f(Ptr, Ptr, u32) -> u32).1);
+    }
+    if !e.is_translated(0x00b0_0590) {
+        e.register(0x00b0_0590, entry!(0, bsfile_seek(Ptr, i32, i32)).1);
+    }
     let file = e.mem.alloc(BSFILE_SIZE);
     e.mem.set_u32(file, BSFILE_VTABLE);
     e.mem.set_u8(file + BSFILE_READY, 1);
@@ -254,6 +266,11 @@ pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
         },
     );
     file
+}
+
+/// Whether `file` is a `BSFile` [`open_memory_file`] made.
+pub fn is_memory_file(e: &Engine, file: u32) -> bool {
+    e.kernel.files.contains_key(&file)
 }
 
 /// Supplies `bytes` of the in-memory file behind `file`, at `offset`.
@@ -322,10 +339,38 @@ pub fn bsfile_seek(e: &mut Engine, this: Ptr, offset: i32, whence: i32) {
     }
 }
 
+/// The import slots of `WaitForSingleObject` and `ReleaseSemaphore` (KERNEL32), and the
+/// game's counter helpers `004019a0` (`InterlockedDecrement` of its word) and `0040b460`
+/// (`InterlockedIncrement` of its word), cdecl.
+const SLOT_WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+const SLOT_RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+const COUNT_DOWN: u32 = 0x0040_19a0;
+const COUNT_UP: u32 = 0x0040_b460;
+
+// Platform: replaces 004424e0 (WaitForSingleObject (engine map, XAPILIB/waitforsingleobject.c), FalloutNV.exe 1.4.0.525)
+/// The game's counted semaphore's wait (`thiscall`, no stack words; the record: its count
+/// word at +0, the semaphore handle at +4): `WaitForSingleObject(handle, INFINITE)`, then
+/// `004019a0(this)` counts it down. As the exe's code, from its disassembly.
+pub fn counted_semaphore_wait(e: &mut Engine, this: Ptr) {
+    let handle = e.mem.u32(this.addr() + 4);
+    e.call(SLOT_WAIT_FOR_SINGLE_OBJECT, &args![handle, 0xffff_ffffu32]);
+    e.call(COUNT_DOWN, &args![this]);
+}
+
+// Platform: replaces 00442550 (ReleaseSemaphore (engine map, XAPILIB/synch.c), FalloutNV.exe 1.4.0.525)
+/// The game's counted semaphore's release (`thiscall`, no stack words; the record as for
+/// [`counted_semaphore_wait`]): `ReleaseSemaphore(handle, 1, NULL)`, then `0040b460(this)`
+/// counts it up. As the exe's code, from its disassembly.
+pub fn counted_semaphore_release(e: &mut Engine, this: Ptr) {
+    let handle = e.mem.u32(this.addr() + 4);
+    e.call(SLOT_RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+    e.call(COUNT_UP, &args![this]);
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00b00650, bsfile_read_f(Ptr, Ptr, u32) -> u32),
-        entry!(0x00b00590, bsfile_seek(Ptr, i32, i32)),
+        entry!(0x0044_24e0, counted_semaphore_wait(Ptr)),
+        entry!(0x0044_2550, counted_semaphore_release(Ptr)),
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
@@ -835,6 +880,8 @@ pub enum KernelObject {
     UserObject(&'static str),
     /// An open file ([`files::create_file_a`]): its path and position.
     File(files::OpenFile),
+    /// A file search ([`files::find_first_file_a`]): only the one result it answered.
+    FindFile,
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -1151,6 +1198,8 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         }
         // A file handle is signalled while no I/O is pending (all of it is synchronous here).
         Some(KernelObject::File(_)) => true,
+        // Waiting on a file search handle is not provided (not measured).
+        Some(KernelObject::FindFile) => panic!("waiting on file search {handle:#x} is not provided"),
         None if handle == CURRENT_THREAD => false,
         None => return None,
     };
@@ -1590,6 +1639,45 @@ fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
     let thread = get_current_thread_id(e);
     e.kernel.tls_values.insert((thread, index), value);
     1
+}
+
+// Platform: replaces KERNEL32.DLL GetStartupInfoA (import)
+/// `GetStartupInfoA(info)`: the `STARTUPINFOA` (0x44 bytes) of a GUI process started without
+/// inherited handles: `cb` 0x44, `dwFlags` `STARTF_USESHOWWINDOW` (1) with `wShowWindow`
+/// `SW_SHOWNORMAL` (1), no `cbReserved2`/`lpReserved2` (no CRT handles passed), the three
+/// standard handles -1, everything else 0. Measured on this machine (2026-10-21): a
+/// GUI-subsystem program started with PowerShell's `Start-Process` got exactly these, and
+/// pointers in `lpReserved`, `lpDesktop` and `lpTitle`, which are not provided here (left
+/// null; the CRT's `_ioinit` reads only `cbReserved2` and `lpReserved2`).
+fn get_startup_info_a(e: &mut Engine, info: Ptr) {
+    let at = info.addr();
+    e.mem.write(at, &[0; 0x44]);
+    e.mem.set_u32(at, 0x44);
+    e.mem.set_u32(at + 0x2c, 1);
+    e.mem.set_u16(at + 0x30, 1);
+    for offset in [0x38u32, 0x3c, 0x40] {
+        e.mem.set_u32(at + offset, 0xffff_ffff);
+    }
+}
+
+// Platform: replaces KERNEL32.DLL GetStdHandle (import)
+/// `GetStdHandle(which)`: 0 (no handle) for `STD_INPUT_HANDLE`, `STD_OUTPUT_HANDLE` and
+/// `STD_ERROR_HANDLE` (-10, -11, -12), the last error left as it was: a GUI process has none.
+/// Measured on this machine (2026-10-21) in a GUI-subsystem program started with
+/// `Start-Process`. Any other value is not provided (stops the run).
+fn get_std_handle(_e: &mut Engine, which: u32) -> u32 {
+    assert!(
+        matches!(which, 0xffff_fff4..=0xffff_fff6),
+        "GetStdHandle({which:#x}) is not provided"
+    );
+    0
+}
+
+// Platform: replaces KERNEL32.DLL SetHandleCount (import)
+/// `SetHandleCount(count)`: answers `count` (it has no effect on Win32; measured on this
+/// machine, 2026-10-21: 32 gave 32).
+fn set_handle_count(_e: &mut Engine, count: u32) -> u32 {
+    count
 }
 
 // Platform: replaces KERNEL32.DLL GetCurrentDirectoryA (import)
@@ -2036,6 +2124,12 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             k,
+            "FindFirstFileA",
+            entry!(0, files::find_first_file_a(Ptr, Ptr) -> u32).1,
+        ),
+        (k, "FindClose", entry!(0, files::find_close(u32) -> u32).1),
+        (
+            k,
             "GetCurrentThread",
             entry!(0, get_current_thread() -> u32).1,
         ),
@@ -2076,6 +2170,9 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "GetCurrentDirectoryA",
             entry!(0, get_current_directory_a(u32, Ptr) -> u32).1,
         ),
+        (k, "GetStartupInfoA", entry!(0, get_startup_info_a(Ptr)).1),
+        (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
+        (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
     ]
 }
 
@@ -3036,6 +3133,40 @@ mod os_defaults_tests {
                 Ptr::new(0x1060)
             ),
             1
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_counted_semaphore {
+    use super::*;
+
+    #[test]
+    fn wait_and_release_go_through_the_handle_and_the_count() {
+        let mut e = Engine::new();
+        for f in [SLOT_WAIT_FOR_SINGLE_OBJECT, SLOT_RELEASE_SEMAPHORE, COUNT_DOWN, COUNT_UP] {
+            e.register(f, |_, _| Ret::default());
+        }
+        let record = e.mem.alloc(0xc);
+        e.mem.set_u32(record + 4, 0x44);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_24e0, &args![record]);
+        e.call(0x0044_2550, &args![record]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != 0x0044_24e0 && *a != 0x0044_2550)
+            .collect();
+        assert_eq!(
+            log,
+            [
+                (SLOT_WAIT_FOR_SINGLE_OBJECT, vec![0x44, 0xffff_ffff]),
+                (COUNT_DOWN, vec![record]),
+                (SLOT_RELEASE_SEMAPHORE, vec![0x44, 1, 0]),
+                (COUNT_UP, vec![record]),
+            ]
         );
     }
 }

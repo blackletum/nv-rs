@@ -49,6 +49,50 @@ pub struct Disk {
     pub deleted: std::collections::BTreeSet<Vec<u8>>,
     /// Directories the game made in this run (nothing is made on the player's disk).
     pub directories: std::collections::BTreeSet<Vec<u8>>,
+    /// Files of the player's opened for reading only, by path as in `files`: read from the
+    /// player's disk where a read asks (the archives are gigabytes; nothing is copied). Opened
+    /// for writing, a file is read whole into `files` first, as before.
+    pub player: BTreeMap<Vec<u8>, std::path::PathBuf>,
+}
+
+/// The size of the file at `k` (a [`Disk`] key): the run's copy, else the player's file opened
+/// for reading only; 0 for neither.
+fn file_size(e: &Engine, k: &[u8]) -> u64 {
+    if let Some(data) = e.kernel.disk.files.get(k) {
+        return data.len() as u64;
+    }
+    e.kernel
+        .disk
+        .player
+        .get(k)
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map_or(0, |m| m.len())
+}
+
+/// Up to `count` bytes of the file at `k` from `start` (fewer at the end, none past it): the
+/// run's copy, else the player's file opened for reading only (read from disk).
+fn read_range(e: &Engine, k: &[u8], start: u64, count: u32) -> Vec<u8> {
+    if let Some(data) = e.kernel.disk.files.get(k) {
+        let start = (start as usize).min(data.len());
+        let end = start.saturating_add(count as usize).min(data.len());
+        return data[start..end].to_vec();
+    }
+    let Some(path) = e.kernel.disk.player.get(k) else {
+        return vec![];
+    };
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).unwrap_or_else(|err| {
+        panic!("ReadFile: the player's file {path:?} can no longer be read: {err}")
+    });
+    let size = file.metadata().map_or(0, |m| m.len());
+    let start = start.min(size);
+    let take = u64::from(count).min(size - start);
+    file.seek(SeekFrom::Start(start))
+        .unwrap_or_else(|err| panic!("ReadFile: seeking in {path:?}: {err}"));
+    let mut out = vec![0u8; take as usize];
+    file.read_exact(&mut out)
+        .unwrap_or_else(|err| panic!("ReadFile: reading {path:?}: {err}"));
+    out
 }
 
 /// Files the game deleted in this run (the player's own files stay where they are) and the
@@ -174,6 +218,7 @@ pub fn delete_file_a(e: &mut Engine, name: Ptr) -> u32 {
         Some(_) => {
             let k = key(&path);
             e.kernel.disk.files.remove(&k);
+            e.kernel.disk.player.remove(&k);
             e.kernel.disk.deleted.insert(k);
             e.kernel.last_error = ERROR_SUCCESS;
             1
@@ -250,6 +295,128 @@ fn open_file(e: &mut Engine, handle: u32) -> Option<&mut OpenFile> {
     }
 }
 
+/// `ERROR_PATH_NOT_FOUND`.
+pub const ERROR_PATH_NOT_FOUND: u32 = 3;
+
+// Platform: replaces KERNEL32.DLL FindFirstFileA (import)
+/// `FindFirstFileA(name, data)` for a name without wildcards: the player's file or directory,
+/// described as Windows does in the `WIN32_FIND_DATAA` at `data` (0x140 bytes): attributes,
+/// creation, last-access and last-write `FILETIME`s (UTC, as the file system keeps them), the
+/// size (high word, then low), `dwReserved0`/`dwReserved1` 0, and `cFileName` the name as the
+/// directory stores it (its case), followed by one zero byte; the rest of that buffer is left as
+/// it was. A search handle is answered and the last error is left unchanged. Nothing found
+/// answers `INVALID_HANDLE_VALUE` with `ERROR_FILE_NOT_FOUND` (2), or `ERROR_PATH_NOT_FOUND`
+/// (3) when the directory is missing too, leaving `data` as it was; so does a directory's name
+/// with a trailing separator.
+///
+/// Measured on this machine (2026-10-21, PowerShell P/Invoke of `FindFirstFileA` on
+/// `...\Data\Fallout - Meshes.bsa`, the same in other case, a missing file, a file in a missing
+/// directory, `...\Data` and `...\Data\`, with the buffer filled with 0xAA first): as above;
+/// the last error stayed what it was (203) on success. Not provided here: `cAlternateFileName`
+/// (Windows wrote the 8.3 name `FALLOU~1.BSA` for the archive, nothing for `Data`) is left
+/// empty (one zero byte); wildcards, files and directories the game made in this run, a
+/// trailing separator on a missing name, and non-ASCII names stop the run.
+pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
+    let text = e.mem.cstr(name.addr());
+    assert!(
+        !text.iter().any(|&b| b == b'*' || b == b'?'),
+        "FindFirstFileA(\"{}\"): wildcards are not provided",
+        String::from_utf8_lossy(&text)
+    );
+    let path = full_path(e, &text);
+    let k = key(&path);
+    let shown = String::from_utf8_lossy(&path).into_owned();
+    if e.kernel.disk.files.contains_key(&k) || e.kernel.disk.directories.contains(&k) {
+        panic!("FindFirstFileA(\"{shown}\"): a file or directory the game made in this run is not provided");
+    }
+    let fail = |e: &mut Engine, code: u32| {
+        e.kernel.last_error = code;
+        INVALID_HANDLE_VALUE
+    };
+    if e.kernel.disk.deleted.contains(&k) {
+        return fail(e, ERROR_FILE_NOT_FOUND);
+    }
+    let real = real_path(&path);
+    let trailing = path.ends_with(b"\\") || path.ends_with(b"/");
+    let meta = match std::fs::metadata(&real) {
+        Ok(meta) if trailing && meta.is_dir() => return fail(e, ERROR_FILE_NOT_FOUND),
+        Ok(_) if trailing => panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided"),
+        Ok(meta) => meta,
+        Err(_) if trailing => panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided"),
+        Err(_) => {
+            let parent_exists = real.parent().is_some_and(|p| p.is_dir());
+            return fail(
+                e,
+                if parent_exists {
+                    ERROR_FILE_NOT_FOUND
+                } else {
+                    ERROR_PATH_NOT_FOUND
+                },
+            );
+        }
+    };
+    let wanted = real
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stored = real
+        .parent()
+        .and_then(|p| std::fs::read_dir(p).ok())
+        .and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .find(|n| n.eq_ignore_ascii_case(&wanted))
+        })
+        .unwrap_or(wanted);
+    assert!(
+        stored.is_ascii(),
+        "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
+    );
+    #[cfg(windows)]
+    let (attributes, created, accessed, written) = {
+        use std::os::windows::fs::MetadataExt;
+        (
+            meta.file_attributes(),
+            meta.creation_time(),
+            meta.last_access_time(),
+            meta.last_write_time(),
+        )
+    };
+    #[cfg(not(windows))]
+    let (attributes, created, accessed, written): (u32, u64, u64, u64) = {
+        let _ = &meta;
+        panic!("FindFirstFileA(\"{shown}\"): file times are only provided on Windows");
+    };
+    let d = data.addr();
+    e.mem.set_u32(d, attributes);
+    for (offset, time) in [(4u32, created), (0xc, accessed), (0x14, written)] {
+        e.mem.set_u32(d + offset, time as u32);
+        e.mem.set_u32(d + offset + 4, (time >> 32) as u32);
+    }
+    let size = meta.len();
+    e.mem.set_u32(d + 0x1c, (size >> 32) as u32);
+    e.mem.set_u32(d + 0x20, size as u32);
+    e.mem.set_u32(d + 0x24, 0);
+    e.mem.set_u32(d + 0x28, 0);
+    e.mem.write(d + 0x2c, stored.as_bytes());
+    e.mem.set_u8(d + 0x2c + stored.len() as u32, 0);
+    e.mem.set_u8(d + 0x130, 0);
+    e.kernel.insert(KernelObject::FindFile)
+}
+
+// Platform: replaces KERNEL32.DLL FindClose (import)
+/// `FindClose(handle)` on a search handle from [`find_first_file_a`]: closes it, true. Any other
+/// handle is not provided (stops the run).
+pub fn find_close(e: &mut Engine, handle: u32) -> u32 {
+    assert!(
+        matches!(e.kernel.objects.get(&handle), Some(KernelObject::FindFile)),
+        "FindClose({handle:#x}): not a search handle; not provided"
+    );
+    e.kernel.objects.remove(&handle);
+    1
+}
+
 // Platform: replaces KERNEL32.DLL CreateFileA (import)
 /// `CreateFileA(path, access, share, security, disposition, attributes, template)`: opens or
 /// makes the file in [`Disk`] by the disposition: `CREATE_NEW` fails with `ERROR_FILE_EXISTS`
@@ -272,7 +439,30 @@ pub fn create_file_a(
 ) -> u32 {
     let name = full_path(e, &e.mem.cstr(path.addr()));
     let path = key(&name);
-    // A file of the player's is read into the run's copy when it is opened.
+    // A file of the player's opened for reading only is read from disk where the reads ask
+    // (`Disk::player`); the outcome is that of an existing file's open.
+    if access & GENERIC_WRITE == 0
+        && matches!(disposition, OPEN_EXISTING | OPEN_ALWAYS)
+        && !e.kernel.disk.files.contains_key(&path)
+        && !e.kernel.disk.deleted.contains(&path)
+    {
+        let real = real_path(&name);
+        if std::fs::metadata(&real).is_ok_and(|m| m.is_file()) {
+            e.kernel.disk.player.insert(path.clone(), real);
+            e.kernel.last_error = if disposition == OPEN_ALWAYS {
+                ERROR_ALREADY_EXISTS
+            } else {
+                ERROR_SUCCESS
+            };
+            return e.kernel.insert(KernelObject::File(OpenFile {
+                path,
+                position: 0,
+                read: access & GENERIC_READ != 0,
+                write: false,
+            }));
+        }
+    }
+    // A file of the player's opened for writing is read into the run's copy first.
     if !e.kernel.disk.files.contains_key(&path) && matches!(disposition, OPEN_EXISTING | OPEN_ALWAYS) {
         if let Some(data) = read_whole(e, &name) {
             e.kernel.disk.files.insert(path.clone(), data);
@@ -358,7 +548,7 @@ pub fn set_file_pointer(e: &mut Engine, handle: u32, low: u32, high: Ptr, method
     };
     let path = file.path.clone();
     let position = file.position;
-    let size = e.kernel.disk.files.get(&path).map_or(0, |d| d.len() as u64);
+    let size = file_size(e, &path);
     let base = match method {
         0 => 0i64,
         1 => position as i64,
@@ -459,11 +649,9 @@ pub fn read_file(
             return 0;
         }
     };
-    let data = e.kernel.disk.files.get(&path).cloned().unwrap_or_default();
-    let start = (position as usize).min(data.len());
-    let end = start.saturating_add(count as usize).min(data.len());
-    e.mem.write(buffer.addr(), &data[start..end]);
-    let got = (end - start) as u32;
+    let bytes = read_range(e, &path, position, count);
+    e.mem.write(buffer.addr(), &bytes);
+    let got = bytes.len() as u32;
     if let Some(file) = open_file(e, handle) {
         file.position = position + u64::from(got);
     }
@@ -594,5 +782,67 @@ mod tests {
         );
         assert_eq!(full_path(&e, br"D:\x"), br"D:\x".to_vec());
         assert!(is_full_path(br"\\server\share"));
+    }
+}
+
+#[cfg(test)]
+mod tests_player_files {
+    use super::*;
+
+    /// A file of the player's opened for reading only is read where the reads ask, not copied:
+    /// the crate's own manifest stands in for one.
+    #[test]
+    fn a_read_only_open_reads_the_players_file_in_place() {
+        let mut e = Engine::new();
+        let real = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        let bytes = std::fs::read(real).unwrap();
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, real.as_bytes());
+        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0);
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_SUCCESS);
+        assert!(e.kernel.disk.files.is_empty());
+        assert_eq!(e.kernel.disk.player.len(), 1);
+        let end = set_file_pointer(&mut e, h, 0, Ptr::new(0), 2);
+        assert_eq!(end as usize, bytes.len());
+        assert_eq!(set_file_pointer(&mut e, h, 2, Ptr::new(0), 0), 2);
+        let buffer = e.mem.alloc(0x10);
+        let count = e.mem.alloc(4);
+        assert_eq!(read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0), 1);
+        assert_eq!(e.mem.u32(count), 5);
+        assert_eq!(e.mem.bytes(buffer, 5), bytes[2..7].to_vec());
+        // Past the end: success, nothing read.
+        set_file_pointer(&mut e, h, 0, Ptr::new(0), 2);
+        assert_eq!(read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0), 1);
+        assert_eq!(e.mem.u32(count), 0);
+        // FindFirstFileA describes it, in the case the directory keeps (asked in upper case).
+        let upper = e.mem.alloc(0x200);
+        let shouted = real.replace("Cargo.toml", "CARGO.TOML");
+        e.mem.set_cstr(upper, shouted.as_bytes());
+        let data = e.mem.alloc(0x140);
+        e.mem.write(data, &[0xaa; 0x140]);
+        e.kernel.last_error = 203;
+        let find = find_first_file_a(&mut e, Ptr::new(upper), Ptr::new(data));
+        assert_ne!(find, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, 203);
+        assert_eq!(e.mem.u32(data + 0x20) as usize, bytes.len());
+        assert_eq!(e.mem.u32(data + 0x1c), 0);
+        assert_eq!(e.mem.u32(data) & FILE_ATTRIBUTE_DIRECTORY, 0);
+        assert_ne!(e.mem.u32(data + 0x18), 0);
+        assert_eq!(e.mem.cstr(data + 0x2c), b"Cargo.toml".to_vec());
+        assert_eq!(e.mem.u8(data + 0x2c + 11), 0xaa);
+        assert_eq!(find_close(&mut e, find), 1);
+        // A missing file, and a file in a missing directory.
+        let missing = e.mem.alloc(0x200);
+        e.mem.set_cstr(missing, real.replace("Cargo.toml", "NoSuch.toml").as_bytes());
+        let none = find_first_file_a(&mut e, Ptr::new(missing), Ptr::new(data));
+        assert_eq!((none, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND));
+        e.mem.set_cstr(missing, real.replace("Cargo.toml", "NoDir/x.toml").as_bytes());
+        let none = find_first_file_a(&mut e, Ptr::new(missing), Ptr::new(data));
+        assert_eq!((none, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND));
+        // A write open still copies it into the run.
+        let w = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0x80, 0);
+        assert_ne!(w, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.disk.files.len(), 1);
     }
 }

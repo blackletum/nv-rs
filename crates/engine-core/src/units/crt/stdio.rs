@@ -672,8 +672,435 @@ fn read_text_utf16(
     to.wrapping_sub(work)
 }
 
+/// `_flush` (`00ecd8e6`), `_read` (`00edcf0c`), `_lseek_nolock` (`00edd009`), `memset`
+/// (`00ec61c0`) and `memcpy` (`00ec44d0`), cdecl.
+const FLUSH: u32 = 0x00ec_d8e6;
+const READ: u32 = 0x00ed_cf0c;
+const LSEEK_NOLOCK: u32 = 0x00ed_d009;
+const MEMSET: u32 = 0x00ec_61c0;
+const MEMCPY: u32 = 0x00ec_44d0;
+/// `ERANGE`.
+const ERANGE: u32 = 0x22;
+
+// Translated from 00ec7c66 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `memcpy_s` (LIBCMT/memcpy_s.c, engine map), cdecl: (destination, its size, source, count).
+/// A count of 0 answers 0. A null destination sets `errno` `EINVAL`, calls the
+/// invalid-parameter handler and answers `EINVAL`. With a source and room for the count it is
+/// `memcpy` and 0; otherwise the destination is zeroed (`memset` of its size), and then a null
+/// source answers `EINVAL` with the handler, a too-small destination `ERANGE` (0x22) with the
+/// handler (the branch for a source with room, which the first test already took, answers
+/// `EINVAL` without it).
+pub fn memcpy_s(e: &mut Engine, destination: Ptr, size: u32, source: Ptr, count: u32) -> u32 {
+    if count == 0 {
+        return 0;
+    }
+    if destination.addr() == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0x16;
+    }
+    if source.addr() != 0 && size >= count {
+        e.call(MEMCPY, &args![destination, source, count]);
+        return 0;
+    }
+    e.call(MEMSET, &args![destination, 0u32, size]);
+    if source.addr() == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0x16;
+    }
+    if size >= count {
+        return 0x16;
+    }
+    set_errno(e, ERANGE);
+    invalid_parameter_zeros(e);
+    ERANGE
+}
+
+// Translated from 00edd07e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_lseek` (LIBCMT/lseek.c, engine map), cdecl: (handle, offset, origin). -2 gives
+/// `_doserrno` 0, `errno` `EBADF` (9) and -1; a handle out of range or not open (`osfile`
+/// bit 0) `_doserrno` 0, `EBADF`, the invalid-parameter handler and -1. Otherwise, with the
+/// handle locked (`__lock_fhandle`), `_lseek_nolock` answers when it is still open (else
+/// `EBADF`, `_doserrno` 0, -1), and the handle is unlocked (the `__finally` block at
+/// `00edd150`, `_unlock_fhandle`).
+// Translation incomplete: 00edd07e - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block (00edd150) runs inline.
+pub fn lseek(e: &mut Engine, handle: u32, offset: u32, origin: u32) -> u32 {
+    if handle == 0xffff_fffe {
+        set_doserrno(e, 0);
+        set_errno(e, 9);
+        return 0xffff_ffff;
+    }
+    if !handle_in_range(e, handle) || e.mem.u8(ioinfo(e, handle) + 4) & 1 == 0 {
+        set_doserrno(e, 0);
+        set_errno(e, 9);
+        invalid_parameter_zeros(e);
+        return 0xffff_ffff;
+    }
+    lock_fhandle(e, handle);
+    let result = if e.mem.u8(ioinfo(e, handle) + 4) & 1 != 0 {
+        e.call(LSEEK_NOLOCK, &args![handle, offset, origin]).u32()
+    } else {
+        set_errno(e, 9);
+        set_doserrno(e, 0);
+        0xffff_ffff
+    };
+    unlock_fhandle(e, handle);
+    result
+}
+
+// Translated from 00ecb3c5 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_ftell_nolock` (LIBCMT/ftell.c, engine map), cdecl: the stream. A null stream sets `errno`
+/// `EINVAL`, calls the invalid-parameter handler and answers -1. A negative `_cnt` (+4) is
+/// cleared; the handle's position (`_lseek(handle, 0, SEEK_CUR)`) negative answers -1. A stream
+/// without a buffer in use (`_flag` & 0x108 clear) answers the position less `_cnt`. Otherwise
+/// the offset in the buffer (`_ptr` - `_base`), plus one per `\n` before `_ptr` for a
+/// text-mode handle (`osfile` 0x80) of a read or write stream (`_flag` & 3); a stream that is
+/// neither and not `_IORW` (0x80) gives `EINVAL` and -1. At position 0 that offset answers. A
+/// read stream (`_flag` bit 0) with nothing buffered answers the position; with bytes buffered
+/// the position less what the buffer read (`_ptr` - `_base` + `_cnt`), for a text-mode handle
+/// counted at the end of the file (`_lseek(handle, 0, SEEK_END)` equal to the position) with a
+/// `\n` each and one more for `_IOCTRLZ` (0x2000), else (the position put back with `SEEK_SET`,
+/// -1 on failure) 0x200 or the buffer size (`_bufsiz`, when it read more than 0x200 or the
+/// stream is not `_IOMYBUF` (8) or is `_IOSETVBUF` (0x400)) and one more for `FCRLF`
+/// (`osfile` 4); plus the offset.
+pub fn ftell_nolock(e: &mut Engine, stream: Ptr) -> u32 {
+    let s = stream.addr();
+    if s == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0xffff_ffff;
+    }
+    let handle = e.call(FILENO, &args![s]).u32();
+    if (e.mem.u32(s + 4) as i32) < 0 {
+        e.mem.set_u32(s + 4, 0);
+    }
+    let mut position = lseek(e, handle, 0, 1);
+    if (position as i32) < 0 {
+        return 0xffff_ffff;
+    }
+    let flag = e.mem.u32(s + 0xc);
+    if flag & 0x108 == 0 {
+        return position.wrapping_sub(e.mem.u32(s + 4));
+    }
+    let ptr = e.mem.u32(s);
+    let base = e.mem.u32(s + 8);
+    let mut offset = ptr.wrapping_sub(base);
+    if flag & 3 != 0 {
+        if e.mem.u8(ioinfo(e, handle) + 4) & 0x80 != 0 {
+            let mut at = base;
+            while at < ptr {
+                if e.mem.u8(at) == b'\n' {
+                    offset = offset.wrapping_add(1);
+                }
+                at = at.wrapping_add(1);
+            }
+        }
+    } else if (flag as u8 as i8) >= 0 {
+        set_errno(e, 0x16);
+        return 0xffff_ffff;
+    }
+    if position == 0 {
+        return offset;
+    }
+    if e.mem.u8(s + 0xc) & 1 != 0 {
+        let count = e.mem.u32(s + 4);
+        if count == 0 {
+            offset = 0;
+        } else {
+            let mut read = ptr.wrapping_sub(base).wrapping_add(count);
+            if e.mem.u8(ioinfo(e, handle) + 4) & 0x80 != 0 {
+                if lseek(e, handle, 0, 2) == position {
+                    let start = e.mem.u32(s + 8);
+                    let end = read.wrapping_add(start);
+                    let mut at = start;
+                    while at < end {
+                        if e.mem.u8(at) == b'\n' {
+                            read = read.wrapping_add(1);
+                        }
+                        at = at.wrapping_add(1);
+                    }
+                    if e.mem.u32(s + 0xc) & 0x2000 != 0 {
+                        read = read.wrapping_add(1);
+                    }
+                } else {
+                    if (lseek(e, handle, position, 0) as i32) < 0 {
+                        return 0xffff_ffff;
+                    }
+                    let flag = e.mem.u32(s + 0xc);
+                    read = if read > 0x200 || flag & 8 == 0 || flag & 0x400 != 0 {
+                        e.mem.u32(s + 0x18)
+                    } else {
+                        0x200
+                    };
+                    if e.mem.u8(ioinfo(e, handle) + 4) & 4 != 0 {
+                        read = read.wrapping_add(1);
+                    }
+                }
+            }
+            position = position.wrapping_sub(read);
+        }
+    }
+    offset.wrapping_add(position)
+}
+
+// Translated from 00ecb562 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `ftell` (LIBCMT/ftell.c, engine map), cdecl: the stream. A null stream sets `errno`
+/// `EINVAL`, calls the invalid-parameter handler and answers -1; otherwise `_ftell_nolock`
+/// with the stream locked (`_lock_file`; the `__finally` block at `00ecb5c6` unlocks it).
+// Translation incomplete: 00ecb562 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block (00ecb5c6) runs inline.
+pub fn ftell(e: &mut Engine, stream: Ptr) -> u32 {
+    if stream.addr() == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0xffff_ffff;
+    }
+    lock_file(e, stream);
+    let result = ftell_nolock(e, stream);
+    unlock_file(e, stream);
+    result
+}
+
+// Translated from 00ecb5d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_fseek_nolock` (LIBCMT/fseek.c, engine map), cdecl: (stream, offset, origin). A stream
+/// that is not read, write or `_IORW` (`_flag` & 0x83) gives `errno` `EINVAL` and -1.
+/// Otherwise `_IOEOF` (0x10) is cleared, `SEEK_CUR` becomes `SEEK_SET` from `_ftell_nolock`,
+/// the stream is flushed (`_flush`); an `_IORW` stream loses its read/write bits, a read stream
+/// with its own buffer (`_IOMYBUF`, not `_IOSETVBUF`) gets `_bufsiz` 0x200; then `_lseek` on
+/// its handle: 0, or -1 when that failed.
+pub fn fseek_nolock(e: &mut Engine, stream: Ptr, offset: u32, origin: u32) -> u32 {
+    let s = stream.addr();
+    let flag = e.mem.u32(s + 0xc);
+    if flag & 0x83 == 0 {
+        set_errno(e, 0x16);
+        return 0xffff_ffff;
+    }
+    e.mem.set_u32(s + 0xc, flag & 0xffff_ffef);
+    let mut offset = offset;
+    let mut origin = origin;
+    if origin == 1 {
+        offset = offset.wrapping_add(ftell_nolock(e, stream));
+        origin = 0;
+    }
+    e.call(FLUSH, &args![s]);
+    let flag = e.mem.u32(s + 0xc);
+    if (flag as u8 as i8) < 0 {
+        e.mem.set_u32(s + 0xc, flag & 0xffff_fffc);
+    } else if flag & 1 != 0 && flag & 8 != 0 && flag & 0x400 == 0 {
+        e.mem.set_u32(s + 0x18, 0x200);
+    }
+    let handle = e.call(FILENO, &args![s]).u32();
+    let position = lseek(e, handle, offset, origin);
+    u32::from(position != 0xffff_ffff).wrapping_sub(1)
+}
+
+// Translated from 00ecb65a (disassembled, FalloutNV.exe 1.4.0.525)
+/// `fseek` (LIBCMT/fseek.c, engine map), cdecl: (stream, offset, origin). A null stream or an
+/// origin other than 0, 1 and 2 sets `errno` `EINVAL`, calls the invalid-parameter handler and
+/// answers -1; otherwise `_fseek_nolock` with the stream locked (`_lock_file`; the `__finally`
+/// block at `00ecb6d5` unlocks it).
+// Translation incomplete: 00ecb65a - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block (00ecb6d5) runs inline.
+pub fn fseek(e: &mut Engine, stream: Ptr, offset: u32, origin: u32) -> u32 {
+    if stream.addr() == 0 || (origin != 0 && origin != 1 && origin != 2) {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0xffff_ffff;
+    }
+    lock_file(e, stream);
+    let result = fseek_nolock(e, stream, offset, origin);
+    unlock_file(e, stream);
+    result
+}
+
+// Translated from 00ecb108 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_fread_nolock_s` (LIBCMT/fread.c, engine map), cdecl: (destination, its size, element
+/// size, count, stream). A zero element size or count answers 0; a null destination, or a null
+/// stream or a count above `0xFFFFFFFF / element size` (the destination zeroed first unless its
+/// size is -1), gives `errno` `EINVAL`, the invalid-parameter handler and 0. Otherwise the
+/// `element size * count` bytes come from the stream's buffer while it holds some (`memcpy_s`;
+/// a negative `_cnt` is an error), else straight from the handle in whole buffer sizes
+/// (`_bufsiz` for a buffered stream, else 0x1000; at most 0x7FFFFFFF; `_read`) when at least
+/// that many are left, else one byte at a time through `_filbuf`. More than the destination
+/// holds zeroes it (unless its size is -1) with `ERANGE`, the handler and 0. An end of file
+/// sets `_IOEOF` (0x10), an error `_IOERR` (0x20); both answer the whole elements read. All
+/// read answers the count.
+pub fn fread_nolock_s(
+    e: &mut Engine,
+    destination: Ptr,
+    size: u32,
+    element: u32,
+    count: u32,
+    stream: Ptr,
+) -> u32 {
+    let start = destination.addr();
+    let s = stream.addr();
+    if element == 0 || count == 0 {
+        return 0;
+    }
+    let refuse = |e: &mut Engine| {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        0u32
+    };
+    if start == 0 {
+        return refuse(e);
+    }
+    if s == 0 || count > 0xffff_ffff / element {
+        if size != 0xffff_ffff {
+            e.call(MEMSET, &args![start, 0u32, size]);
+        }
+        if s == 0 || count > 0xffff_ffff / element {
+            return refuse(e);
+        }
+    }
+    let too_small = |e: &mut Engine| {
+        if size != 0xffff_ffff {
+            e.call(MEMSET, &args![start, 0u32, size]);
+        }
+        set_errno(e, ERANGE);
+        invalid_parameter_zeros(e);
+        0u32
+    };
+    let total = element.wrapping_mul(count);
+    let mut left = total;
+    let mut at = start;
+    let mut room = size;
+    let mut buffer_size = if e.mem.u32(s + 0xc) & 0x10c != 0 {
+        e.mem.u32(s + 0x18)
+    } else {
+        0x1000
+    };
+    if total == 0 {
+        return count;
+    }
+    // The whole elements read, after an end of file or an error.
+    let partial = |left: u32| total.wrapping_sub(left) / element;
+    while left != 0 {
+        let buffered = e.mem.u32(s + 4);
+        if e.mem.u32(s + 0xc) & 0x10c != 0 && buffered != 0 {
+            if (buffered as i32) < 0 {
+                let flag = e.mem.u32(s + 0xc) | 0x20;
+                e.mem.set_u32(s + 0xc, flag);
+                return partial(left);
+            }
+            let n = if left < buffered { left } else { buffered };
+            if n > room {
+                return too_small(e);
+            }
+            let from = e.mem.u32(s);
+            e.call(MEMCPY_S, &args![at, room, from, n]);
+            e.mem.set_u32(s + 4, e.mem.u32(s + 4).wrapping_sub(n));
+            e.mem.set_u32(s, e.mem.u32(s).wrapping_add(n));
+            at = at.wrapping_add(n);
+            left = left.wrapping_sub(n);
+            room = room.wrapping_sub(n);
+        } else if left >= buffer_size {
+            let n = if buffer_size != 0 {
+                if left > 0x7fff_ffff {
+                    0x7fff_ffff - 0x7fff_ffff % buffer_size
+                } else {
+                    left - left % buffer_size
+                }
+            } else if left > 0x7fff_ffff {
+                0x7fff_ffff
+            } else {
+                left
+            };
+            if n > room {
+                return too_small(e);
+            }
+            let handle = e.call(FILENO, &args![s]).u32();
+            let got = e.call(READ, &args![handle, at, n]).u32();
+            if got == 0 {
+                let flag = e.mem.u32(s + 0xc) | 0x10;
+                e.mem.set_u32(s + 0xc, flag);
+                return partial(left);
+            }
+            if got == 0xffff_ffff {
+                let flag = e.mem.u32(s + 0xc) | 0x20;
+                e.mem.set_u32(s + 0xc, flag);
+                return partial(left);
+            }
+            at = at.wrapping_add(got);
+            left = left.wrapping_sub(got);
+            room = room.wrapping_sub(got);
+        } else {
+            let character = e.call(FILBUF, &args![s]).u32();
+            if character == 0xffff_ffff {
+                return partial(left);
+            }
+            if room == 0 {
+                return too_small(e);
+            }
+            e.mem.set_u8(at, character as u8);
+            at = at.wrapping_add(1);
+            buffer_size = e.mem.u32(s + 0x18);
+            left = left.wrapping_sub(1);
+            room = room.wrapping_sub(1);
+        }
+    }
+    count
+}
+
+/// `memcpy_s` (`00ec7c66`) and `_fread_nolock_s` (`00ecb108`), cdecl.
+const MEMCPY_S: u32 = 0x00ec_7c66;
+const FREAD_NOLOCK_S: u32 = 0x00ec_b108;
+
+// Translated from 00ecb312 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `fread_s` (LIBCMT/fread.c, engine map), cdecl: (destination, its size, element size,
+/// count, stream). A zero element size or count answers 0; a null stream zeroes the
+/// destination (unless its size is -1) and gives `errno` `EINVAL`, the invalid-parameter
+/// handler and 0. Otherwise `_fread_nolock_s` with the stream locked (`_lock_file`; the
+/// `__finally` block at `00ecb39e` unlocks it).
+// Translation incomplete: 00ecb312 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block (00ecb39e) runs inline.
+pub fn fread_s(
+    e: &mut Engine,
+    destination: Ptr,
+    size: u32,
+    element: u32,
+    count: u32,
+    stream: Ptr,
+) -> u32 {
+    if element == 0 || count == 0 {
+        return 0;
+    }
+    if stream.addr() == 0 {
+        if size != 0xffff_ffff {
+            e.call(MEMSET, &args![destination, 0u32, size]);
+        }
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return 0;
+    }
+    lock_file(e, stream);
+    let result = e
+        .call(
+            FREAD_NOLOCK_S,
+            &args![destination, size, element, count, stream],
+        )
+        .u32();
+    unlock_file(e, stream);
+    result
+}
+
+// Translated from 00ecb3a8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `fread` (LIBCMT/fread.c, engine map), cdecl: (destination, element size, count, stream):
+/// `fread_s` with the destination size -1.
+pub fn fread(e: &mut Engine, destination: Ptr, element: u32, count: u32, stream: Ptr) -> u32 {
+    fread_s(e, destination, 0xffff_ffff, element, count, stream)
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_7c66, memcpy_s(Ptr, u32, Ptr, u32) -> u32),
+        entry!(0x00ed_d07e, lseek(u32, u32, u32) -> u32),
+        entry!(0x00ec_b3c5, ftell_nolock(Ptr) -> u32),
+        entry!(0x00ec_b562, ftell(Ptr) -> u32),
+        entry!(0x00ec_b5d0, fseek_nolock(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_b65a, fseek(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_b108, fread_nolock_s(Ptr, u32, u32, u32, Ptr) -> u32),
+        entry!(0x00ec_b312, fread_s(Ptr, u32, u32, u32, Ptr) -> u32),
+        entry!(0x00ec_b3a8, fread(Ptr, u32, u32, Ptr) -> u32),
         entry!(0x00ec_9a5e, fopen_s(Ptr, Ptr, Ptr) -> u32),
         entry!(0x00ec_dacc, feof(Ptr) -> u32),
         entry!(0x00ec_c104, fgets(Ptr, i32, Ptr) -> Ptr),
@@ -1189,5 +1616,106 @@ mod tests {
             calls(&e, IMPORT_ENTER_CRITICAL_SECTION).len(),
             calls(&e, IMPORT_LEAVE_CRITICAL_SECTION).len()
         );
+    }
+
+    /// A binary stream (`rb`) over `data`: answers the stream.
+    fn open_binary(e: &mut Engine, data: &[u8]) -> u32 {
+        let path = file(e, "Archive.bsa", data);
+        let mode = e.mem.alloc(4);
+        e.mem.set_cstr(mode, b"rb");
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x00ec_9a5e, &args![out, path, mode]).u32(), 0);
+        e.mem.u32(out)
+    }
+
+    #[test]
+    fn fread_fseek_and_ftell_walk_a_binary_file() {
+        let (mut e, _) = engine();
+        let data: Vec<u8> = (0..0x3000u32).map(|i| (i * 7) as u8).collect();
+        let stream = open_binary(&mut e, &data);
+        let buffer = e.mem.alloc(0x2000);
+        // The size as BSFile asks for it: SEEK_END then ftell, and back.
+        assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0);
+        assert_eq!(e.call(0x00ec_b65a, &args![stream, 0u32, 2u32]).u32(), 0);
+        assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x3000);
+        assert_eq!(e.call(0x00ec_b65a, &args![stream, 0u32, 0u32]).u32(), 0);
+        // A small read goes through the stream's buffer (0x1000 bytes).
+        assert_eq!(
+            e.call(0x00ec_b3a8, &args![buffer, 1u32, 0x24u32, stream]).u32(),
+            0x24
+        );
+        assert_eq!(e.mem.bytes(buffer, 0x24), data[..0x24].to_vec());
+        assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x24);
+        // SEEK_CUR from there, then a read larger than the buffer goes to the handle.
+        assert_eq!(e.call(0x00ec_b65a, &args![stream, 0x10u32, 1u32]).u32(), 0);
+        assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x34);
+        assert_eq!(
+            e.call(0x00ec_b3a8, &args![buffer, 0x10u32, 0x180u32, stream]).u32(),
+            0x180
+        );
+        assert_eq!(e.mem.bytes(buffer, 0x1800), data[0x34..0x1834].to_vec());
+        assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x1834);
+        // Past the end: the whole elements read, and _IOEOF.
+        assert_eq!(
+            e.call(0x00ec_b3a8, &args![buffer, 0x100u32, 0x20u32, stream]).u32(),
+            0x17
+        );
+        assert_ne!(e.mem.u32(stream + 0xc) & 0x10, 0);
+        // A bad origin and a null stream are refused.
+        assert_eq!(
+            e.call(0x00ec_b65a, &args![stream, 0u32, 3u32]).u32(),
+            0xffff_ffff
+        );
+        assert_eq!(e.call(0x00ec_b562, &args![0u32]).u32(), 0xffff_ffff);
+        assert_eq!(
+            calls(&e, IMPORT_ENTER_CRITICAL_SECTION).len(),
+            calls(&e, IMPORT_LEAVE_CRITICAL_SECTION).len()
+        );
+    }
+
+    #[test]
+    fn fread_s_refuses_a_destination_too_small() {
+        let (mut e, block) = engine();
+        let stream = open_binary(&mut e, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let buffer = e.mem.alloc(0x10);
+        e.mem.write(buffer, &[0xaa; 8]);
+        assert_eq!(
+            e.call(0x00ec_b312, &args![buffer, 4u32, 1u32, 8u32, stream]).u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(block + 8), 0x22);
+        assert_eq!(e.mem.bytes(buffer, 8), [0, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa]);
+        // Zero elements read nothing; a null stream zeroes the destination.
+        assert_eq!(
+            e.call(0x00ec_b312, &args![buffer, 8u32, 0u32, 8u32, stream]).u32(),
+            0
+        );
+        e.mem.write(buffer, &[0xaa; 8]);
+        assert_eq!(
+            e.call(0x00ec_b312, &args![buffer, 8u32, 1u32, 8u32, 0u32]).u32(),
+            0
+        );
+        assert_eq!(e.mem.bytes(buffer, 8), [0; 8]);
+        assert_eq!(e.mem.u32(block + 8), 0x16);
+    }
+
+    #[test]
+    fn memcpy_s_copies_or_zeroes_with_the_error() {
+        let (mut e, block) = engine();
+        let to = e.mem.alloc(8);
+        let from = e.mem.alloc(8);
+        e.mem.write(from, b"abcdefgh");
+        assert_eq!(e.call(0x00ec_7c66, &args![to, 8u32, from, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x00ec_7c66, &args![to, 8u32, from, 4u32]).u32(), 0);
+        assert_eq!(e.mem.bytes(to, 4), b"abcd".to_vec());
+        assert_eq!(
+            e.call(0x00ec_7c66, &args![to, 2u32, from, 4u32]).u32(),
+            0x22
+        );
+        assert_eq!(e.mem.bytes(to, 4), [0, 0, b'c', b'd']);
+        assert_eq!(e.mem.u32(block + 8), 0x22);
+        assert_eq!(e.call(0x00ec_7c66, &args![to, 8u32, 0u32, 4u32]).u32(), 0x16);
+        assert_eq!(e.mem.bytes(to, 4), [0; 4]);
+        assert_eq!(e.call(0x00ec_7c66, &args![0u32, 8u32, from, 4u32]).u32(), 0x16);
     }
 }

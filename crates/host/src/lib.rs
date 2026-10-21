@@ -70,6 +70,7 @@ impl Host {
         // runs too (they go on past misses with zero results and record them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
         start_crt_threads(&mut engine, &mut movement);
+        start_crt_io(&mut engine, &mut movement);
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         load_adapter_table(&mut engine);
@@ -175,6 +176,25 @@ pub fn start_crt_threads(e: &mut Engine, movement: &mut player_move::PlayerMovem
     const MTINIT: u32 = 0x00ed_1327;
     let _ = movement.guarded(e, "crt", |e| {
         e.call(MTINIT, &[]);
+        Ok(())
+    });
+}
+
+/// What `mainCRTStartup` runs after `__mtinit` (from `00ecc3ee`): `_RTC_Initialize`
+/// (`00eddb1e`) and `_ioinit` (`00ed7e18`, the handle table the CRT's files use; its failure
+/// would end the process with `_amsg_exit(0x1b)`, here it is reported by the miss recorder).
+/// The command line and environment steps after them (`GetCommandLineA`,
+/// `__crtGetEnvironmentStringsA`, `_setargv`, `_setenvp`) are not run yet. Through the
+/// movement's miss recorder (stage `crt`); a stop is kept and start-up goes on.
+pub fn start_crt_io(e: &mut Engine, movement: &mut player_move::PlayerMovement) {
+    const RTC_INITIALIZE: u32 = 0x00ed_db1e;
+    const IOINIT: u32 = 0x00ed_7e18;
+    let _ = movement.guarded(e, "crt", |e| {
+        e.call(RTC_INITIALIZE, &[]);
+        let answer = e.call(IOINIT, &[]).i32();
+        if answer < 0 {
+            return Err(format!("_ioinit answered {answer}"));
+        }
         Ok(())
     });
 }
