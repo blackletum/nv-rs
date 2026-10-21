@@ -149,6 +149,17 @@ pub fn steam_api_init(_e: &mut Engine) -> u32 {
     0
 }
 
+// Platform: replaces STEAM_API.DLL SteamAPI_RegisterCallback (import)
+/// `SteamAPI_RegisterCallback(callback, id)` (`cdecl`, two words, no answer the game reads):
+/// the game registers its Steam callbacks before `SteamAPI_Init` (`006ff690` through
+/// `006ffb20`/`006ffb90`/`006ffc20`, id 0x44d and others). With no Steam client nothing ever
+/// calls them back, so nothing is kept.
+pub fn steam_api_register_callback(_e: &mut Engine, _callback: Ptr, _id: u32) {}
+
+// Platform: replaces STEAM_API.DLL SteamAPI_UnregisterCallback (import)
+/// `SteamAPI_UnregisterCallback(callback)` (`cdecl`, one word; `006ffc00`): nothing was kept.
+pub fn steam_api_unregister_callback(_e: &mut Engine, _callback: Ptr) {}
+
 // Platform: replaces KERNEL32.DLL IsDebuggerPresent (import)
 /// `IsDebuggerPresent()`: no debugger.
 pub fn is_debugger_present(_e: &mut Engine) -> u32 {

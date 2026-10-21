@@ -1864,6 +1864,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, window::steam_api_init() -> u32).1,
         ),
         (
+            "steam_api.dll",
+            "SteamAPI_RegisterCallback",
+            entry!(0, window::steam_api_register_callback(Ptr, u32)).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamAPI_UnregisterCallback",
+            entry!(0, window::steam_api_unregister_callback(Ptr)).1,
+        ),
+        (
             "ADVAPI32.dll",
             "RegOpenKeyExA",
             entry!(0, reg_open_key_ex_a(u32, Ptr, u32, u32, Ptr) -> u32).1,
