@@ -2328,8 +2328,12 @@ pub fn x87_control_word(e: &mut Engine) -> u16 {
 
 /// `FLDCW`: loads the running thread's x87 control word, its word in the thread block and the
 /// FPU register the x87 arithmetic helpers read (`crate::x87::set_control_word`), so precision
-/// control (bits 8-9) applies to them from here on.
+/// control (bits 8-9) applies to them from here on. The word is kept as the FPU keeps it:
+/// reserved bit 6 always reads 1 and bits 7 and 13-15 always read 0, so `FSTCW` gives
+/// `(word & 0x1F3F) | 0x40` (measured on the player's machine, 2026-10-21: `FLDCW 0x023F` then
+/// `FSTCW` gives `0x027F`, `0x0000` gives `0x0040`, `0xFFFF` gives `0x1F7F`).
 pub fn set_x87_control_word(e: &mut Engine, word: u16) {
+    let word = (word & 0x1f3f) | 0x40;
     let at = e.tls() + X87_CONTROL_WORD;
     e.mem.set_u32(at, 0x1_0000 | u32::from(word));
     crate::x87::set_control_word(word);
@@ -7878,18 +7882,20 @@ mod exit_tests {
     fn ctrlfp_merges_the_masked_bits_and_returns_the_old_control_word() {
         let mut e = Engine::new();
         // The game's control word until something loads another.
+        // The FPU keeps bit 6 set (measured): 0x133f reads back as 0x137f.
         assert_eq!(ctrlfp(&mut e, 0x133f, 0xffff), 0x027f);
-        assert_eq!(x87_control_word(&mut e), 0x133f);
+        assert_eq!(x87_control_word(&mut e), 0x137f);
         // Only the masked bits change.
-        assert_eq!(ctrlfp(&mut e, 0x0c00, 0x0c00), 0x133f);
-        assert_eq!(x87_control_word(&mut e), 0x1f3f);
-        // FLDCW takes the low 16 bits; the old word comes back sign-extended.
+        assert_eq!(ctrlfp(&mut e, 0x0c00, 0x0c00), 0x137f);
+        assert_eq!(x87_control_word(&mut e), 0x1f7f);
+        // FLDCW takes the low 16 bits (bit 15 reads 0 afterwards: 0x8000 is kept as 0x0040);
+        // the old word comes back sign-extended.
         assert_eq!(
             e.call(0x00ed5abb, &args![0x0001_8000u32, 0xffff_ffffu32])
                 .i32(),
-            0x1f3f
+            0x1f7f
         );
-        assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), -0x8000);
+        assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), 0x0040);
         assert_eq!(x87_control_word(&mut e), 0x027f);
     }
 }
@@ -8523,7 +8529,7 @@ mod physics_step_tests {
         let seen = log.clone();
         e.register_double(FRND, move |e, a| {
             seen.borrow_mut().push((FRND, a.to_vec()));
-            assert_eq!(x87_control_word(e), 0x1b3f, "round up while it runs");
+            assert_eq!(x87_control_word(e), 0x1b7f, "round up while it runs (bit 6 reads 1)");
             st0(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).ceil())
         });
         let got = ceil_via_registry(&mut e, 2.25);
@@ -11242,5 +11248,29 @@ mod b000t_output_tests {
         e.call(0x00ed_2efb, &args![0x2bu32, 0u32, stream, count]);
         assert_eq!(e.mem.bytes(buffer, 4), b"***\0".to_vec());
         assert_eq!(e.mem.u32(count), 3);
+    }
+}
+
+#[cfg(test)]
+mod control_word_tests {
+    use super::*;
+
+    /// `FLDCW` then `FSTCW` as measured on the player's machine (2026-10-21).
+    #[test]
+    fn the_control_word_reads_back_as_the_fpu_keeps_it() {
+        let mut e = Engine::new();
+        for (loaded, read) in [
+            (0x023fu16, 0x027fu16),
+            (0x027f, 0x027f),
+            (0x003f, 0x007f),
+            (0x0000, 0x0040),
+            (0xffff, 0x1f7f),
+            (0x1f3f, 0x1f7f),
+            (0x0e7f, 0x0e7f),
+        ] {
+            set_x87_control_word(&mut e, loaded);
+            assert_eq!(x87_control_word(&mut e), read, "{loaded:#06x}");
+        }
+        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
     }
 }

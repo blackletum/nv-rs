@@ -397,10 +397,10 @@ mod tests {
         assert_eq!(control87(&mut e, 0, 0), 0x9_001f);
         // 24 bits, chop: loaded as 0x0c7f and read back.
         assert_eq!(control87(&mut e, 0x2_0300, 0x3_0300), 0x8_031f | 0x2_0000);
-        // `_hw_cw` builds 0x0c3f (it never sets the reserved bit 6; the engine's `FSTCW`
-        // gives back the word as loaded).
-        assert_eq!(x87_control_word(&mut e), 0x0c3f);
-        assert_eq!(crate::x87::control_word(), 0x0c3f);
+        // `_hw_cw` builds 0x0c3f (it never sets the reserved bit 6); the FPU keeps bit 6 set, so
+        // `FSTCW` reads 0x0c7f (`set_x87_control_word`, measured).
+        assert_eq!(x87_control_word(&mut e), 0x0c7f);
+        assert_eq!(crate::x87::control_word(), 0x0c7f);
         for a in [0x9_001f, 0x8_031f | 0x2_0000, 0x4_0115, 0x0_0200] {
             assert_eq!(x87_abstract(hw_cw(&mut e, a)), a);
         }
@@ -419,7 +419,7 @@ mod tests {
         set_x87_control_word(&mut e, 0x007f);
         let out = e.mem.alloc(4);
         assert_eq!(controlfp_s(&mut e, out, 0x1_0000, 0x3_0000), 0);
-        assert_eq!(x87_control_word(&mut e), 0x023f);
+        assert_eq!(x87_control_word(&mut e), 0x027f);
         assert_eq!(e.mem.u32(out), 0x9_001f);
         // A bit outside the valid ones: EINVAL through the handler.
         e.mem.set_u32(0x0126_fd9c, 0x0077_0000);
