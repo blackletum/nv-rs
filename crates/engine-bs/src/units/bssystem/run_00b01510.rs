@@ -393,6 +393,42 @@ pub fn fn_00b02670(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// KERNEL32 import slots the stop uses (`stdcall`).
+const WAIT_FOR_MULTIPLE_OBJECTS: u32 = 0x00fd_f108;
+const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+
+// Translated from 00b01f50 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; slot +8 of the manager's
+/// vtable `010a4880`, at `010a4888`): sets the stopping byte `+0x50`; when the byte `+5` is set,
+/// releases the work semaphore record at `+0x26c` once per worker (`ReleaseSemaphore(handle, 1,
+/// 0)`, `InterlockedIncrement` on its count; the count `+0x1c` re-read each pass) and waits for
+/// all of them (`WaitForMultipleObjects(+0x1c, +0x20, TRUE, INFINITE)`). Then `CloseHandle` on
+/// each worker handle and on the starter's (`+0x14`).
+pub fn fn_00b01f50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u8(base + STOPPING, 1);
+    if e.mem.u8(base + 5) != 0 {
+        let mut i = 0u32;
+        while i < e.mem.u32(base + THREAD_COUNT) {
+            release_counted(e, base + WORK);
+            i += 1;
+        }
+        let count = e.mem.u32(base + THREAD_COUNT);
+        e.call(
+            WAIT_FOR_MULTIPLE_OBJECTS,
+            &args![count, base + THREAD_HANDLES, 1u32, INFINITE],
+        );
+    }
+    let mut i = 0u32;
+    while i < e.mem.u32(base + THREAD_COUNT) {
+        let handle = e.mem.u32(base + THREAD_HANDLES + 4 * i);
+        e.call(CLOSE_HANDLE, &args![handle]);
+        i += 1;
+    }
+    let starter = e.mem.u32(base + STARTER);
+    e.call(CLOSE_HANDLE, &args![starter]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -402,6 +438,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_1c00, fn_00b01c00(Ptr) -> Ptr),
         entry!(0x00b0_1c20, fn_00b01c20(Ptr)),
         entry!(0x00b0_1d50, fn_00b01d50(Ptr, u32) -> Ptr),
+        entry!(0x00b0_1f50, fn_00b01f50(Ptr)),
         entry!(0x00b0_2130, fn_00b02130(Ptr, u32) -> u8),
         entry!(0x00b0_23b0, fn_00b023b0(u32) -> u32),
         entry!(0x00b0_23f0, fn_00b023f0(u32) -> u32),
@@ -671,5 +708,90 @@ mod tests_branch {
         assert_eq!((e.mem.u32(task + 0x14), e.mem.u8(task + 4)), (0, 0));
         assert_eq!(calls(&log, RELEASE_SEMAPHORE), [vec![0x92, 1, 0]]);
         assert_eq!(calls(&log, INTERLOCKED_INCREMENT), [vec![m + WORK]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_stop {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn engine() -> (Engine, Log) {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x1000);
+        let log: Log = Rc::default();
+        for f in [
+            RELEASE_SEMAPHORE,
+            INTERLOCKED_INCREMENT,
+            WAIT_FOR_MULTIPLE_OBJECTS,
+            CLOSE_HANDLE,
+        ] {
+            let log = log.clone();
+            e.register_double(f, move |_, a| {
+                log.borrow_mut().push((f, a.to_vec()));
+                Ret::default()
+            });
+        }
+        (e, log)
+    }
+
+    fn calls(log: &Log, f: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|(c, _)| *c == f)
+            .map(|(_, a)| a.clone())
+            .collect()
+    }
+
+    /// Two workers with the byte `+5` set: the work semaphore is released twice, all are waited
+    /// for, then both worker handles and the starter's are closed.
+    #[test]
+    fn the_stop_wakes_waits_for_and_closes_the_workers() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        e.mem.set_u8(m + 5, 1);
+        e.mem.set_u32(m + THREAD_COUNT, 2);
+        e.mem.set_u32(m + THREAD_HANDLES, 0x200);
+        e.mem.set_u32(m + THREAD_HANDLES + 4, 0x204);
+        e.mem.set_u32(m + STARTER, 0x300);
+        e.mem.set_u32(m + WORK + 4, 0x80);
+        e.call(0x00b0_1f50, &args![m]);
+        assert_eq!(e.mem.u8(m + STOPPING), 1);
+        assert_eq!(
+            calls(&log, RELEASE_SEMAPHORE),
+            [vec![0x80, 1, 0], vec![0x80, 1, 0]]
+        );
+        assert_eq!(
+            calls(&log, INTERLOCKED_INCREMENT),
+            [vec![m + WORK], vec![m + WORK]]
+        );
+        assert_eq!(
+            calls(&log, WAIT_FOR_MULTIPLE_OBJECTS),
+            [vec![2, m + THREAD_HANDLES, 1, INFINITE]]
+        );
+        assert_eq!(
+            calls(&log, CLOSE_HANDLE),
+            [vec![0x200], vec![0x204], vec![0x300]]
+        );
+    }
+
+    /// With the byte `+5` clear nothing is released or waited for (the byte `+4` is not the
+    /// one tested); the handles are still closed.
+    #[test]
+    fn the_stop_without_the_byte_only_closes_the_handles() {
+        let (mut e, log) = engine();
+        let m = 0x1000u32;
+        e.mem.set_u8(m + 4, 1);
+        e.mem.set_u32(m + THREAD_COUNT, 1);
+        e.mem.set_u32(m + THREAD_HANDLES, 0x200);
+        e.mem.set_u32(m + STARTER, 0x300);
+        e.call(0x00b0_1f50, &args![m]);
+        assert_eq!(e.mem.u8(m + STOPPING), 1);
+        assert!(calls(&log, RELEASE_SEMAPHORE).is_empty());
+        assert!(calls(&log, WAIT_FOR_MULTIPLE_OBJECTS).is_empty());
+        assert_eq!(calls(&log, CLOSE_HANDLE), [vec![0x200], vec![0x300]]);
     }
 }
