@@ -70,6 +70,7 @@ impl Host {
         // runs too (they go on past misses with zero results and record them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
         start_crt_threads(&mut engine, &mut movement);
+        start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         load_adapter_table(&mut engine);
         let ni_init = if engine.is_translated(WIN_MAIN) {
@@ -178,6 +179,30 @@ pub fn start_crt_threads(e: &mut Engine, movement: &mut player_move::PlayerMovem
     });
 }
 
+/// `_FPinit` (`010f1f1c`, in `.rdata`): the address of `_fpmath` (`00ec5f4d`) in the exe.
+const FP_INIT: u32 = 0x010f_1f1c;
+/// `__initp_misc_cfltcvt_tab` (`00ed248e`).
+const INITP_MISC_CFLTCVT_TAB: u32 = 0x00ed_248e;
+
+/// The head of `__cinit` (`00eccd14`), before its initializer tables, in its order:
+/// `if (_FPinit != NULL && _IsNonwritableInCurrentImage(&_FPinit)) (*_FPinit)(floatflag)`,
+/// then `__initp_misc_cfltcvt_tab`. `mainCRTStartup` passes `floatflag` 1 (`PUSH EBX` with
+/// EBX 1 at `00ecc43e`). `_IsNonwritableInCurrentImage` (`00eddcc0`) is true in the game
+/// (`_FPinit` lies in the image's read-only `.rdata`), so the call is made when the pointer
+/// is set. `_fpmath` fills `_cfltcvt_tab` (`sscanf`'s `%f` goes through it), runs the
+/// Pentium `FDIV` test and sets the default precision. Through the movement's miss recorder
+/// (stage `crt`); a stop is kept and start-up goes on.
+pub fn start_cinit_float(e: &mut Engine, movement: &mut player_move::PlayerMovement) {
+    let _ = movement.guarded(e, "crt", |e| {
+        let fp_init = e.mem.u32(FP_INIT);
+        if fp_init != 0 {
+            e.call(fp_init, &[1]);
+        }
+        e.call(INITP_MISC_CFLTCVT_TAB, &[]);
+        Ok(())
+    });
+}
+
 /// What creating the renderer's Direct3D device does to the main thread's FPU,
 /// at the point `main` creates it: `0086b028` calls `0086d500`, whose `Init`
 /// (`004da670`) creates the renderer at `004daa4c` (`NiDX9Renderer::Create`
@@ -261,6 +286,32 @@ mod tests {
         assert_eq!(movement.misses[&0x00ab_cdef].stage, "niinit");
         e.register(0x00aa_20b0, |_, _| engine::Ret::default());
         assert_eq!(start_ni(&mut e, &mut movement), None);
+    }
+
+    /// `__cinit`'s head calls `_fpmath(1)` through `_FPinit` and then encodes the table.
+    #[test]
+    fn the_cinit_float_set_up_runs_fpmath_then_encodes_the_table() {
+        let mut e = Engine::new();
+        let mut movement = player_move::PlayerMovement::default();
+        e.mem.map(0x010f_1000, 0x1000);
+        e.mem.set_u32(FP_INIT, 0x00ec_5f4d);
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = calls.clone();
+        e.register_double(0x00ec_5f4d, move |_, a| {
+            log.borrow_mut().push((0x00ec_5f4d, a.to_vec()));
+            engine::Ret::default()
+        });
+        let log = calls.clone();
+        e.register_double(INITP_MISC_CFLTCVT_TAB, move |_, a| {
+            log.borrow_mut().push((INITP_MISC_CFLTCVT_TAB, a.to_vec()));
+            engine::Ret::default()
+        });
+        start_cinit_float(&mut e, &mut movement);
+        assert_eq!(
+            *calls.borrow(),
+            vec![(0x00ec_5f4d, vec![1]), (INITP_MISC_CFLTCVT_TAB, vec![])]
+        );
+        assert!(movement.misses.is_empty());
     }
 
     /// After the renderer's start-up point the main thread computes at 24-bit

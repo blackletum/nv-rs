@@ -1936,6 +1936,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             k,
+            "GetModuleHandleA",
+            entry!(0, loader::get_module_handle_a(Ptr) -> u32).1,
+        ),
+        (
+            k,
             "GetProcAddress",
             entry!(0, loader::get_proc_address(u32, u32) -> u32).1,
         ),

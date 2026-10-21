@@ -14,6 +14,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod fpinit;
 pub mod scanf;
 
 // ---- Memory ---------------------------------------------------------------
@@ -7041,6 +7042,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_9df9, get_printf_count_output() -> u32),
         (0x00ed_2f21, output_l_entry as AbiFn),
     ];
+    table.extend(fpinit::funcs());
     table.extend(scanf::funcs());
     table
 }

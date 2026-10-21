@@ -2928,4 +2928,35 @@ mod tests {
         assert_eq!(e.mem.u32(CFLTCVT_TAB), 0x00ed_246b ^ 0x1234_5678);
         assert_eq!(e.mem.u32(CFLTCVT_TAB + 0x24), 0x00ed_1996 ^ 0x1234_5678);
     }
+
+    /// `__cinit`'s head as the game runs it, `_fpmath(1)` (with the loader answering the
+    /// Pentium test's `IsProcessorFeaturePresent` lookup) then `__initp_misc_cfltcvt_tab`, takes
+    /// the table slot from the exe's static `_fptrap` (`00ee1a8f`) to the encoded
+    /// `_fassign_l`, and `sscanf("%f")` then converts through it.
+    #[test]
+    fn cinit_float_set_up_lets_sscanf_reach_fassign_l() {
+        use crate::units::platform::loader;
+        let (mut e, _) = engine();
+        e.map(0x0127_0000, 0x1000);
+        e.map(0x010f_2000, 0x1000);
+        e.mem.set_u32(CFLTCVT_FASSIGN, 0x00ee_1a8f);
+        e.mem.set_cstr(0x010f_2a7c, b"KERNEL32");
+        e.mem.set_cstr(0x010f_2a60, b"IsProcessorFeaturePresent");
+        e.register(
+            0x00fd_f118,
+            entry!(0, loader::get_module_handle_a(Ptr) -> u32).1,
+        );
+        e.register(
+            0x00fd_f0ac,
+            entry!(0, loader::get_proc_address(u32, u32) -> u32).1,
+        );
+        e.register(SCAN_ENCODE_POINTER, |_, a| (a[0] ^ 0x5a5a_0000).into_ret());
+        e.register(DECODE_POINTER, |_, a| (a[0] ^ 0x5a5a_0000).into_ret());
+        e.call(0x00ec_5f4d, &[1]);
+        assert_eq!(e.mem.u32(0x0126_fd94), 0);
+        assert_eq!(x87_control_word(&mut e), 0x027f);
+        e.call(0x00ed_248e, &[]);
+        assert_eq!(e.mem.u32(CFLTCVT_FASSIGN), 0x00ed_1aa7 ^ 0x5a5a_0000);
+        assert_eq!(scan_float(&mut e, b"0.1"), (1, 0x3dcc_cccd));
+    }
 }

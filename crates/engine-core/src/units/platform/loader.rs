@@ -1,7 +1,8 @@
 //! The loader's side of the platform: module handles (`GetModuleHandleW`), procedures found by
 //! name (`GetProcAddress`), and the KERNEL32 functions the CRT finds that way (`FlsAlloc`,
 //! `FlsGetValue`, `FlsSetValue`, `FlsFree`, `EncodePointer`, `DecodePointer`; the CRT's
-//! `__mtinit` `00ed1327` and `__encode_pointer` look them up rather than importing them).
+//! `__mtinit` `00ed1327` and `__encode_pointer` look them up rather than importing them; and
+//! `IsProcessorFeaturePresent`, which `_ms_p5_mp_test_fdiv` `00ed2518` looks up).
 //!
 //! A procedure found by name has a code address of the platform's ([`PROC_CODE`] up), registered
 //! the first time it is asked for; a name this layer does not provide stops the run, never a
@@ -29,23 +30,25 @@ pub struct Fls {
 }
 
 /// The KERNEL32 procedures provided by name, in the order of their code addresses.
-const PROCS: [&[u8]; 6] = [
+const PROCS: [&[u8]; 7] = [
     b"FlsAlloc",
     b"FlsGetValue",
     b"FlsSetValue",
     b"FlsFree",
     b"EncodePointer",
     b"DecodePointer",
+    b"IsProcessorFeaturePresent",
 ];
 
 fn register_procs(e: &mut Engine) {
-    let procs: [crate::AbiFn; 6] = [
+    let procs: [crate::AbiFn; 7] = [
         crate::entry!(0, fls_alloc(u32) -> u32).1,
         crate::entry!(0, fls_get_value(u32) -> u32).1,
         crate::entry!(0, fls_set_value(u32, u32) -> i32).1,
         crate::entry!(0, fls_free(u32) -> i32).1,
         crate::entry!(0, encode_pointer(u32) -> u32).1,
         crate::entry!(0, decode_pointer(u32) -> u32).1,
+        crate::entry!(0, is_processor_feature_present(u32) -> u32).1,
     ];
     for (i, f) in procs.into_iter().enumerate() {
         e.register(PROC_CODE + 4 * i as u32, f);
@@ -83,6 +86,30 @@ pub fn get_module_handle_w(e: &mut Engine, name: Ptr) -> u32 {
         return KERNEL32_MODULE;
     }
     panic!("GetModuleHandleW({text:?}) is not provided");
+}
+
+// Platform: replaces KERNEL32.DLL GetModuleHandleA (import)
+/// `GetModuleHandleA(name)`: as [`get_module_handle_w`] for an ANSI name (`_ms_p5_mp_test_fdiv`
+/// asks for `KERNEL32`).
+pub fn get_module_handle_a(e: &mut Engine, name: Ptr) -> u32 {
+    if name.is_null() {
+        return IMAGE_MODULE;
+    }
+    let text = String::from_utf8_lossy(&e.mem.cstr(name.addr())).to_ascii_uppercase();
+    if text == "KERNEL32.DLL" || text == "KERNEL32" {
+        return KERNEL32_MODULE;
+    }
+    panic!("GetModuleHandleA({text:?}) is not provided");
+}
+
+/// `IsProcessorFeaturePresent(feature)` (stdcall): the player's machine answers 0 for
+/// `PF_FLOATING_POINT_PRECISION_ERRATA` (0, measured), the only feature the game asks
+/// about; any other feature is not provided.
+fn is_processor_feature_present(_e: &mut Engine, feature: u32) -> u32 {
+    if feature == 0 {
+        return 0;
+    }
+    panic!("IsProcessorFeaturePresent({feature}) is not provided");
 }
 
 // Platform: replaces KERNEL32.DLL LoadLibraryA (import)
@@ -247,6 +274,32 @@ mod tests {
         assert_eq!(e.call(decode, &[encoded]).u32(), 0x00ed_1004);
         assert_eq!(e.call(free, &[index]).u32(), 1);
         assert_eq!(e.call(free, &[index]).u32(), 0);
+    }
+
+    /// `_ms_p5_mp_test_fdiv`'s lookup: `GetModuleHandleA("KERNEL32")`, then
+    /// `IsProcessorFeaturePresent(0)`, which answers 0 as on the player's machine.
+    #[test]
+    fn the_fdiv_errata_query_answers_no() {
+        let mut e = engine();
+        e.mem.map(0x0001_1000, 0x1000);
+        e.mem.set_cstr(0x0001_1000, b"KERNEL32");
+        let module = get_module_handle_a(&mut e, Ptr::new(0x0001_1000));
+        assert_eq!(module, KERNEL32_MODULE);
+        assert_eq!(get_module_handle_a(&mut e, Ptr::NULL), IMAGE_MODULE);
+        e.mem.set_cstr(0x0001_1100, b"IsProcessorFeaturePresent");
+        let present = get_proc_address(&mut e, module, 0x0001_1100);
+        assert_eq!(present, PROC_CODE + 4 * 6);
+        assert_eq!(e.call(present, &[0]).u32(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "IsProcessorFeaturePresent(10) is not provided")]
+    fn other_processor_features_stop() {
+        let mut e = engine();
+        e.mem.map(0x0001_1000, 0x1000);
+        e.mem.set_cstr(0x0001_1100, b"IsProcessorFeaturePresent");
+        let present = get_proc_address(&mut e, KERNEL32_MODULE, 0x0001_1100);
+        e.call(present, &[10]);
     }
 
     #[test]
