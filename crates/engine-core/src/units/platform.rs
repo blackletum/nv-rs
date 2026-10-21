@@ -614,10 +614,10 @@ fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
 }
 
 // Platform: replaces KERNEL32.DLL GetPrivateProfileIntA (import)
-/// `GetPrivateProfileIntA(section, key, default, file)`: the key's value as an integer (its
-/// decimal digits, read up to the first other character; no digits: 0), or
-/// `default` when the file, the section or the key isn't there ([`profile_text`]). A negative or
-/// `0x` value is not provided.
+/// `GetPrivateProfileIntA(section, key, default, file)`: the key's value as an integer, or
+/// `default` when the file, the section or the key isn't there ([`profile_text`]). The value is
+/// read as [`profile_int`] does, which follows Windows' answers measured on the player's machine
+/// (2026-10-21, 38 values).
 fn get_private_profile_int_a(e: &mut Engine, section: Ptr, key: Ptr, default: u32, file: Ptr) -> u32 {
     let section = e.mem.cstr(section.addr());
     let key = e.mem.cstr(key.addr());
@@ -625,16 +625,57 @@ fn get_private_profile_int_a(e: &mut Engine, section: Ptr, key: Ptr, default: u3
     else {
         return default;
     };
-    let digits = value.as_slice();
-    assert!(
-        !(digits.starts_with(b"-") || digits.starts_with(b"0x") || digits.starts_with(b"0X")),
-        "GetPrivateProfileIntA of a negative or hex value is not provided"
-    );
-    let mut n = 0u32;
-    for &d in digits.iter().take_while(|d| d.is_ascii_digit()) {
-        n = n.wrapping_mul(10).wrapping_add(u32::from(d - b'0'));
+    profile_int(&value)
+}
+
+/// A profile value as Windows' `GetPrivateProfileIntA` reads it (measured): leading spaces and
+/// tabs, then one optional `+` or `-`, then an optional lower-case base prefix `0x` (16), `0o`
+/// (8) or `0b` (2), else base 10; digits of that base up to the first other character, kept
+/// modulo 2^32; a `-` negates the result modulo 2^32. No digits (`-`, `0x`, `0b2`, `x5`) give 0;
+/// upper-case prefixes are not prefixes (`0X1F` is 0).
+fn profile_int(value: &[u8]) -> u32 {
+    let mut rest = value;
+    while let [b' ' | b'\t', tail @ ..] = rest {
+        rest = tail;
     }
-    n
+    let negative = match rest {
+        [b'-', tail @ ..] => {
+            rest = tail;
+            true
+        }
+        [b'+', tail @ ..] => {
+            rest = tail;
+            false
+        }
+        _ => false,
+    };
+    let base = match rest {
+        [b'0', b'x', tail @ ..] => {
+            rest = tail;
+            16
+        }
+        [b'0', b'o', tail @ ..] => {
+            rest = tail;
+            8
+        }
+        [b'0', b'b', tail @ ..] => {
+            rest = tail;
+            2
+        }
+        _ => 10,
+    };
+    let mut n = 0u32;
+    for &c in rest {
+        let Some(digit) = char::from(c).to_digit(base) else {
+            break;
+        };
+        n = n.wrapping_mul(base).wrapping_add(digit);
+    }
+    if negative {
+        n.wrapping_neg()
+    } else {
+        n
+    }
 }
 
 // Platform: replaces KERNEL32.DLL GetPrivateProfileStringA (import)
@@ -2903,6 +2944,53 @@ mod os_defaults_tests {
             b"ENGLISH"
         );
         assert_eq!(ini_value(text, b"General", b"Back"), None);
+    }
+
+    /// Windows' `GetPrivateProfileIntA` answers, measured on the player's machine (2026-10-21).
+    #[test]
+    fn profile_ints_read_as_windows_does() {
+        let measured: &[(&[u8], u32)] = &[
+            (b"-5", 0xffff_fffb),
+            (b"-0", 0),
+            (b"0x10", 16),
+            (b"0X1F", 0),
+            (b"-0x10", 0xffff_fff0),
+            (b"12abc", 12),
+            (b"  7", 7),
+            (b"+3", 3),
+            (b"4294967295", 0xffff_ffff),
+            (b"4294967296", 0),
+            (b"99999999999", 1_215_752_191),
+            (b"1e3", 1),
+            (b"0", 0),
+            (b"08", 8),
+            (b"010", 10),
+            (b"-", 0),
+            (b"x5", 0),
+            (b"0b101", 5),
+            (b"0o17", 15),
+            (b"0x", 0),
+            (b"0xg", 0),
+            (b"-  5", 0),
+            (b" -5", 0xffff_fffb),
+            (b"0b2", 0),
+            (b"0x10abc", 0x10abc),
+            (b"0xFFFFFFFF1", 0xffff_fff1),
+            (b"0B11", 0),
+            (b"0O7", 0),
+            (b"\t9", 9),
+            (b"--5", 0),
+            (b"+-5", 0),
+            (b"- 5", 0),
+            (b"00x10", 0),
+            (b"0x-5", 0),
+            (b"0b", 0),
+            (b"0o8", 0),
+            (b"5 6", 5),
+        ];
+        for &(value, want) in measured {
+            assert_eq!(profile_int(value), want, "{:?}", std::str::from_utf8(value));
+        }
     }
 
     /// A missing file gives the default, cut to the buffer; writing changes nothing and answers 1.
