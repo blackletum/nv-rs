@@ -1090,8 +1090,47 @@ pub fn fread(e: &mut Engine, destination: Ptr, element: u32, count: u32, stream:
     fread_s(e, destination, 0xffff_ffff, element, count, stream)
 }
 
+// Translated from 00ec9d4a (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec9d4a - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __finally block (00ec9de6, _unlock_file2(1, stdout)) runs inline.
+/// `printf` (LIBCMT/printf.c, engine map), cdecl: (format, ...). A null format sets `errno`
+/// `EINVAL`, calls the invalid-parameter handler and answers -1. Otherwise `stdout`
+/// (`__iob_func() + 0x20`) is locked (`_lock_file2(1, ..)`), given a temporary buffer
+/// (`_stbuf`), written with `_output_l(stdout, format, NULL, the arguments)`, the buffer taken
+/// back (`_ftbuf`) and unlocked; answers `_output_l`'s count. The variable arguments are copied
+/// into game memory as the `va_list`.
+pub fn printf(e: &mut Engine, format: Ptr, args: &[u32]) -> i32 {
+    if format.addr() == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return -1;
+    }
+    let stdout = e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20);
+    lock_file2(e, 1, Ptr::new(stdout));
+    let stream = e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20);
+    let flag = e.call(STBUF, &args![stream]).u32();
+    let size = 4 * (args.len() as u32).max(1);
+    let result = e.with_stack(size, |e, list| {
+        for (i, word) in args.iter().enumerate() {
+            e.mem.set_u32(list.addr() + 4 * i as u32, *word);
+        }
+        let stream = e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20);
+        e.call(OUTPUT_L, &args![stream, format, 0u32, list]).i32()
+    });
+    let stream = e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20);
+    e.call(FTBUF, &args![flag, stream]);
+    let stream = e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20);
+    unlock_file2(e, 1, Ptr::new(stream));
+    result
+}
+
+/// The registry entry of [`printf`]: the format, then the variable arguments.
+fn printf_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    printf(e, Ptr::new(words[0]), &words[1..]).into_ret()
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        (0x00ec_9d4a, printf_entry as AbiFn),
         entry!(0x00ec_7c66, memcpy_s(Ptr, u32, Ptr, u32) -> u32),
         entry!(0x00ed_d07e, lseek(u32, u32, u32) -> u32),
         entry!(0x00ec_b3c5, ftell_nolock(Ptr) -> u32),
@@ -1717,5 +1756,29 @@ mod tests {
         assert_eq!(e.call(0x00ec_7c66, &args![to, 8u32, 0u32, 4u32]).u32(), 0x16);
         assert_eq!(e.mem.bytes(to, 4), [0; 4]);
         assert_eq!(e.call(0x00ec_7c66, &args![0u32, 8u32, from, 4u32]).u32(), 0x16);
+    }
+
+    #[test]
+    fn printf_writes_stdout_through_output_l_with_its_arguments() {
+        let (mut e, block) = engine();
+        let section = e.mem.alloc(0x18);
+        e.mem.set_u32(LOCK_TABLE + 8 * 0x11, section);
+        let iob = e.mem.alloc(0x60);
+        e.register_double(IOB_FUNC, move |_, _| iob.into_ret());
+        e.register(STBUF, |_, _| 1u32.into_ret());
+        e.register(FTBUF, |_, _| Ret::default());
+        e.register(OUTPUT_L, |e, a| {
+            // The va_list holds the arguments: answer the first one.
+            e.mem.u32(a[3]).into_ret()
+        });
+        let format = e.mem.alloc(8);
+        e.mem.set_cstr(format, b"%i\n");
+        assert_eq!(e.call(0x00ec_9d4a, &args![format, 0x2au32]).i32(), 0x2a);
+        assert_eq!(calls(&e, OUTPUT_L)[0][..3], [iob + 0x20, format, 0]);
+        assert_eq!(calls(&e, FTBUF), [vec![1, iob + 0x20]]);
+        // The stream was unlocked again.
+        assert_eq!(e.mem.u32(iob + 0x20 + 0xc) & 0x8000, 0);
+        assert_eq!(e.call(0x00ec_9d4a, &args![0u32]).i32(), -1);
+        assert_eq!(e.mem.u32(block + 8), 0x16);
     }
 }
