@@ -8,6 +8,8 @@ pub mod dinput;
 pub mod d3d9;
 pub mod dsound;
 pub mod files;
+pub mod time;
+pub mod zone;
 pub mod loader;
 pub mod window;
 
@@ -2192,6 +2194,31 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
         (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
         (k, "HeapCreate", entry!(0, heap_create(u32, u32, u32) -> u32).1),
+        (
+            k,
+            "GetSystemTimeAsFileTime",
+            entry!(0, time::get_system_time_as_file_time(Ptr)).1,
+        ),
+        (
+            k,
+            "GetTimeZoneInformation",
+            entry!(0, time::get_time_zone_information(Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "FileTimeToLocalFileTime",
+            entry!(0, time::file_time_to_local_file_time(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "FileTimeToSystemTime",
+            entry!(0, time::file_time_to_system_time(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "WideCharToMultiByte",
+            entry!(0, time::wide_char_to_multi_byte(u32, u32, Ptr, i32, Ptr, i32, Ptr, Ptr) -> u32).1,
+        ),
     ]
 }
 
