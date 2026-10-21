@@ -25,6 +25,28 @@ const IOB_END: u32 = 0x011c_1c88;
 /// The `.CRT$XI`-like table `_RTC_Initialize` runs (`0113ec34..0113ec34`: empty in this exe).
 const RTC_TABLE: (u32, u32) = (0x0113_ec34, 0x0113_ec34);
 
+/// KERNEL32 `HeapCreate`'s import slot, and `__active_heap` (`01270948`).
+const IMPORT_HEAP_CREATE: u32 = 0x00fd_f254;
+const ACTIVE_HEAP: u32 = 0x0127_0948;
+
+// Translated from 00eddb6a (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_heap_init` (LIBCMT/heapinit.c, engine map), cdecl: the multi-thread flag
+/// `mainCRTStartup` passes (1). `_crtheap` (`012705bc`) is `HeapCreate(flag == 0, 0x1000, 0)`
+/// (`HEAP_NO_SERIALIZE` only for a single-threaded start); none answers 0, else
+/// `__active_heap` (`01270948`) becomes 1 (the system heap) and 1 is answered.
+pub fn heap_init(e: &mut Engine, multithreaded: u32) -> u32 {
+    let options = u32::from(multithreaded == 0);
+    let heap = e
+        .call(IMPORT_HEAP_CREATE, &args![options, 0x1000u32, 0u32])
+        .u32();
+    e.mem.set_u32(LOCKS_READY, heap);
+    if heap == 0 {
+        return 0;
+    }
+    e.mem.set_u32(ACTIVE_HEAP, 1);
+    1
+}
+
 // Translated from 00eddb1e (disassembled, FalloutNV.exe 1.4.0.525)
 /// `_RTC_Initialize` (LIBCMT/initsect.cpp, engine map), no arguments: calls each non-null
 /// function of its table (`0113ec34` to `0113ec34`, so none in this exe).
@@ -241,6 +263,7 @@ pub fn initstdio(e: &mut Engine) -> u32 {
 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ed_db6a, heap_init(u32) -> u32),
         entry!(0x00ed_db1e, rtc_initialize()),
         entry!(0x00ed_7e18, ioinit() -> i32),
         entry!(0x00ec_df4a, initstdio() -> u32),
@@ -318,5 +341,20 @@ mod tests {
         e.mem.set_u32(NSTREAM_WORD, 5);
         e.call(0x00ec_df4a, &args![]);
         assert_eq!(e.mem.u32(NSTREAM_WORD), 0x14);
+    }
+
+    #[test]
+    fn heap_init_keeps_the_heap_and_picks_the_system_heap() {
+        let mut e = engine();
+        e.register(IMPORT_HEAP_CREATE, |_, a| (0x0e50_0000 + a[0]).into_ret());
+        assert_eq!(e.call(0x00ed_db6a, &args![1u32]).u32(), 1);
+        assert_eq!(e.mem.u32(LOCKS_READY), 0x0e50_0000);
+        assert_eq!(e.mem.u32(ACTIVE_HEAP), 1);
+        // Single-threaded: HEAP_NO_SERIALIZE; no heap answers 0 and leaves the choice.
+        e.mem.set_u32(ACTIVE_HEAP, 0);
+        e.register(IMPORT_HEAP_CREATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ed_db6a, &args![0u32]).u32(), 0);
+        assert_eq!(e.mem.u32(LOCKS_READY), 0);
+        assert_eq!(e.mem.u32(ACTIVE_HEAP), 0);
     }
 }

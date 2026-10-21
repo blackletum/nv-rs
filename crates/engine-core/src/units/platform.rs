@@ -882,6 +882,8 @@ pub enum KernelObject {
     File(files::OpenFile),
     /// A file search ([`files::find_first_file_a`]): only the one result it answered.
     FindFile,
+    /// A heap from [`heap_create`]: only its handle.
+    Heap,
 }
 
 /// A `VirtualAlloc` reservation: its size and which pages are committed.
@@ -1200,6 +1202,7 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         Some(KernelObject::File(_)) => true,
         // Waiting on a file search handle is not provided (not measured).
         Some(KernelObject::FindFile) => panic!("waiting on file search {handle:#x} is not provided"),
+        Some(KernelObject::Heap) => panic!("waiting on heap {handle:#x} is not provided"),
         None if handle == CURRENT_THREAD => false,
         None => return None,
     };
@@ -1678,6 +1681,21 @@ fn get_std_handle(_e: &mut Engine, which: u32) -> u32 {
 /// machine, 2026-10-21: 32 gave 32).
 fn set_handle_count(_e: &mut Engine, count: u32) -> u32 {
     count
+}
+
+// Platform: replaces KERNEL32.DLL HeapCreate (import)
+/// `HeapCreate(options, initial, maximum)` for a growable heap (`maximum` 0, options 0 or
+/// `HEAP_NO_SERIALIZE` 1), as the CRT's `_heap_init` makes `_crtheap`: a handle (Windows
+/// answers a nonzero heap handle for these arguments). Only the handle: the CRT's allocations
+/// are the engine's heap (`malloc`, `free`, `__calloc_crt` are platform), so `HeapAlloc` and
+/// the other heap calls on it are not provided (they stop the run). Other options or a fixed
+/// size are not provided.
+fn heap_create(e: &mut Engine, options: u32, _initial: u32, maximum: u32) -> u32 {
+    assert!(
+        options <= 1 && maximum == 0,
+        "HeapCreate({options:#x}, maximum {maximum:#x}) is not provided"
+    );
+    e.kernel.insert(KernelObject::Heap)
 }
 
 // Platform: replaces KERNEL32.DLL GetCurrentDirectoryA (import)
@@ -2173,6 +2191,7 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "GetStartupInfoA", entry!(0, get_startup_info_a(Ptr)).1),
         (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
         (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
+        (k, "HeapCreate", entry!(0, heap_create(u32, u32, u32) -> u32).1),
     ]
 }
 

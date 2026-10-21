@@ -8,9 +8,9 @@
 //!
 //! Every file the game makes, changes, copies or deletes lives in [`Disk`], in engine-side
 //! memory: nothing reaches the player's disk. The player's own files are read only: opened, they
-//! are read into the run's copy; deleted, they are only gone for the game. An open of a file
-//! that exists nowhere with a disposition that needs one stops the run (a panic the run
-//! records), as other platform calls not provided do.
+//! are read into the run's copy (only when opened for writing; opened for reading they are read
+//! in place); deleted, they are only gone for the game. An open of a file that exists nowhere
+//! with a disposition that needs one fails as Windows answers it (measured).
 
 use super::KernelObject;
 use crate::{Engine, Ptr};
@@ -298,6 +298,24 @@ fn open_file(e: &mut Engine, handle: u32) -> Option<&mut OpenFile> {
 /// `ERROR_PATH_NOT_FOUND`.
 pub const ERROR_PATH_NOT_FOUND: u32 = 3;
 
+/// Whether the directory holding the full path `path` exists: one the game made in this run,
+/// else the player's (and not deleted).
+fn directory_exists(e: &Engine, path: &[u8]) -> bool {
+    let trimmed = path.strip_suffix(b"\\").unwrap_or(path);
+    let Some(cut) = trimmed.iter().rposition(|&b| b == b'\\' || b == b'/') else {
+        return false;
+    };
+    let parent = &trimmed[..cut];
+    let k = key(parent);
+    if e.kernel.disk.directories.contains(&k) {
+        return true;
+    }
+    if e.kernel.disk.deleted.contains(&k) {
+        return false;
+    }
+    std::fs::metadata(real_path(parent)).is_ok_and(|m| m.is_dir())
+}
+
 // Platform: replaces KERNEL32.DLL FindFirstFileA (import)
 /// `FindFirstFileA(name, data)` for a name without wildcards: the player's file or directory,
 /// described as Windows does in the `WIN32_FIND_DATAA` at `data` (0x140 bytes): attributes,
@@ -425,7 +443,8 @@ pub fn find_close(e: &mut Engine, handle: u32) -> u32 {
 /// empties it) fail with `ERROR_FILE_NOT_FOUND` on a missing file; `OPEN_ALWAYS` makes a missing
 /// one (`ERROR_ALREADY_EXISTS` when it existed). Answers the handle (position 0) or
 /// `INVALID_HANDLE_VALUE`. Sharing, security and attributes don't change the outcome here.
-/// An open of a file the game didn't make in this run is not provided (stops the run).
+/// A missing file for `OPEN_EXISTING` or `TRUNCATE_EXISTING` answers `ERROR_FILE_NOT_FOUND`,
+/// or `ERROR_PATH_NOT_FOUND` when its directory is missing too (measured; see the arm).
 #[allow(clippy::too_many_arguments)]
 pub fn create_file_a(
     e: &mut Engine,
@@ -485,11 +504,20 @@ pub fn create_file_a(
             }
             e.kernel.disk.files.insert(path.clone(), vec![]);
         }
+        // Measured on this machine (2026-10-21, PowerShell P/Invoke, GENERIC_READ): a missing
+        // file answers ERROR_FILE_NOT_FOUND (2), one in a missing directory
+        // ERROR_PATH_NOT_FOUND (3); TRUNCATE_EXISTING without GENERIC_WRITE answers
+        // ERROR_INVALID_PARAMETER (87) for a missing file too.
+        TRUNCATE_EXISTING if !exists && access & GENERIC_WRITE == 0 => {
+            return fail(e, ERROR_INVALID_PARAMETER)
+        }
         OPEN_EXISTING | TRUNCATE_EXISTING if !exists => {
-            panic!(
-                "CreateFileA: opening \"{}\", a file the game did not make in this run, is not provided",
-                String::from_utf8_lossy(&name)
-            );
+            let code = if directory_exists(e, &name) {
+                ERROR_FILE_NOT_FOUND
+            } else {
+                ERROR_PATH_NOT_FOUND
+            };
+            return fail(e, code);
         }
         OPEN_EXISTING => {}
         TRUNCATE_EXISTING => {
@@ -735,11 +763,22 @@ mod tests {
         assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
     }
 
+    /// Was `opening_a_file_the_game_did_not_make_stops` (the open stopped the run); a missing
+    /// file now fails as Windows answers it (measured).
     #[test]
-    #[should_panic(expected = "not provided")]
-    fn opening_a_file_the_game_did_not_make_stops() {
+    fn opening_a_missing_file_fails_as_windows_does() {
         let (mut e, name) = engine();
-        create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+        // `C:\Some` is not there: the path is missing.
+        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND));
+        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, TRUNCATE_EXISTING, 0, 0);
+        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_INVALID_PARAMETER));
+        // In a directory that exists (the crate's own): the file is missing.
+        let missing = e.mem.alloc(0x200);
+        let text = concat!(env!("CARGO_MANIFEST_DIR"), "/NoSuch.txt");
+        e.mem.set_cstr(missing, text.as_bytes());
+        let h = create_file_a(&mut e, Ptr::new(missing), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND));
     }
 
     #[test]

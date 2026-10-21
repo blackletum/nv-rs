@@ -69,6 +69,7 @@ impl Host {
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
         // runs too (they go on past misses with zero results and record them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
+        start_crt_heap(&mut engine, &mut movement);
         start_crt_threads(&mut engine, &mut movement);
         start_crt_io(&mut engine, &mut movement);
         start_cinit_float(&mut engine, &mut movement);
@@ -176,6 +177,21 @@ pub fn start_crt_threads(e: &mut Engine, movement: &mut player_move::PlayerMovem
     const MTINIT: u32 = 0x00ed_1327;
     let _ = movement.guarded(e, "crt", |e| {
         e.call(MTINIT, &[]);
+        Ok(())
+    });
+}
+
+/// The first step of `mainCRTStartup` (`00ecc3ca`): `_heap_init(1)` (`00eddb6a`), which
+/// makes `_crtheap` (`HeapCreate`; the CRT's allocations themselves are the engine's heap,
+/// platform); `__mtinitlocknum` and `_malloc` end the program while it is 0. A failure (0)
+/// would end the process (`fast_error_exit(0x1c)`); here it is reported by the miss recorder
+/// (stage `crt`) and start-up goes on.
+pub fn start_crt_heap(e: &mut Engine, movement: &mut player_move::PlayerMovement) {
+    const HEAP_INIT: u32 = 0x00ed_db6a;
+    let _ = movement.guarded(e, "crt", |e| {
+        if e.call(HEAP_INIT, &[1]).u32() == 0 {
+            return Err("_heap_init answered 0".to_string());
+        }
         Ok(())
     });
 }
