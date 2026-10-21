@@ -14,6 +14,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod scanf;
+
 // ---- Memory ---------------------------------------------------------------
 
 // Platform: replaces 00ec44d0 (_memcpy, LIBCMT)
@@ -6870,7 +6872,7 @@ pub fn strcat(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
 }
 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![
+    let mut table = vec![
         entry!(0x00ec_be7c, access_s(Ptr, u32) -> u32),
         entry!(0x00ec_bf05, access(Ptr, u32) -> i32),
         entry!(0x00ec_6380, strcat(Ptr, Ptr) -> Ptr),
@@ -7038,7 +7040,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ee_2315, wctomb_s(Ptr, Ptr, u32, u32) -> i32),
         entry!(0x00ec_9df9, get_printf_count_output() -> u32),
         (0x00ed_2f21, output_l_entry as AbiFn),
-    ]
+    ];
+    table.extend(scanf::funcs());
+    table
 }
 
 /// Test support for the constructors of the forms (`CreateFormOfType`'s
