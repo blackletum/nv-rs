@@ -56,8 +56,35 @@ pub fn fn_00e7b0f0(
 }
 
 /// This unit's translated functions, by exe address.
+// Translated from 00e7af60 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7af60`; `thiscall`, one word, `RET 4`): the value of the
+/// list at `this + 0x10` nearest to `wanted`. 0 for `wanted` 0. The distance to beat starts as
+/// that of the list's word at +8 (`|value - wanted|`, signed, compared unsigned) with no value
+/// chosen (0); each node (next at +0, value at +8) closer than the best so far is chosen.
+pub fn fn_00e7af60(e: &mut Engine, this: Ptr, wanted: u32) -> u32 {
+    if wanted == 0 {
+        return 0;
+    }
+    let distance = |value: u32| (value.wrapping_sub(wanted) as i32).wrapping_abs() as u32;
+    let list = e.mem.u32(this.addr().wrapping_add(0x10));
+    let mut node = e.mem.u32(list);
+    let mut best_distance = distance(e.mem.u32(list.wrapping_add(8)));
+    let mut best = 0;
+    while node != 0 {
+        let value = e.mem.u32(node.wrapping_add(8));
+        node = e.mem.u32(node);
+        let d = distance(value);
+        if d < best_distance {
+            best_distance = d;
+            best = value;
+        }
+    }
+    best
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_af60, fn_00e7af60(Ptr, u32) -> u32),
         entry!(0x00e7_b0f0, fn_00e7b0f0(Ptr, u32, u32, u32, u32) -> u32),
         entry!(0x00e7_b040, fn_00e7b040(Ptr)),
     ]
@@ -217,5 +244,29 @@ mod b052_tests {
         assert_eq!(cleaned, vec![this + 8, this + 8]);
         assert!(log.contains(&(FREE_00AA10F0, vec![buckets])));
         assert_eq!(e.mem.u32(this + 8), MAP_BASE_VTABLE_010EEC54);
+    }
+}
+
+#[cfg(test)]
+mod tests_nearest_rate {
+    use super::*;
+
+    #[test]
+    fn the_nearest_rate_beats_the_lists_own_word() {
+        let mut e = Engine::new();
+        let record = e.mem.alloc(0x20);
+        let list = e.mem.alloc(0x10);
+        let (n1, n2) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        e.mem.set_u32(record + 0x10, list);
+        e.mem.set_u32(list, n1);
+        e.mem.set_u32(list + 8, 70);
+        e.mem.set_u32(n1, n2);
+        e.mem.set_u32(n1 + 8, 59);
+        e.mem.set_u32(n2, 0);
+        e.mem.set_u32(n2 + 8, 75);
+        assert_eq!(e.call(0x00e7_af60, &args![record, 60u32]).u32(), 59);
+        // The list's own word is closest: nothing chosen.
+        assert_eq!(e.call(0x00e7_af60, &args![record, 70u32]).u32(), 0);
+        assert_eq!(e.call(0x00e7_af60, &args![record, 0u32]).u32(), 0);
     }
 }

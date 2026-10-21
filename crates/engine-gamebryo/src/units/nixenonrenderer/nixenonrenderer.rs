@@ -7,6 +7,8 @@ use crate::prelude::*;
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_aed0, fn_00e7aed0(Ptr, u8, i32) -> u32),
+        entry!(0x00e7_b190, fn_00e7b190(Ptr, u32, u32, u32, Ptr) -> u32),
         entry!(0x00e7_a9a0, ni_xenon_renderer_get_d3d_format_string(i32) -> u32),
         entry!(0x00e6_9e50, fn_00e69e50(u32) -> u32),
         entry!(0x00e6_c550, fn_00e6c550(Ptr) -> u8),
@@ -135,6 +137,60 @@ const CREATE_FAILED_010ED550: u32 = 0x010e_d550;
 const CREATE_SUCCEEDED_010ED52C: u32 = 0x010e_d52c;
 /// The SDK version both creation functions are given.
 const D3D_SDK_VERSION: u32 = 0x20;
+
+/// The format's record id (`00e7acb0`, cdecl: a D3D format) and the nearest refresh rate of a
+/// mode record (`00e7af60`, `thiscall` on the record: the wanted rate), by address.
+const RECORD_ID_00E7ACB0: u32 = 0x00e7_acb0;
+const NEAREST_RATE_00E7AF60: u32 = 0x00e7_af60;
+
+// Translated from 00e7aed0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words, `RET 8`): over the display-format list at
+/// `this + 0x134` (next at +0, record at +8), the first record whose flag byte is set (+4 when
+/// `windowed` is nonzero, else +5) and whose format's id (`00e7acb0(record[0])`) is `id`:
+/// answers `00e69d00(record[0])`; 0 when none. (The exe keeps the next node and the record in
+/// `ECX`/`EDX` across `00e7acb0`, which leaves them alone.)
+pub fn fn_00e7aed0(e: &mut Engine, this: Ptr, windowed: u8, id: i32) -> u32 {
+    let flag = if windowed != 0 { 4 } else { 5 };
+    let mut node = e.mem.u32(this.addr().wrapping_add(0x134));
+    while node != 0 {
+        let record = e.mem.u32(node.wrapping_add(8));
+        node = e.mem.u32(node);
+        if record != 0 && e.mem.u8(record.wrapping_add(flag)) != 0 {
+            let format = e.mem.u32(record);
+            if e.call(RECORD_ID_00E7ACB0, &args![format]).i32() == id {
+                let format = e.mem.u32(record);
+                return fn_00e69d00(e, format);
+            }
+        }
+    }
+    0
+}
+
+// Translated from 00e7b190 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, four words, `RET 0x10`): over the mode records at
+/// `this + 0x454` (count: the word at +0x45A, re-read each pass), each record matching `a`
+/// (+0xC), `b` (+0) and `c` (+4) becomes the answer and `*rate` its nearest refresh rate
+/// (`00e7af60` on the record with the current `*rate`); the last match answers, none 0.
+pub fn fn_00e7b190(e: &mut Engine, this: Ptr, a: u32, b: u32, c: u32, rate: Ptr) -> u32 {
+    let mut found = 0;
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(this.addr().wrapping_add(0x45a))) {
+        let table = e.mem.u32(this.addr().wrapping_add(0x454));
+        let record = e.mem.u32(table.wrapping_add(4 * index));
+        if record != 0
+            && e.mem.u32(record.wrapping_add(0xc)) == a
+            && e.mem.u32(record) == b
+            && e.mem.u32(record.wrapping_add(4)) == c
+        {
+            found = record;
+            let wanted = e.mem.u32(rate.addr());
+            let nearest = e.call(NEAREST_RATE_00E7AF60, &args![record, wanted]).u32();
+            e.mem.set_u32(rate.addr(), nearest);
+        }
+        index += 1;
+    }
+    found
+}
 
 // Translated from 00e69460 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiXenonRenderer::CreateDirect3D9` (engine map), `cdecl`, one word (its low byte: try the
@@ -6497,5 +6553,63 @@ mod b048_partial_draw_tests {
                 vec![CLEARED_BLOCK_0126EFD8, 0, 0x76]
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_mode_lookups {
+    use super::*;
+
+    #[test]
+    fn the_format_lookup_checks_the_flag_byte_and_the_id() {
+        let mut e = Engine::new();
+        e.register(RECORD_ID_00E7ACB0, |_, a| (a[0] as i32 * 2).into_ret());
+        let this = e.mem.alloc(0x140);
+        let (node1, node2) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        let (r1, r2) = (e.mem.alloc(8), e.mem.alloc(8));
+        e.mem.set_u32(this + 0x134, node1);
+        e.mem.set_u32(node1, node2);
+        e.mem.set_u32(node1 + 8, r1);
+        e.mem.set_u32(node2 + 8, r2);
+        e.mem.set_u32(r1, 21);
+        e.mem.set_u8(r1 + 4, 1);
+        e.mem.set_u32(r2, 22);
+        e.mem.set_u8(r2 + 5, 1);
+        assert_eq!(
+            e.call(0x00e7_aed0, &args![this, 1u32, 42u32]).u32(),
+            fn_00e69d00(&mut e, 21)
+        );
+        assert_eq!(e.call(0x00e7_aed0, &args![this, 1u32, 44u32]).u32(), 0);
+        assert_eq!(
+            e.call(0x00e7_aed0, &args![this, 0u32, 44u32]).u32(),
+            fn_00e69d00(&mut e, 22)
+        );
+    }
+
+    #[test]
+    fn the_mode_lookup_keeps_the_last_match_and_its_rate() {
+        let mut e = Engine::new();
+        e.register(NEAREST_RATE_00E7AF60, |_, a| (a[1] + 1).into_ret());
+        let this = e.mem.alloc(0x460);
+        let table = e.mem.alloc(0xc);
+        let (m1, m2) = (e.mem.alloc(0x10), e.mem.alloc(0x10));
+        e.mem.set_u32(this + 0x454, table);
+        e.mem.set_u16(this + 0x45a, 3);
+        e.mem.set_u32(table, m1);
+        e.mem.set_u32(table + 4, 0);
+        e.mem.set_u32(table + 8, m2);
+        for m in [m1, m2] {
+            e.mem.set_u32(m, 800);
+            e.mem.set_u32(m + 4, 600);
+            e.mem.set_u32(m + 0xc, 22);
+        }
+        let rate = e.mem.alloc(4);
+        e.mem.set_u32(rate, 60);
+        assert_eq!(
+            e.call(0x00e7_b190, &args![this, 22u32, 800u32, 600u32, rate]).u32(),
+            m2
+        );
+        assert_eq!(e.mem.u32(rate), 62);
+        assert_eq!(e.call(0x00e7_b190, &args![this, 23u32, 800u32, 600u32, rate]).u32(), 0);
     }
 }
