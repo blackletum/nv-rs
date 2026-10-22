@@ -2767,6 +2767,14 @@ pub fn fn_009fe870(e: &mut Engine, this: Ptr) {
     e.call(DELETE_CRITICAL_SECTION, &args![this]);
 }
 
+// Translated from 009fea24 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stub every cell of the table at `011a6228` starts with (`MOV EAX,[011a6224]; RET`):
+/// answers the word at `011a6224` (-4 until `009fea2a` succeeds, then -3), whatever words the
+/// caller pushed (each caller pops its own).
+pub fn fn_009fea24(e: &mut Engine) -> u32 {
+    e.global::<u32>(LIBRARY_FIRST_CELL)
+}
+
 // Translated from 009fea2a (decompiled, FalloutNV.exe 1.4.0.525)
 /// One-time library start-up (no words; `PUSHAD`/`POPAD` around the body):
 /// returns 0 when the done flag at `011a621c` is set. Otherwise loads
@@ -2952,6 +2960,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009f_e570, fn_009fe570(Ptr, u32, Ptr, Ptr, Ptr) -> u32),
         entry!(0x009f_e690, fn_009fe690(Ptr) -> u32),
         entry!(0x009f_e870, fn_009fe870(Ptr)),
+        entry!(0x009f_ea24, fn_009fea24() -> u32),
         entry!(0x009f_ea2a, fn_009fea2a() -> u32),
         entry!(0x009f_ebd8, fn_009febd8(u32, Ptr) -> u32),
     ]
@@ -5585,5 +5594,23 @@ mod b009_tests {
         e.register(OBJ, |_, _| ret(0x44));
         assert_eq!(e.call(0x009f_ebd8, &args![1u32, 0x2000u32]).u32(), 0x44);
         assert_eq!(calls(&e, OBJ), vec![vec![1, 0x2000]]);
+    }
+}
+
+#[cfg(test)]
+mod stub_009fea24_tests {
+    use super::*;
+
+    #[test]
+    fn the_stub_answers_the_library_word_whatever_it_is_given() {
+        let mut e = Engine::new();
+        e.map(LIBRARY_FIRST_CELL & !0xfff, 0x1000);
+        e.set_global(LIBRARY_FIRST_CELL, 0xffff_fffcu32);
+        assert_eq!(
+            e.call(0x009f_ea24, &args![0u32, 0x1000u32]).u32(),
+            0xffff_fffc
+        );
+        e.set_global(LIBRARY_FIRST_CELL, 0xffff_fffdu32);
+        assert_eq!(e.call(0x009f_ea24, &args![]).u32(), 0xffff_fffd);
     }
 }
