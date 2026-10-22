@@ -109,6 +109,8 @@ pub struct Adapter {
     time_zone: Option<(u32, Vec<u8>)>,
     /// `EnumDisplayDevicesA(NULL, index, .., 0)`'s answer and `DISPLAY_DEVICEA` bytes by index.
     display_devices: HashMap<u32, (u32, Vec<u8>)>,
+    /// The `NvApi*` lines (`scripts/nvapi-capture`).
+    nvapi: super::nvapi::Table,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -132,6 +134,9 @@ impl Adapter {
         for line in table.lines().filter(|l| !l.is_empty()) {
             let f: Vec<&str> = line.split('\t').collect();
             let hex = |i: usize| u32::from_str_radix(f[i], 16).expect("a hex result");
+            if a.nvapi.take_line(&f) {
+                continue;
+            }
             match f[0] {
                 "GetSystemMetrics" => {
                     a.metrics.insert(words(f[1])[0], hex(2));
@@ -228,11 +233,15 @@ pub struct Graphics {
     procs_registered: bool,
     /// The devices and their resources (`super::d3d9device`).
     pub(crate) device_objects: super::d3d9device::Objects,
+    /// The NvAPI answers and the functions handed out (`super::nvapi`).
+    pub(crate) nvapi: super::nvapi::State,
 }
 
 /// Gives the layer the player's adapter table (`scripts/d3d9-capture`'s output).
 pub fn load_adapter_table(e: &mut Engine, table: &str) {
-    e.kernel.graphics.adapter = Some(Adapter::parse(table));
+    let adapter = Adapter::parse(table);
+    e.kernel.graphics.nvapi.table = adapter.nvapi.clone();
+    e.kernel.graphics.adapter = Some(adapter);
 }
 
 /// The loaded adapter; without one the run stops and says how to capture it.
@@ -322,6 +331,11 @@ pub fn window_border(e: &mut Engine, style: u32, menu: u32, ex_style: u32) -> Op
 /// A captured screen metric (`GetSystemMetrics`), if the capture has it.
 pub fn system_metric(e: &mut Engine, index: u32) -> Option<u32> {
     adapter(e).metrics.get(&index).copied()
+}
+
+/// Whether `object` is an `IDirect3D9` of this layer.
+pub fn is_direct3d(e: &Engine, object: u32) -> bool {
+    e.kernel.graphics.objects.contains_key(&object)
 }
 
 fn register_code(e: &mut Engine) {

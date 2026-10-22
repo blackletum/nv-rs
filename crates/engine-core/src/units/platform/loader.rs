@@ -114,19 +114,24 @@ fn is_processor_feature_present(_e: &mut Engine, feature: u32) -> u32 {
 
 // Platform: replaces KERNEL32.DLL LoadLibraryA (import)
 /// `LoadLibraryA(name)`: `D3D9.DLL` (any case, with or without `.DLL`, no path) is
-/// [`super::d3d9::D3D9_MODULE`], the platform's Direct3D 9 layer. Other modules are not
-/// provided.
+/// [`super::d3d9::D3D9_MODULE`], the platform's Direct3D 9 layer; `nvapi.dll` answers from the
+/// machine table (`super::nvapi::load_library`). Other modules are not provided.
 pub fn load_library_a(e: &mut Engine, name: Ptr) -> u32 {
     let text = String::from_utf8_lossy(&e.mem.cstr(name.addr())).to_ascii_uppercase();
     if text == "D3D9.DLL" || text == "D3D9" {
         return super::d3d9::D3D9_MODULE;
+    }
+    if text == "NVAPI.DLL" || text == "NVAPI" {
+        return super::nvapi::load_library(e);
     }
     panic!("LoadLibraryA({text:?}) is not provided");
 }
 
 // Platform: replaces KERNEL32.DLL GetProcAddress (import)
 /// `GetProcAddress(module, name)`: a KERNEL32 procedure of [`PROCS`] by name, its platform code
-/// address, or a `D3D9.DLL` one of [`super::d3d9::PROCS`]. A procedure by ordinal, another module or another name is not provided.
+/// address, a `D3D9.DLL` one of [`super::d3d9::PROCS`], or `nvapi.dll`'s `nvapi_QueryInterface`
+/// ([`super::nvapi::proc_address`]). A procedure by ordinal, another module or another name is
+/// not provided.
 pub fn get_proc_address(e: &mut Engine, module: u32, name: u32) -> u32 {
     if name < 0x1_0000 {
         panic!("GetProcAddress by ordinal ({name}) is not provided");
@@ -140,6 +145,9 @@ pub fn get_proc_address(e: &mut Engine, module: u32, name: u32) -> u32 {
                 String::from_utf8_lossy(&text)
             ),
         };
+    }
+    if module == super::nvapi::NVAPI_MODULE {
+        return super::nvapi::proc_address(e, &text);
     }
     if module != KERNEL32_MODULE {
         panic!("GetProcAddress on module {module:#x} is not provided");

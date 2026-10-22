@@ -5,7 +5,8 @@
 //! the ones the game sees. The table describes the player's own hardware: it stays on the
 //! player's machine (git-ignored), never in the repository. Windows only:
 //! `cargo run --release --manifest-path scripts/d3d9-capture/Cargo.toml > %LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv`
-//! (or any file `NV_D3D9_ADAPTER` names).
+//! (or any file `NV_D3D9_ADAPTER` names). The `nvapi.dll` answers are appended to the same table
+//! by `scripts/nvapi-capture` (32-bit, as the DLL).
 use std::ffi::c_void;
 use std::io::Write;
 

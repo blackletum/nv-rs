@@ -8,11 +8,13 @@ pub mod dinput;
 pub mod d3d9;
 pub mod d3d9device;
 pub mod d3d9resource;
+pub mod d3dx;
 pub mod dsound;
 pub mod files;
 pub mod time;
 pub mod zone;
 pub mod loader;
+pub mod nvapi;
 pub mod window;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
@@ -1875,6 +1877,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             k,
             "LoadLibraryA",
             entry!(0, loader::load_library_a(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXMatrixMultiply",
+            entry!(0, d3dx::matrix_multiply(Ptr, Ptr, Ptr) -> u32).1,
         ),
         (
             "d3d9.dll",
