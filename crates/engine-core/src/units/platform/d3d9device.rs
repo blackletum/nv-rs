@@ -296,6 +296,12 @@ struct Device {
     stage_states: HashMap<(u32, u32), u32>,
     sampler_states: HashMap<(u32, u32), u32>,
     textures: HashMap<u32, u32>,
+    /// Transforms by `D3DTRANSFORMSTATETYPE`, the scissor rectangle, user clip planes, and
+    /// whether a scene is open.
+    transforms: HashMap<u32, [u32; 16]>,
+    scissor: [u32; 4],
+    clip_planes: HashMap<u32, [u32; 4]>,
+    in_scene: bool,
 }
 
 /// A surface of this layer.
@@ -340,7 +346,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 23] = [
+    let device: [(u32, crate::AbiFn); 33] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -382,6 +388,22 @@ fn register_code(e: &mut Engine) {
             crate::entry!(0, get_depth_stencil_surface(Ptr, Ptr) -> u32).1,
         ),
         (47, crate::entry!(0, set_viewport(Ptr, Ptr) -> u32).1),
+        (3, crate::entry!(0, test_cooperative_level(Ptr) -> u32).1),
+        (
+            17,
+            crate::entry!(0, present(Ptr, u32, u32, u32, u32) -> u32).1,
+        ),
+        (41, crate::entry!(0, begin_scene(Ptr) -> u32).1),
+        (42, crate::entry!(0, end_scene(Ptr) -> u32).1),
+        (
+            43,
+            crate::entry!(0, clear(Ptr, u32, Ptr, u32, u32, u32, u32) -> u32).1,
+        ),
+        (44, crate::entry!(0, set_transform(Ptr, u32, Ptr) -> u32).1),
+        (45, crate::entry!(0, get_transform(Ptr, u32, Ptr) -> u32).1),
+        (55, crate::entry!(0, set_clip_plane(Ptr, u32, Ptr) -> u32).1),
+        (75, crate::entry!(0, set_scissor_rect(Ptr, Ptr) -> u32).1),
+        (76, crate::entry!(0, get_scissor_rect(Ptr, Ptr) -> u32).1),
         (
             57,
             crate::entry!(0, set_render_state(Ptr, u32, u32) -> u32).1,
@@ -755,6 +777,10 @@ pub fn create_device(
         stage_states: HashMap::new(),
         sampler_states: HashMap::new(),
         textures: HashMap::new(),
+        transforms: HashMap::new(),
+        scissor: [0, 0, width, height],
+        clip_planes: HashMap::new(),
+        in_scene: false,
     };
     e.kernel
         .graphics
@@ -953,6 +979,7 @@ fn set_render_target(e: &mut Engine, this: Ptr, index: u32, surface: u32) -> u32
     }
     if let (0, Some(desc)) = (index, desc) {
         device(e, this).viewport = [0, 0, desc[6], desc[7], 0f32.to_bits(), 1f32.to_bits()];
+        device(e, this).scissor = [0, 0, desc[6], desc[7]];
     }
     D3D_OK
 }
@@ -1124,6 +1151,172 @@ fn surface_get_desc(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     for (i, word) in desc.iter().enumerate() {
         e.mem.set_u32(out.addr() + 4 * i as u32, *word);
     }
+    D3D_OK
+}
+
+/// The 16 words of the identity matrix (`float` 1.0 on the diagonal).
+fn identity() -> [u32; 16] {
+    let mut m = [0u32; 16];
+    for i in 0..4 {
+        m[5 * i] = 1f32.to_bits();
+    }
+    m
+}
+
+/// Whether `state` names a transform: `D3DTS_VIEW` (2), `D3DTS_PROJECTION` (3),
+/// `D3DTS_TEXTURE0..7` (16 to 23) or `D3DTS_WORLDMATRIX(0..255)` (256 to 511).
+fn is_transform(state: u32) -> bool {
+    matches!(state, 2 | 3 | 16..=23 | 256..=511)
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetTransform (vtable +0xB0)
+/// `SetTransform(state, matrix)`: keeps the 16 words of the `D3DMATRIX`; a null matrix or a
+/// state that names no transform answers `D3DERR_INVALIDCALL`.
+fn set_transform(e: &mut Engine, this: Ptr, state: u32, matrix: Ptr) -> u32 {
+    if matrix.is_null() || !is_transform(state) {
+        return D3DERR_INVALIDCALL;
+    }
+    let mut m = [0u32; 16];
+    for (i, word) in m.iter_mut().enumerate() {
+        *word = e.mem.u32(matrix.addr() + 4 * i as u32);
+    }
+    device(e, this).transforms.insert(state, m);
+    D3D_OK
+}
+
+/// `GetTransform(state, out)`: the matrix set, or the identity (every transform starts as
+/// the identity).
+fn get_transform(e: &mut Engine, this: Ptr, state: u32, out: Ptr) -> u32 {
+    if out.is_null() || !is_transform(state) {
+        return D3DERR_INVALIDCALL;
+    }
+    let m = device(e, this)
+        .transforms
+        .get(&state)
+        .copied()
+        .unwrap_or_else(identity);
+    for (i, word) in m.iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *word);
+    }
+    D3D_OK
+}
+
+/// `SetScissorRect(rect)`: keeps the `RECT`; null answers `D3DERR_INVALIDCALL`.
+fn set_scissor_rect(e: &mut Engine, this: Ptr, rect: Ptr) -> u32 {
+    if rect.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let mut r = [0u32; 4];
+    for (i, word) in r.iter_mut().enumerate() {
+        *word = e.mem.u32(rect.addr() + 4 * i as u32);
+    }
+    device(e, this).scissor = r;
+    D3D_OK
+}
+
+/// `GetScissorRect(out)`: the rectangle set (at first, and after `SetRenderTarget` on index 0,
+/// the whole render target).
+fn get_scissor_rect(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let r = device(e, this).scissor;
+    for (i, word) in r.iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *word);
+    }
+    D3D_OK
+}
+
+/// `SetClipPlane(index, plane)`: keeps the plane's four words for indices 0 to 5
+/// (`D3DMAXUSERCLIPPLANES` 32 is the API's limit; the caps' `MaxUserClipPlanes` the device's);
+/// a null plane or an index at or past the caps' count answers `D3DERR_INVALIDCALL`.
+fn set_clip_plane(e: &mut Engine, this: Ptr, index: u32, plane: Ptr) -> u32 {
+    if plane.is_null() || index >= max_user_clip_planes(e, this) {
+        return D3DERR_INVALIDCALL;
+    }
+    let mut p = [0u32; 4];
+    for (i, word) in p.iter_mut().enumerate() {
+        *word = e.mem.u32(plane.addr() + 4 * i as u32);
+    }
+    device(e, this).clip_planes.insert(index, p);
+    D3D_OK
+}
+
+/// `D3DCAPS9::MaxUserClipPlanes` (+0xA4).
+fn max_user_clip_planes(e: &mut Engine, this: Ptr) -> u32 {
+    e.with_stack(0x130, |e, caps| {
+        assert_eq!(get_device_caps(e, this, caps), D3D_OK, "the device's caps");
+        e.mem.u32(caps.addr() + 0xa4)
+    })
+}
+
+/// `BeginScene()`: starts a scene; inside one already, `D3DERR_INVALIDCALL`.
+fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
+    let d = device(e, this);
+    if d.in_scene {
+        return D3DERR_INVALIDCALL;
+    }
+    d.in_scene = true;
+    D3D_OK
+}
+
+/// `EndScene()`: ends the scene; outside one, `D3DERR_INVALIDCALL`.
+fn end_scene(e: &mut Engine, this: Ptr) -> u32 {
+    let d = device(e, this);
+    if !d.in_scene {
+        return D3DERR_INVALIDCALL;
+    }
+    d.in_scene = false;
+    D3D_OK
+}
+
+/// `D3DCLEAR_TARGET`, `D3DCLEAR_ZBUFFER`, `D3DCLEAR_STENCIL`.
+const D3DCLEAR_TARGET: u32 = 1;
+const D3DCLEAR_ZBUFFER: u32 = 2;
+const D3DCLEAR_STENCIL: u32 = 4;
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::Clear (vtable +0xAC)
+/// `Clear(count, rects, flags, colour, z, stencil)`: nothing is drawn yet (the viewer draws), so
+/// only the call's validity is answered: rectangles without a count or a count without
+/// rectangles, flags other than the three clear bits or none of them, and a depth or stencil
+/// clear without a depth surface answer `D3DERR_INVALIDCALL`.
+#[allow(clippy::too_many_arguments)]
+fn clear(
+    e: &mut Engine,
+    this: Ptr,
+    count: u32,
+    rects: Ptr,
+    flags: u32,
+    _colour: u32,
+    _z: u32,
+    _stencil: u32,
+) -> u32 {
+    if (count == 0) != rects.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let all = D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL;
+    if flags == 0 || flags & !all != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    if flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL) != 0 && device(e, this).depth_stencil == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::Present (vtable +0x44)
+/// `Present(source, dest, window, dirty region)`: shows the back buffer; nothing is shown yet
+/// (the viewer draws), so it answers `D3D_OK` outside a scene and `D3DERR_INVALIDCALL` inside
+/// one.
+fn present(e: &mut Engine, this: Ptr, _source: u32, _dest: u32, _window: u32, _dirty: u32) -> u32 {
+    if device(e, this).in_scene {
+        return D3DERR_INVALIDCALL;
+    }
+    D3D_OK
+}
+
+/// `TestCooperativeLevel()`: the device is never lost here: `D3D_OK`.
+fn test_cooperative_level(_e: &mut Engine, _this: Ptr) -> u32 {
     D3D_OK
 }
 
@@ -2094,5 +2287,45 @@ mod tests {
         // Unbinding releases: the stream's buffer goes.
         assert_eq!(e.vcall(device, 4 * 100, &[0, 0, 0, 0]).u32(), D3D_OK);
         assert!(!e.kernel.graphics.device_objects.resources_hold(vb));
+    }
+
+    #[test]
+    fn transforms_scenes_and_clears_follow_direct3d() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let m = e.mem.alloc(64);
+        assert_eq!(e.vcall(device, 4 * 45, &[256, m]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(m), 1f32.to_bits());
+        assert_eq!(e.mem.u32(m + 4), 0);
+        e.mem.set_u32(m + 4, 2f32.to_bits());
+        assert_eq!(e.vcall(device, 4 * 44, &[2, m]).u32(), D3D_OK);
+        let back = e.mem.alloc(64);
+        assert_eq!(e.vcall(device, 4 * 45, &[2, back]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(back + 4), 2f32.to_bits());
+        assert_eq!(e.vcall(device, 4 * 44, &[4, m]).u32(), D3DERR_INVALIDCALL);
+        let rect = e.mem.alloc(16);
+        assert_eq!(e.vcall(device, 4 * 76, &[rect]).u32(), D3D_OK);
+        assert_eq!((e.mem.u32(rect + 8), e.mem.u32(rect + 12)), (640, 480));
+        assert_eq!(e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 41, &[]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(
+            e.vcall(device, 4 * 17, &[0, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 42, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 42, &[]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 17, &[0, 0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 43, &[0, 0, 1, 0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 43, &[0, 0, 2, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 4 * 43, &[1, 0, 1, 0, 0, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 3, &[]).u32(), D3D_OK);
     }
 }
