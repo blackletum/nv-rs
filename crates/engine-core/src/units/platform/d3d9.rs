@@ -19,6 +19,7 @@
 //! table's). A query the capture did not ask (a word outside the captured domain) is not
 //! provided and stops the run, never a made-up answer.
 
+use super::d3d9device::create_device;
 use crate::{Engine, Ptr};
 use std::collections::HashMap;
 
@@ -153,7 +154,8 @@ impl Adapter {
                 "GetWindowsDirectoryA" => a.windows_directory = bytes(f[3]),
                 "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
                 "EnumDisplayDevicesA" => {
-                    a.display_devices.insert(words(f[1])[0], (hex(2), bytes(f[3])));
+                    a.display_devices
+                        .insert(words(f[1])[0], (hex(2), bytes(f[3])));
                 }
                 "SHGetFolderPathA" => {
                     a.folders.insert(words(f[1])[0], (hex(2), bytes(f[3])));
@@ -179,7 +181,10 @@ impl Adapter {
                         .filter(|e| !e.is_empty())
                         .map(|e| {
                             let (w, r) = e.split_once('=').expect("word=result");
-                            (u32::from_str_radix(w, 16).expect("a hex word"), r.to_string())
+                            (
+                                u32::from_str_radix(w, 16).expect("a hex word"),
+                                r.to_string(),
+                            )
                         })
                         .collect();
                     a.checks.insert(
@@ -221,6 +226,8 @@ pub struct Graphics {
     d3d9_vtable: u32,
     objects: HashMap<u32, Direct3D>,
     procs_registered: bool,
+    /// The devices and their resources (`super::d3d9device`).
+    pub(crate) device_objects: super::d3d9device::Objects,
 }
 
 /// Gives the layer the player's adapter table (`scripts/d3d9-capture`'s output).
@@ -268,7 +275,13 @@ pub fn windows_directory(e: &mut Engine) -> Vec<u8> {
 /// FALSE and writes nothing (measured: the capture's buffer after the failing call was as it
 /// went in). A device name, flags, another `cb` or an index the capture didn't reach are not
 /// provided.
-pub fn enum_display_devices_a(e: &mut Engine, device: Ptr, index: u32, info: Ptr, flags: u32) -> u32 {
+pub fn enum_display_devices_a(
+    e: &mut Engine,
+    device: Ptr,
+    index: u32,
+    info: Ptr,
+    flags: u32,
+) -> u32 {
     assert!(
         device.addr() == 0 && flags == 0 && e.mem.u32(info.addr()) == 0x1a8,
         "EnumDisplayDevicesA(device {:#x}, {index}, cb {:#x}, flags {flags:#x}) is not provided",
@@ -276,7 +289,9 @@ pub fn enum_display_devices_a(e: &mut Engine, device: Ptr, index: u32, info: Ptr
         e.mem.u32(info.addr())
     );
     let Some((answer, bytes)) = adapter(e).display_devices.get(&index).cloned() else {
-        panic!("EnumDisplayDevicesA({index}) was not captured in the adapter table: {CAPTURE_HINT}");
+        panic!(
+            "EnumDisplayDevicesA({index}) was not captured in the adapter table: {CAPTURE_HINT}"
+        );
     };
     if answer != 0 {
         e.mem.write(info.addr(), &bytes);
@@ -310,7 +325,7 @@ pub fn system_metric(e: &mut Engine, index: u32) -> Option<u32> {
 }
 
 fn register_code(e: &mut Engine) {
-    let d3d9: [(u32, crate::AbiFn); 16] = [
+    let d3d9: [(u32, crate::AbiFn); 17] = [
         (0, crate::entry!(0, no_interface(Ptr, Ptr, Ptr) -> u32).1),
         (1, crate::entry!(0, add_ref(Ptr) -> u32).1),
         (2, crate::entry!(0, release(Ptr) -> u32).1),
@@ -351,6 +366,10 @@ fn register_code(e: &mut Engine) {
         (14, crate::entry!(0, get_device_caps(Ptr, u32, u32, Ptr) -> u32).1),
         (15, crate::entry!(0, get_adapter_monitor(Ptr, u32) -> u32).1),
         (3, crate::entry!(0, register_software_device(Ptr, u32) -> u32).1),
+        (
+            16,
+            crate::entry!(0, create_device(Ptr, u32, u32, u32, u32, Ptr, Ptr) -> u32).1,
+        ),
     ];
     for (slot, f) in d3d9 {
         e.register(D3D9_CODE + 4 * slot, f);
@@ -362,10 +381,7 @@ fn register_code(e: &mut Engine) {
 pub fn proc_address(e: &mut Engine, name: &[u8]) -> Option<u32> {
     let index = PROCS.iter().position(|p| p.eq_ignore_ascii_case(name))?;
     if !e.kernel.graphics.procs_registered {
-        e.register(
-            PROC_CODE,
-            crate::entry!(0, direct3d_create9(u32) -> u32).1,
-        );
+        e.register(PROC_CODE, crate::entry!(0, direct3d_create9(u32) -> u32).1);
         e.kernel.graphics.procs_registered = true;
     }
     Some(PROC_CODE + 4 * index as u32)
@@ -517,7 +533,11 @@ fn check_device_type(
     back: u32,
     windowed: u32,
 ) -> u32 {
-    checked(e, "CheckDeviceType", &[index, device, display, back, u32::from(windowed != 0)])
+    checked(
+        e,
+        "CheckDeviceType",
+        &[index, device, display, back, u32::from(windowed != 0)],
+    )
 }
 
 /// `CheckDeviceFormat(adapter, device type, adapter format, usage, resource type, format)`.
@@ -532,7 +552,11 @@ fn check_device_format(
     resource: u32,
     format: u32,
 ) -> u32 {
-    checked(e, "CheckDeviceFormat", &[index, device, display, usage, resource, format])
+    checked(
+        e,
+        "CheckDeviceFormat",
+        &[index, device, display, usage, resource, format],
+    )
 }
 
 /// `CheckDeviceMultiSampleType(adapter, device type, format, windowed, type, quality out)`:
@@ -574,7 +598,11 @@ fn check_depth_stencil_match(
     target: u32,
     depth: u32,
 ) -> u32 {
-    checked(e, "CheckDepthStencilMatch", &[index, device, display, target, depth])
+    checked(
+        e,
+        "CheckDepthStencilMatch",
+        &[index, device, display, target, depth],
+    )
 }
 
 /// `CheckDeviceFormatConversion(adapter, device type, source format, target format)`.
@@ -586,7 +614,11 @@ fn check_device_format_conversion(
     source: u32,
     target: u32,
 ) -> u32 {
-    checked(e, "CheckDeviceFormatConversion", &[index, device, source, target])
+    checked(
+        e,
+        "CheckDeviceFormatConversion",
+        &[index, device, source, target],
+    )
 }
 
 /// `GetDeviceCaps(adapter, device type, out)`: the captured `D3DCAPS9` (HAL, REF; the software
@@ -613,7 +645,6 @@ fn get_adapter_monitor(_e: &mut Engine, _this: Ptr, index: u32) -> u32 {
         0
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -666,13 +697,22 @@ mod tests {
         let a = Adapter::parse(&test_table());
         assert_eq!(a.identifiers[&0].1.len(), IDENTIFIER_SIZE);
         assert_eq!(a.caps[&1].1.len(), CAPS_SIZE);
-        assert_eq!(a.check("CheckDeviceFormat", &[0, 1, 0x16, 0, 3, 0x16]), Some("0"));
+        assert_eq!(
+            a.check("CheckDeviceFormat", &[0, 1, 0x16, 0, 3, 0x16]),
+            Some("0")
+        );
         assert_eq!(
             a.check("CheckDeviceFormat", &[0, 1, 0x16, 0, 3, 0x15]),
             Some("8876086a")
         );
-        assert_eq!(a.check("CheckDeviceFormat", &[0, 1, 0x16, 0, 3, 0x1234]), None);
-        assert_eq!(a.check("CheckDeviceFormat", &[0, 1, 0x16, 1, 3, 0x16]), None);
+        assert_eq!(
+            a.check("CheckDeviceFormat", &[0, 1, 0x16, 0, 3, 0x1234]),
+            None
+        );
+        assert_eq!(
+            a.check("CheckDeviceFormat", &[0, 1, 0x16, 1, 3, 0x16]),
+            None
+        );
     }
 
     #[test]
@@ -690,8 +730,14 @@ mod tests {
         let caps = e.mem.alloc(CAPS_SIZE as u32);
         assert_eq!(e.vcall(d3d, 4 * 14, &[0, 1, caps]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(caps), 1, "DeviceType: HAL");
-        assert_eq!(e.vcall(d3d, 4 * 14, &[0, 3, caps]).u32(), D3DERR_NOTAVAILABLE);
-        assert_eq!(e.vcall(d3d, 4 * 10, &[0, 1, 0x16, 0, 3, 0x16]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(d3d, 4 * 14, &[0, 3, caps]).u32(),
+            D3DERR_NOTAVAILABLE
+        );
+        assert_eq!(
+            e.vcall(d3d, 4 * 10, &[0, 1, 0x16, 0, 3, 0x16]).u32(),
+            D3D_OK
+        );
         assert_eq!(e.vcall(d3d, 4 * 15, &[0]).u32(), ADAPTER_MONITOR);
         assert_eq!(system_metric(&mut e, 0), Some(640));
         assert_eq!(system_metric(&mut e, 0x50), None);
@@ -708,14 +754,20 @@ mod tests {
         let mode = e.mem.alloc(16);
         assert_eq!(e.vcall(d3d, 4 * 7, &[0, 0x16, 0, mode]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(mode), 640);
-        assert_eq!(e.vcall(d3d, 4 * 7, &[0, 0x16, 1, mode]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(
+            e.vcall(d3d, 4 * 7, &[0, 0x16, 1, mode]).u32(),
+            D3DERR_INVALIDCALL
+        );
     }
 
     #[test]
     fn multisample_answers_store_the_quality_levels() {
         let (mut e, d3d) = d3d();
         let quality = e.mem.alloc(4);
-        assert_eq!(e.vcall(d3d, 4 * 11, &[0, 1, 0x16, 0, 2, quality]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(d3d, 4 * 11, &[0, 1, 0x16, 0, 2, quality]).u32(),
+            D3D_OK
+        );
         assert_eq!(e.mem.u32(quality), 1);
         let hr = e.vcall(d3d, 4 * 11, &[0, 1, 0x16, 0, 4, quality]).u32();
         assert_eq!(hr, D3DERR_NOTAVAILABLE);
@@ -761,17 +813,25 @@ mod tests_display_devices {
         device[1] = 1;
         device[0xa4] = 5;
         let hex: String = device.iter().map(|x| format!("{x:02x}")).collect();
-        let empty: String = [0xa8u8, 1, 0, 0].iter().map(|x| format!("{x:02x}")).collect();
-        let table = format!(
-            "EnumDisplayDevicesA\t0 0\t1\t{hex}\nEnumDisplayDevicesA\t1 0\t0\t{empty}\n"
-        );
+        let empty: String = [0xa8u8, 1, 0, 0]
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect();
+        let table =
+            format!("EnumDisplayDevicesA\t0 0\t1\t{hex}\nEnumDisplayDevicesA\t1 0\t0\t{empty}\n");
         load_adapter_table(&mut e, &table);
         let info = e.mem.alloc(0x1a8);
         e.mem.set_u32(info, 0x1a8);
-        assert_eq!(enum_display_devices_a(&mut e, Ptr::new(0), 0, Ptr::new(info), 0), 1);
+        assert_eq!(
+            enum_display_devices_a(&mut e, Ptr::new(0), 0, Ptr::new(info), 0),
+            1
+        );
         assert_eq!(e.mem.u8(info + 0xa4), 5);
         e.mem.set_u8(info + 0xa4, 9);
-        assert_eq!(enum_display_devices_a(&mut e, Ptr::new(0), 1, Ptr::new(info), 0), 0);
+        assert_eq!(
+            enum_display_devices_a(&mut e, Ptr::new(0), 1, Ptr::new(info), 0),
+            0
+        );
         assert_eq!(e.mem.u8(info + 0xa4), 9);
     }
 }
