@@ -290,6 +290,12 @@ struct Device {
     depth_stencil: u32,
     /// `D3DVIEWPORT9`: X, Y, Width, Height, then MinZ and MaxZ as `float` bits.
     viewport: [u32; 6],
+    /// The states the program set: render states by type, texture stage states and sampler
+    /// states by (stage or sampler, type), the textures by sampler (held, counted).
+    render_states: HashMap<u32, u32>,
+    stage_states: HashMap<(u32, u32), u32>,
+    sampler_states: HashMap<(u32, u32), u32>,
+    textures: HashMap<u32, u32>,
 }
 
 /// A surface of this layer.
@@ -332,7 +338,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 15] = [
+    let device: [(u32, crate::AbiFn); 25] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -374,6 +380,34 @@ fn register_code(e: &mut Engine) {
             crate::entry!(0, get_depth_stencil_surface(Ptr, Ptr) -> u32).1,
         ),
         (47, crate::entry!(0, set_viewport(Ptr, Ptr) -> u32).1),
+        (
+            57,
+            crate::entry!(0, set_render_state(Ptr, u32, u32) -> u32).1,
+        ),
+        (
+            58,
+            crate::entry!(0, get_render_state(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (64, crate::entry!(0, get_texture(Ptr, u32, Ptr) -> u32).1),
+        (65, crate::entry!(0, set_texture(Ptr, u32, u32) -> u32).1),
+        (
+            66,
+            crate::entry!(0, get_texture_stage_state(Ptr, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            67,
+            crate::entry!(0, set_texture_stage_state(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            68,
+            crate::entry!(0, get_sampler_state(Ptr, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            69,
+            crate::entry!(0, set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (92, crate::entry!(0, set_vertex_shader(Ptr, u32) -> u32).1),
+        (107, crate::entry!(0, set_pixel_shader(Ptr, u32) -> u32).1),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
     ];
     for (slot, f) in device {
@@ -611,6 +645,10 @@ pub fn create_device(
         render_targets,
         depth_stencil,
         viewport: [0, 0, width, height, 0f32.to_bits(), 1f32.to_bits()],
+        render_states: HashMap::new(),
+        stage_states: HashMap::new(),
+        sampler_states: HashMap::new(),
+        textures: HashMap::new(),
     };
     e.kernel
         .graphics
@@ -677,6 +715,9 @@ fn device_release(e: &mut Engine, this: Ptr) -> u32 {
             if *held != 0 {
                 surface_release(e, Ptr::new(*held));
             }
+        }
+        for texture in d.textures.values() {
+            texture_release(e, Ptr::new(*texture));
         }
         let implicit: Vec<u32> = e
             .kernel
@@ -976,6 +1017,158 @@ fn surface_get_desc(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     for (i, word) in desc.iter().enumerate() {
         e.mem.set_u32(out.addr() + 4 * i as u32, *word);
     }
+    D3D_OK
+}
+
+/// Whether `sampler` names a sampler: 0 to 15, `D3DDMAPSAMPLER` (256) or the vertex samplers
+/// `D3DVERTEXTEXTURESAMPLER0..3` (257 to 260).
+fn is_sampler(sampler: u32) -> bool {
+    sampler < 16 || (256..=260).contains(&sampler)
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetRenderState (vtable +0xE4)
+/// `SetRenderState(state, value)`: kept; answers `D3D_OK`. A state number above 255
+/// (`D3DRENDERSTATETYPE` ends at 209) is not provided.
+fn set_render_state(e: &mut Engine, this: Ptr, state: u32, value: u32) -> u32 {
+    assert!(
+        state < 256,
+        "IDirect3DDevice9::SetRenderState({state}) is not provided"
+    );
+    device(e, this).render_states.insert(state, value);
+    D3D_OK
+}
+
+/// `GetRenderState(state, out)`: the value set. A state the program never set (its default)
+/// is not provided yet.
+fn get_render_state(e: &mut Engine, this: Ptr, state: u32, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let Some(value) = device(e, this).render_states.get(&state).copied() else {
+        panic!("IDirect3DDevice9::GetRenderState({state}) before a SetRenderState: its default is not provided");
+    };
+    e.mem.set_u32(out.addr(), value);
+    D3D_OK
+}
+
+/// `SetTextureStageState(stage, type, value)`: kept for stages 0 to 7
+/// (`D3DTEXTURESTAGESTATETYPE` 1 to 32); another stage answers `D3DERR_INVALIDCALL`.
+fn set_texture_stage_state(e: &mut Engine, this: Ptr, stage: u32, kind: u32, value: u32) -> u32 {
+    if stage >= 8 {
+        return D3DERR_INVALIDCALL;
+    }
+    assert!(
+        (1..=32).contains(&kind),
+        "IDirect3DDevice9::SetTextureStageState(type {kind}) is not provided"
+    );
+    device(e, this).stage_states.insert((stage, kind), value);
+    D3D_OK
+}
+
+/// `GetTextureStageState(stage, type, out)`: the value set; one never set is not provided yet.
+fn get_texture_stage_state(e: &mut Engine, this: Ptr, stage: u32, kind: u32, out: Ptr) -> u32 {
+    if stage >= 8 || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let Some(value) = device(e, this).stage_states.get(&(stage, kind)).copied() else {
+        panic!("IDirect3DDevice9::GetTextureStageState({stage}, {kind}) before a set: its default is not provided");
+    };
+    e.mem.set_u32(out.addr(), value);
+    D3D_OK
+}
+
+/// `SetSamplerState(sampler, type, value)`: kept for the samplers [`is_sampler`] names
+/// (`D3DSAMPLERSTATETYPE` 1 to 13); another sampler answers `D3DERR_INVALIDCALL`.
+fn set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, value: u32) -> u32 {
+    if !is_sampler(sampler) {
+        return D3DERR_INVALIDCALL;
+    }
+    assert!(
+        (1..=13).contains(&kind),
+        "IDirect3DDevice9::SetSamplerState(type {kind}) is not provided"
+    );
+    device(e, this)
+        .sampler_states
+        .insert((sampler, kind), value);
+    D3D_OK
+}
+
+/// `GetSamplerState(sampler, type, out)`: the value set; one never set is not provided yet.
+fn get_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, out: Ptr) -> u32 {
+    if !is_sampler(sampler) || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let Some(value) = device(e, this)
+        .sampler_states
+        .get(&(sampler, kind))
+        .copied()
+    else {
+        panic!("IDirect3DDevice9::GetSamplerState({sampler}, {kind}) before a set: its default is not provided");
+    };
+    e.mem.set_u32(out.addr(), value);
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetTexture (vtable +0x104)
+/// `SetTexture(sampler, texture)`: the device holds the texture (counted) for the sampler and
+/// releases the one it held; null clears it. Another sampler answers `D3DERR_INVALIDCALL`;
+/// a texture not of this layer's kinds (cube and volume textures are not provided yet) stops.
+fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
+    if !is_sampler(sampler) {
+        return D3DERR_INVALIDCALL;
+    }
+    if texture != 0 {
+        assert!(
+            e.kernel
+                .graphics
+                .device_objects
+                .textures
+                .contains_key(&texture),
+            "IDirect3DDevice9::SetTexture({sampler}, {texture:#x}): not a texture of this layer"
+        );
+        texture_add_ref(e, Ptr::new(texture));
+    }
+    let d = device(e, this);
+    let old = if texture != 0 {
+        d.textures.insert(sampler, texture)
+    } else {
+        d.textures.remove(&sampler)
+    };
+    if let Some(old) = old {
+        texture_release(e, Ptr::new(old));
+    }
+    D3D_OK
+}
+
+/// `GetTexture(sampler, out)`: the texture held for the sampler, counted, or null.
+fn get_texture(e: &mut Engine, this: Ptr, sampler: u32, out: Ptr) -> u32 {
+    if !is_sampler(sampler) || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let texture = device(e, this).textures.get(&sampler).copied().unwrap_or(0);
+    if texture != 0 {
+        texture_add_ref(e, Ptr::new(texture));
+    }
+    e.mem.set_u32(out.addr(), texture);
+    D3D_OK
+}
+
+/// `SetPixelShader(shader)`: null (the fixed-function pipeline) is kept; shader objects are not
+/// provided yet.
+fn set_pixel_shader(_e: &mut Engine, _this: Ptr, shader: u32) -> u32 {
+    assert!(
+        shader == 0,
+        "IDirect3DDevice9::SetPixelShader({shader:#x}): shader objects are not provided"
+    );
+    D3D_OK
+}
+
+/// `SetVertexShader(shader)`: as [`set_pixel_shader`].
+fn set_vertex_shader(_e: &mut Engine, _this: Ptr, shader: u32) -> u32 {
+    assert!(
+        shader == 0,
+        "IDirect3DDevice9::SetVertexShader({shader:#x}): shader objects are not provided"
+    );
     D3D_OK
 }
 
@@ -1668,5 +1861,47 @@ mod tests {
         assert_eq!(e.vcall(compressed, 8, &[]).u32(), 0);
         assert!(e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 8, &[]).u32(), 0);
+    }
+
+    #[test]
+    fn states_are_kept_and_textures_held_by_their_samplers() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let value = e.mem.alloc(4);
+        assert_eq!(e.vcall(device, 4 * 57, &[7, 1]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 58, &[7, value]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(value), 1);
+        assert_eq!(e.vcall(device, 4 * 67, &[1, 1, 4]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 66, &[1, 1, value]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(value), 4);
+        assert_eq!(
+            e.vcall(device, 4 * 67, &[8, 1, 4]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 69, &[257, 5, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 68, &[257, 5, value]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(value), 2);
+        assert_eq!(
+            e.vcall(device, 4 * 69, &[16, 5, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 107, &[0]).u32(), D3D_OK);
+        // TEST DATA: the table accepts R5G6B5 (0x17) textures with usage 0.
+        let table = test_table() + "\nDomain\td1\t17\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        e.vcall(device, 4 * 23, &[4, 4, 1, 0, 0x17, 1, out, 0]);
+        let texture = e.mem.u32(out);
+        assert_eq!(e.vcall(device, 4 * 65, &[0, texture]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(value), texture);
+        // The program's reference, the sampler's and GetTexture's.
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 2);
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 1);
+        assert_eq!(e.vcall(device, 4 * 65, &[0, 0]).u32(), D3D_OK);
+        assert!(e.kernel.graphics.device_objects.textures.is_empty());
+        assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(value), 0);
     }
 }
