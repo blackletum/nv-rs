@@ -13,8 +13,9 @@
 //! hardware or mixed vertex processing, without multisampling (anything else stops the run as
 //! not provided); the device's reference counting, `GetDirect3D`, `GetDeviceCaps`,
 //! `GetDisplayMode`, `GetCreationParameters`, `GetBackBuffer`, the render target and
-//! depth-stencil slots and the viewport; a surface's reference counting, `GetDevice`, `GetType`
-//! and `GetDesc`.
+//! depth-stencil slots, the viewport and `CreateTexture`; a surface's reference counting,
+//! `GetDevice`, `GetType`, `GetContainer`, `GetDesc` and `LockRect`/`UnlockRect`; a texture's
+//! reference counting, priority, LOD, levels, their descriptions, surfaces and locks.
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
 use crate::{Engine, Ptr};
@@ -24,6 +25,8 @@ use std::collections::HashMap;
 pub const DEVICE_CODE: u32 = CODE_BASE + 0x0200;
 /// Where a surface's slots sit.
 pub const SURFACE_CODE: u32 = CODE_BASE + 0x0400;
+/// Where a texture's slots sit.
+pub const TEXTURE_CODE: u32 = CODE_BASE + 0x0500;
 
 /// `D3DERR_NOTFOUND` (d3d9.h).
 pub const D3DERR_NOTFOUND: u32 = 0x8876_0866;
@@ -172,6 +175,33 @@ pub const SURFACE_SLOTS: [&str; 17] = [
     "ReleaseDC",
 ];
 
+/// `IDirect3DTexture9`'s slots (d3d9.h order: `IUnknown`, `IDirect3DResource9`,
+/// `IDirect3DBaseTexture9`, its own).
+pub const TEXTURE_SLOTS: [&str; 22] = [
+    "QueryInterface",
+    "AddRef",
+    "Release",
+    "GetDevice",
+    "SetPrivateData",
+    "GetPrivateData",
+    "FreePrivateData",
+    "SetPriority",
+    "GetPriority",
+    "PreLoad",
+    "GetType",
+    "SetLOD",
+    "GetLOD",
+    "GetLevelCount",
+    "SetAutoGenFilterType",
+    "GetAutoGenFilterType",
+    "GenerateMipSubLevels",
+    "GetLevelDesc",
+    "GetSurfaceLevel",
+    "LockRect",
+    "UnlockRect",
+    "AddDirtyRect",
+];
+
 /// `D3DDEVTYPE_HAL`, the vertex-processing behaviour flags (`D3DCREATE_SOFTWARE_`,
 /// `HARDWARE_`, `MIXED_VERTEXPROCESSING`), `D3DFMT_UNKNOWN`, `D3DRTYPE_SURFACE`, the surface
 /// usages `D3DUSAGE_RENDERTARGET` and `D3DUSAGE_DEPTHSTENCIL`, `D3DPRESENT_BACK_BUFFERS_MAX`.
@@ -202,18 +232,49 @@ const CAPS_SIMULTANEOUS_RTS: usize = 0xf0;
 /// The render target slots a device keeps (`D3D_MAX_SIMULTANEOUS_RENDERTARGETS`).
 const RENDER_TARGETS: usize = 4;
 
-/// `IID_IUnknown` and `IID_IDirect3DDevice9`, `IID_IDirect3DResource9`, `IID_IDirect3DSurface9`
-/// as their 16 bytes (d3d9.h, unknwn.h).
-const IID_IUNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46];
-const IID_DEVICE9: [u8; 16] = [
-    0x96, 0x3b, 0x22, 0xd0, 0x7a, 0xbf, 0xfd, 0x43, 0x92, 0xbd, 0xa4, 0x3b, 0x0d, 0x82, 0xb9, 0xeb,
-];
-const IID_RESOURCE9: [u8; 16] = [
-    0x0b, 0x11, 0xbb, 0x05, 0x5a, 0xa8, 0x2f, 0x45, 0xbe, 0x9b, 0x8d, 0x7f, 0x54, 0xbc, 0x13, 0x67,
-];
-const IID_SURFACE9: [u8; 16] = [
-    0x9a, 0x28, 0xc8, 0x0c, 0xfa, 0x3b, 0x8c, 0x4f, 0x8d, 0x75, 0xa3, 0x69, 0x70, 0xa0, 0x7e, 0x9f,
-];
+/// A GUID's 16 bytes as they lie in memory (`Data1`..`Data3` little-endian, then `Data4`).
+const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
+    let a = d1.to_le_bytes();
+    let b = d2.to_le_bytes();
+    let c = d3.to_le_bytes();
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5],
+        d4[6], d4[7],
+    ]
+}
+
+/// The interface identifiers (unknwn.h, d3d9.h).
+const IID_IUNKNOWN: [u8; 16] = guid(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
+const IID_DEVICE9: [u8; 16] = guid(
+    0xd022_3b96,
+    0xbf7a,
+    0x43fd,
+    [0x92, 0xbd, 0xa4, 0x3b, 0x0d, 0x82, 0xb9, 0xeb],
+);
+const IID_RESOURCE9: [u8; 16] = guid(
+    0x05ee_c05d,
+    0x8f7d,
+    0x4362,
+    [0xb9, 0x99, 0xd1, 0xba, 0xf3, 0x57, 0xc7, 0x04],
+);
+const IID_BASETEXTURE9: [u8; 16] = guid(
+    0x580c_a87e,
+    0x1d3c,
+    0x4d54,
+    [0x99, 0x1d, 0xb7, 0xd3, 0xe3, 0xc2, 0x98, 0xce],
+);
+const IID_TEXTURE9: [u8; 16] = guid(
+    0x85c3_1227,
+    0x3de5,
+    0x4f00,
+    [0x9b, 0x3a, 0xf1, 0x1a, 0xc3, 0x8c, 0x18, 0xb5],
+);
+const IID_SURFACE9: [u8; 16] = guid(
+    0x0cfb_af3a,
+    0x9ff6,
+    0x429a,
+    [0x99, 0xb3, 0xa2, 0x79, 0x6a, 0xf8, 0xb8, 0x9b],
+);
 
 /// A device of this layer.
 #[derive(Debug, Clone)]
@@ -243,6 +304,12 @@ struct Surface {
     /// `D3DSURFACE_DESC`: Format, Type, Usage, Pool, MultiSampleType, MultiSampleQuality,
     /// Width, Height.
     desc: [u32; 8],
+    /// The texture whose level this is (0 for none): its references are the texture's.
+    container: u32,
+    /// The surface's memory for `LockRect` (0 for none) and its pitch.
+    bits: u32,
+    pitch: u32,
+    locked: bool,
 }
 
 /// The devices and their resources (`Kernel::graphics`).
@@ -250,8 +317,10 @@ struct Surface {
 pub struct Objects {
     device_vtable: u32,
     surface_vtable: u32,
+    texture_vtable: u32,
     devices: HashMap<u32, Device>,
     surfaces: HashMap<u32, Surface>,
+    textures: HashMap<u32, Texture>,
 }
 
 fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
@@ -263,7 +332,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 14] = [
+    let device: [(u32, crate::AbiFn); 15] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -283,6 +352,10 @@ fn register_code(e: &mut Engine) {
         (
             18,
             crate::entry!(0, get_back_buffer(Ptr, u32, u32, u32, Ptr) -> u32).1,
+        ),
+        (
+            23,
+            crate::entry!(0, create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             37,
@@ -306,7 +379,7 @@ fn register_code(e: &mut Engine) {
     for (slot, f) in device {
         e.register(DEVICE_CODE + 4 * slot, f);
     }
-    let surface: [(u32, crate::AbiFn); 6] = [
+    let surface: [(u32, crate::AbiFn); 9] = [
         (
             0,
             crate::entry!(0, surface_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -315,17 +388,60 @@ fn register_code(e: &mut Engine) {
         (2, crate::entry!(0, surface_release(Ptr) -> u32).1),
         (3, crate::entry!(0, surface_get_device(Ptr, Ptr) -> u32).1),
         (10, crate::entry!(0, surface_get_type(Ptr) -> u32).1),
+        (
+            11,
+            crate::entry!(0, surface_get_container(Ptr, Ptr, Ptr) -> u32).1,
+        ),
         (12, crate::entry!(0, surface_get_desc(Ptr, Ptr) -> u32).1),
+        (
+            13,
+            crate::entry!(0, surface_lock_rect(Ptr, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (14, crate::entry!(0, surface_unlock_rect(Ptr) -> u32).1),
     ];
     for (slot, f) in surface {
         e.register(SURFACE_CODE + 4 * slot, f);
     }
+    let texture: [(u32, crate::AbiFn); 15] = [
+        (
+            0,
+            crate::entry!(0, texture_query_interface(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (1, crate::entry!(0, texture_add_ref(Ptr) -> u32).1),
+        (2, crate::entry!(0, texture_release(Ptr) -> u32).1),
+        (3, crate::entry!(0, texture_get_device(Ptr, Ptr) -> u32).1),
+        (7, crate::entry!(0, texture_set_priority(Ptr, u32) -> u32).1),
+        (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
+        (9, crate::entry!(0, texture_pre_load(Ptr)).1),
+        (10, crate::entry!(0, texture_get_type(Ptr) -> u32).1),
+        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
+        (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
+        (
+            17,
+            crate::entry!(0, texture_get_level_desc(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            18,
+            crate::entry!(0, texture_get_surface_level(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
+            19,
+            crate::entry!(0, texture_lock_rect(Ptr, u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (20, crate::entry!(0, texture_unlock_rect(Ptr, u32) -> u32).1),
+    ];
+    for (slot, f) in texture {
+        e.register(TEXTURE_CODE + 4 * slot, f);
+    }
     if e.kernel.graphics.device_objects.device_vtable == 0 {
         let device = vtable(e, DEVICE_CODE, DEVICE_SLOTS.len());
         let surface = vtable(e, SURFACE_CODE, SURFACE_SLOTS.len());
+        let texture = vtable(e, TEXTURE_CODE, TEXTURE_SLOTS.len());
         let objects = &mut e.kernel.graphics.device_objects;
         objects.device_vtable = device;
         objects.surface_vtable = surface;
+        objects.texture_vtable = texture;
     }
 }
 
@@ -345,6 +461,10 @@ fn new_surface(e: &mut Engine, device: u32, implicit: bool, desc: [u32; 8]) -> u
             device,
             implicit,
             desc,
+            container: 0,
+            bits: 0,
+            pitch: 0,
+            locked: false,
         },
     );
     object
@@ -796,15 +916,27 @@ fn surface_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32
     E_NOINTERFACE
 }
 
+/// `AddRef()`; a texture's level counts its texture (Direct3D 9 sub-objects share their
+/// container's count).
 fn surface_add_ref(e: &mut Engine, this: Ptr) -> u32 {
     let s = surface(e, this);
+    if s.container != 0 {
+        let container = s.container;
+        return texture_add_ref(e, Ptr::new(container));
+    }
     s.references += 1;
     s.references
 }
 
 /// `Release()`: the count falls; a surface the program made goes at 0, one the device owns
-/// (back buffers, the automatic depth surface) stays until the device goes.
+/// (back buffers, the automatic depth surface) stays until the device goes, and a texture's
+/// level releases its texture.
 fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
+    let s = surface(e, this);
+    if s.container != 0 {
+        let container = s.container;
+        return texture_release(e, Ptr::new(container));
+    }
     let s = surface(e, this);
     s.references = s.references.saturating_sub(1);
     let (left, implicit) = (s.references, s.implicit);
@@ -844,6 +976,419 @@ fn surface_get_desc(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     for (i, word) in desc.iter().enumerate() {
         e.mem.set_u32(out.addr() + 4 * i as u32, *word);
     }
+    D3D_OK
+}
+
+/// `GetContainer(iid, out)`: a texture's level answers its texture (counted) for `IUnknown`,
+/// `IDirect3DResource9`, `IDirect3DBaseTexture9` or `IDirect3DTexture9`, `E_NOINTERFACE` (out
+/// null) for other interfaces; the container of other surfaces is not provided.
+fn surface_get_container(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let container = surface(e, this).container;
+    if container != 0
+        && iid_is(
+            e,
+            iid,
+            &[IID_IUNKNOWN, IID_RESOURCE9, IID_BASETEXTURE9, IID_TEXTURE9],
+        )
+    {
+        texture_add_ref(e, Ptr::new(container));
+        e.mem.set_u32(out.addr(), container);
+        return D3D_OK;
+    }
+    if container != 0 {
+        e.mem.set_u32(out.addr(), 0);
+        return E_NOINTERFACE;
+    }
+    panic!("IDirect3DSurface9::GetContainer of a surface without a texture is not provided")
+}
+
+/// The block width (1, or 4 for the DXT formats) and the bytes of one block (one pixel for the
+/// others) of a format; `None` for formats this layer doesn't size yet.
+fn format_blocks(format: u32) -> Option<(u32, u32)> {
+    const DXT1: u32 = u32::from_le_bytes(*b"DXT1");
+    const DXT2: u32 = u32::from_le_bytes(*b"DXT2");
+    const DXT3: u32 = u32::from_le_bytes(*b"DXT3");
+    const DXT4: u32 = u32::from_le_bytes(*b"DXT4");
+    const DXT5: u32 = u32::from_le_bytes(*b"DXT5");
+    Some(match format {
+        DXT1 => (4, 8),
+        DXT2 | DXT3 | DXT4 | DXT5 => (4, 16),
+        // R8G8B8.
+        20 => (1, 3),
+        // A8R8G8B8, X8R8G8B8, A2B10G10R10, A8B8G8R8, X8B8G8R8, G16R16, A2R10G10B10,
+        // X8L8V8U8, Q8W8V8U8, V16U16, A2W10V10U10, G16R16F, R32F, D32, D24S8, D24X8, D24X4S4.
+        21 | 22 | 31 | 32 | 33 | 34 | 35 | 62 | 63 | 64 | 67 | 112 | 114 | 71 | 75 | 77 | 79 => {
+            (1, 4)
+        }
+        // R5G6B5, X1R5G5B5, A1R5G5B5, A4R4G4B4, A8R3G3B2, X4R4G4B4, A8P8, A8L8, V8U8, L6V5U5,
+        // L16, R16F, D16, D15S1.
+        23 | 24 | 25 | 26 | 29 | 30 | 40 | 51 | 60 | 61 | 81 | 111 | 80 | 73 => (1, 2),
+        // R3G3B2, A8, P8, L8, A4L4.
+        27 | 28 | 41 | 50 | 52 => (1, 1),
+        // A16B16G16R16, A16B16G16R16F, G32R32F.
+        36 | 113 | 115 => (1, 8),
+        // A32B32G32R32F.
+        116 => (1, 16),
+        _ => return None,
+    })
+}
+
+/// A level's pitch (bytes per row of blocks) and size, for a format [`format_blocks`] sizes.
+fn level_layout(format: u32, width: u32, height: u32) -> (u32, u32) {
+    let Some((block, bytes)) = format_blocks(format) else {
+        panic!("IDirect3DDevice9: the memory layout of format {format:#x} is not provided");
+    };
+    let pitch = width.div_ceil(block) * bytes;
+    (pitch, pitch * height.div_ceil(block))
+}
+
+/// A texture of this layer.
+#[derive(Debug, Clone)]
+struct Texture {
+    references: u32,
+    device: u32,
+    pool: u32,
+    levels: Vec<u32>,
+    lod: u32,
+    priority: u32,
+}
+
+fn texture(e: &mut Engine, this: Ptr) -> &mut Texture {
+    e.kernel
+        .graphics
+        .device_objects
+        .textures
+        .get_mut(&this.addr())
+        .expect("an IDirect3DTexture9 of this layer")
+}
+
+/// `D3DPOOL_DEFAULT`, `D3DPOOL_MANAGED`; the usages `D3DUSAGE_DYNAMIC`, `D3DUSAGE_AUTOGENMIPMAP`;
+/// `D3DRTYPE_TEXTURE`; the texture caps `D3DPTEXTURECAPS_POW2` (`D3DCAPS9::TextureCaps` +0x3C).
+const D3DPOOL_DEFAULT: u32 = 0;
+const D3DPOOL_MANAGED: u32 = 1;
+const D3DUSAGE_DYNAMIC: u32 = 0x200;
+const D3DUSAGE_AUTOGENMIPMAP: u32 = 0x400;
+const D3DRTYPE_TEXTURE: u32 = 3;
+const CAPS_TEXTURE_CAPS: u32 = 0x3c;
+const D3DPTEXTURECAPS_POW2: u32 = 0x2;
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateTexture (vtable +0x5C)
+/// `CreateTexture(width, height, levels, usage, format, pool, out, shared handle)`. A zero
+/// size, a null out, a shared handle (Direct3D 9Ex only), more levels than the full chain, a
+/// render-target or depth-stencil usage outside `D3DPOOL_DEFAULT`, `D3DUSAGE_DYNAMIC` in
+/// `D3DPOOL_MANAGED`, or a format the table's `CheckDeviceFormat` (the device's adapter and
+/// type, the display format, the usage, `D3DRTYPE_TEXTURE`) refuses answer
+/// `D3DERR_INVALIDCALL`. Levels 0 is the full chain down to 1 by 1 (sides halved, rounding
+/// down, at least 1). Each level is a surface of the texture (`GetSurfaceLevel`, counted with
+/// the texture); levels the program can lock (any pool but `D3DPOOL_DEFAULT`, or dynamic) get
+/// memory in the game's address space, rows packed tightly (the pitch is the row's bytes: a
+/// value Direct3D leaves to the runtime; the game copies by it). Not provided (the run stops):
+/// `D3DUSAGE_AUTOGENMIPMAP`, a side that is not a power of two on a device whose caps require
+/// them, and formats [`format_blocks`] doesn't size.
+#[allow(clippy::too_many_arguments)]
+fn create_texture(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if width == 0 || height == 0 || out.is_null() || shared != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & D3DUSAGE_AUTOGENMIPMAP != 0 {
+        panic!("IDirect3DDevice9::CreateTexture: D3DUSAGE_AUTOGENMIPMAP is not provided");
+    }
+    let full = 32 - width.max(height).leading_zeros();
+    if levels > full {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL) != 0 && pool != D3DPOOL_DEFAULT {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & D3DUSAGE_DYNAMIC != 0 && pool == D3DPOOL_MANAGED {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateTexture");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[
+                adapter,
+                device_type,
+                display_format,
+                usage,
+                D3DRTYPE_TEXTURE,
+                format,
+            ],
+        )
+        .u32();
+    if check != D3D_OK {
+        return D3DERR_INVALIDCALL;
+    }
+    if !(width.is_power_of_two() && height.is_power_of_two()) {
+        let caps = e.with_stack(0x130, |e, caps| {
+            assert_eq!(get_device_caps(e, this, caps), D3D_OK, "the device's caps");
+            e.mem.u32(caps.addr() + CAPS_TEXTURE_CAPS)
+        });
+        if caps & D3DPTEXTURECAPS_POW2 != 0 {
+            panic!(
+                "IDirect3DDevice9::CreateTexture: a {width}x{height} texture on a device that \
+                 wants powers of two is not provided"
+            );
+        }
+    }
+    let count = if levels == 0 { full } else { levels };
+    let lockable = pool != D3DPOOL_DEFAULT || usage & D3DUSAGE_DYNAMIC != 0;
+    let object = e.mem.alloc(8);
+    let table = e.kernel.graphics.device_objects.texture_vtable;
+    e.mem.set_u32(object, table);
+    let device_addr = this.addr();
+    let surfaces: Vec<u32> = (0..count)
+        .map(|level| {
+            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+            let desc = [format, D3DRTYPE_SURFACE, usage, pool, 0, 0, w, h];
+            let surface = new_surface(e, device_addr, false, desc);
+            let (pitch, size) = if lockable {
+                level_layout(format, w, h)
+            } else {
+                (0, 0)
+            };
+            let bits = if lockable { e.mem.alloc(size) } else { 0 };
+            let s = e
+                .kernel
+                .graphics
+                .device_objects
+                .surfaces
+                .get_mut(&surface)
+                .expect("the level");
+            s.container = object;
+            s.bits = bits;
+            s.pitch = pitch;
+            surface
+        })
+        .collect();
+    e.kernel.graphics.device_objects.textures.insert(
+        object,
+        Texture {
+            references: 1,
+            device: device_addr,
+            pool,
+            levels: surfaces,
+            lod: 0,
+            priority: 0,
+        },
+    );
+    device_add_ref(e, this);
+    e.mem.set_u32(out.addr(), object);
+    D3D_OK
+}
+
+/// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
+/// `IDirect3DTexture9` answer the texture (counted); others `E_NOINTERFACE` with a null out.
+fn texture_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    if iid_is(
+        e,
+        iid,
+        &[IID_IUNKNOWN, IID_RESOURCE9, IID_BASETEXTURE9, IID_TEXTURE9],
+    ) {
+        texture_add_ref(e, this);
+        e.mem.set_u32(out.addr(), this.addr());
+        return D3D_OK;
+    }
+    e.mem.set_u32(out.addr(), 0);
+    E_NOINTERFACE
+}
+
+fn texture_add_ref(e: &mut Engine, this: Ptr) -> u32 {
+    let t = texture(e, this);
+    t.references += 1;
+    t.references
+}
+
+/// `Release()`: the last reference frees the texture, its levels and their memory, and
+/// releases the device's reference the texture held.
+fn texture_release(e: &mut Engine, this: Ptr) -> u32 {
+    let t = texture(e, this);
+    t.references -= 1;
+    let left = t.references;
+    if left == 0 {
+        let t = e
+            .kernel
+            .graphics
+            .device_objects
+            .textures
+            .remove(&this.addr())
+            .expect("the texture");
+        for level in t.levels {
+            let s = e
+                .kernel
+                .graphics
+                .device_objects
+                .surfaces
+                .remove(&level)
+                .expect("the level");
+            e.mem.free(s.bits);
+            e.mem.free(level);
+        }
+        e.mem.free(this.addr());
+        device_release(e, Ptr::new(t.device));
+    }
+    left
+}
+
+/// `GetDevice(out)`: the texture's device, counted.
+fn texture_get_device(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let owner = texture(e, this).device;
+    device_add_ref(e, Ptr::new(owner));
+    e.mem.set_u32(out.addr(), owner);
+    D3D_OK
+}
+
+/// `SetPriority(priority)`: kept for a managed texture (others keep 0); answers the old one.
+fn texture_set_priority(e: &mut Engine, this: Ptr, priority: u32) -> u32 {
+    let t = texture(e, this);
+    if t.pool != D3DPOOL_MANAGED {
+        return 0;
+    }
+    std::mem::replace(&mut t.priority, priority)
+}
+
+/// `GetPriority()`.
+fn texture_get_priority(e: &mut Engine, this: Ptr) -> u32 {
+    texture(e, this).priority
+}
+
+/// `PreLoad()`: a hint about managed resources; nothing to do here.
+fn texture_pre_load(_e: &mut Engine, _this: Ptr) {}
+
+/// `GetType()`: `D3DRTYPE_TEXTURE`.
+fn texture_get_type(_e: &mut Engine, _this: Ptr) -> u32 {
+    D3DRTYPE_TEXTURE
+}
+
+/// `SetLOD(level)`: for a managed texture the most detailed level kept (at most the last);
+/// answers the old one. Other pools keep 0 and answer 0.
+fn texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
+    let t = texture(e, this);
+    if t.pool != D3DPOOL_MANAGED {
+        return 0;
+    }
+    let last = t.levels.len() as u32 - 1;
+    std::mem::replace(&mut t.lod, lod.min(last))
+}
+
+/// `GetLOD()`.
+fn texture_get_lod(e: &mut Engine, this: Ptr) -> u32 {
+    texture(e, this).lod
+}
+
+/// `GetLevelCount()`.
+fn texture_get_level_count(e: &mut Engine, this: Ptr) -> u32 {
+    texture(e, this).levels.len() as u32
+}
+
+fn texture_level(e: &mut Engine, this: Ptr, level: u32) -> Option<u32> {
+    texture(e, this).levels.get(level as usize).copied()
+}
+
+/// `GetLevelDesc(level, out)`: that level's `D3DSURFACE_DESC`; a level past the count or a
+/// null out answers `D3DERR_INVALIDCALL`.
+fn texture_get_level_desc(e: &mut Engine, this: Ptr, level: u32, out: Ptr) -> u32 {
+    match texture_level(e, this, level) {
+        Some(surface) if !out.is_null() => surface_get_desc(e, Ptr::new(surface), out),
+        _ => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `GetSurfaceLevel(level, out)`: that level's surface, counted (with the texture).
+fn texture_get_surface_level(e: &mut Engine, this: Ptr, level: u32, out: Ptr) -> u32 {
+    match texture_level(e, this, level) {
+        Some(surface) if !out.is_null() => {
+            texture_add_ref(e, this);
+            e.mem.set_u32(out.addr(), surface);
+            D3D_OK
+        }
+        _ => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `LockRect(level, locked out, rectangle, flags)`: [`surface_lock_rect`] on that level.
+fn texture_lock_rect(
+    e: &mut Engine,
+    this: Ptr,
+    level: u32,
+    locked: Ptr,
+    rect: Ptr,
+    flags: u32,
+) -> u32 {
+    match texture_level(e, this, level) {
+        Some(surface) => surface_lock_rect(e, Ptr::new(surface), locked, rect, flags),
+        None => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `UnlockRect(level)`: [`surface_unlock_rect`] on that level.
+fn texture_unlock_rect(e: &mut Engine, this: Ptr, level: u32) -> u32 {
+    match texture_level(e, this, level) {
+        Some(surface) => surface_unlock_rect(e, Ptr::new(surface)),
+        None => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `LockRect(locked out, rectangle, flags)`: a surface with memory, not locked, answers its
+/// `D3DLOCKED_RECT` (pitch, then the address of the rectangle's first block: the whole surface
+/// for a null rectangle); one already locked, one without memory (`D3DPOOL_DEFAULT` and not
+/// dynamic, the back buffers) or a null out answers `D3DERR_INVALIDCALL`. The flags
+/// (`D3DLOCK_READONLY`, `D3DLOCK_DISCARD`, ...) change nothing here.
+fn surface_lock_rect(e: &mut Engine, this: Ptr, locked: Ptr, rect: Ptr, _flags: u32) -> u32 {
+    let s = surface(e, this);
+    if locked.is_null() || s.bits == 0 || s.locked {
+        return D3DERR_INVALIDCALL;
+    }
+    let (bits, pitch, format) = (s.bits, s.pitch, s.desc[0]);
+    s.locked = true;
+    let at = if rect.is_null() {
+        bits
+    } else {
+        let (block, bytes) = format_blocks(format).expect("a sized format");
+        let left = e.mem.u32(rect.addr());
+        let top = e.mem.u32(rect.addr() + 4);
+        bits + (top / block) * pitch + (left / block) * bytes
+    };
+    e.mem.set_u32(locked.addr(), pitch);
+    e.mem.set_u32(locked.addr() + 4, at);
+    D3D_OK
+}
+
+/// `UnlockRect()`: a locked surface is unlocked; one not locked answers `D3DERR_INVALIDCALL`.
+fn surface_unlock_rect(e: &mut Engine, this: Ptr) -> u32 {
+    let s = surface(e, this);
+    if !s.locked {
+        return D3DERR_INVALIDCALL;
+    }
+    s.locked = false;
     D3D_OK
 }
 
@@ -1032,5 +1577,96 @@ mod tests {
         assert_eq!(e.vcall(depth, 4 * 3, &[got]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(got), device);
         assert_eq!(e.vcall(device, 4 * 2, &[]).u32(), 1);
+    }
+
+    #[test]
+    fn textures_have_lockable_levels_that_count_with_the_texture() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        // TEST DATA: the table accepts R5G6B5 (0x17) and DXT1 textures with usage 0.
+        let dxt1 = u32::from_le_bytes(*b"DXT1");
+        let table = test_table()
+            + "\nDomain\td1\t16,17,31545844\nCheckDeviceFormat\t0 1 16 0 3\t0\t16=8876086a\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        let hr = e
+            .vcall(device, 4 * 23, &[4, 2, 0, 0, 0x17, 1, out, 0])
+            .u32();
+        assert_eq!(hr, D3D_OK);
+        let texture = e.mem.u32(out);
+        assert_eq!(e.vcall(texture, 4 * 13, &[]).u32(), 3, "4x2, 2x1, 1x1");
+        assert_eq!(e.vcall(texture, 4 * 10, &[]).u32(), D3DRTYPE_TEXTURE);
+        let desc = e.mem.alloc(0x20);
+        assert_eq!(e.vcall(texture, 4 * 17, &[1, desc]).u32(), D3D_OK);
+        assert_eq!((e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c)), (2, 1));
+        assert_eq!(e.mem.u32(desc + 0xc), 1, "managed");
+        assert_eq!(
+            e.vcall(texture, 4 * 17, &[3, desc]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        let slot = e.mem.alloc(4);
+        assert_eq!(e.vcall(texture, 4 * 18, &[0, slot]).u32(), D3D_OK);
+        let level = e.mem.u32(slot);
+        // The level's reference is the texture's.
+        assert_eq!(e.vcall(texture, 4, &[]).u32(), 3);
+        assert_eq!(e.vcall(level, 8, &[]).u32(), 2);
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(level, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(locked), 8, "4 pixels of 2 bytes");
+        let bits = e.mem.u32(locked + 4);
+        e.mem.set_u32(bits + 12, 0x1234_5678);
+        assert_eq!(
+            e.vcall(level, 4 * 13, &[locked, 0, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(level, 4 * 14, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(level, 4 * 14, &[]).u32(), D3DERR_INVALIDCALL);
+        let rect = e.mem.alloc(16);
+        e.mem.set_u32(rect, 2);
+        e.mem.set_u32(rect + 4, 1);
+        assert_eq!(
+            e.vcall(texture, 4 * 19, &[0, locked, rect, 0]).u32(),
+            D3D_OK
+        );
+        assert_eq!(e.mem.u32(locked + 4), bits + 12);
+        assert_eq!(e.mem.u32(bits + 12), 0x1234_5678);
+        assert_eq!(e.vcall(texture, 4 * 20, &[0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(level, 4 * 11, &[0, slot]).u32(), E_NOINTERFACE);
+        // DXT1: blocks of 4 by 4 pixels, 8 bytes.
+        let hr = e
+            .vcall(device, 4 * 23, &[8, 8, 1, 0, dxt1, 1, out, 0])
+            .u32();
+        assert_eq!(hr, D3D_OK);
+        let compressed = e.mem.u32(out);
+        assert_eq!(
+            e.vcall(compressed, 4 * 19, &[0, locked, 0, 0]).u32(),
+            D3D_OK
+        );
+        assert_eq!(e.mem.u32(locked), 16);
+        // Refusals: an unsupported format, too many levels, dynamic managed, a shared handle.
+        let refused = |e: &mut Engine, words: [u32; 8]| e.vcall(device, 4 * 23, &words).u32();
+        assert_eq!(
+            refused(&mut e, [4, 4, 0, 0, 0x16, 1, out, 0]),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            refused(&mut e, [4, 4, 4, 0, 0x17, 1, out, 0]),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            refused(&mut e, [4, 4, 1, 0x200, 0x17, 1, out, 0]),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            refused(&mut e, [4, 4, 1, 0, 0x17, 1, out, 4]),
+            D3DERR_INVALIDCALL
+        );
+        // The textures hold the device; releasing them lets it go.
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 1);
+        assert_eq!(e.vcall(texture, 8, &[]).u32(), 0);
+        assert_eq!(e.vcall(compressed, 8, &[]).u32(), 0);
+        assert!(e.kernel.graphics.device_objects.textures.is_empty());
+        assert_eq!(e.vcall(device, 8, &[]).u32(), 0);
     }
 }
