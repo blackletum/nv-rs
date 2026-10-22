@@ -233,7 +233,7 @@ const CAPS_SIMULTANEOUS_RTS: usize = 0xf0;
 const RENDER_TARGETS: usize = 4;
 
 /// A GUID's 16 bytes as they lie in memory (`Data1`..`Data3` little-endian, then `Data4`).
-const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
+pub(super) const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let a = d1.to_le_bytes();
     let b = d2.to_le_bytes();
     let c = d3.to_le_bytes();
@@ -244,7 +244,7 @@ const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
 }
 
 /// The interface identifiers (unknwn.h, d3d9.h).
-const IID_IUNKNOWN: [u8; 16] = guid(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
+pub(super) const IID_IUNKNOWN: [u8; 16] = guid(0, 0, 0, [0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
 const IID_DEVICE9: [u8; 16] = guid(
     0xd022_3b96,
     0xbf7a,
@@ -327,6 +327,8 @@ pub struct Objects {
     devices: HashMap<u32, Device>,
     surfaces: HashMap<u32, Surface>,
     textures: HashMap<u32, Texture>,
+    /// The buffers, shaders and declarations (`super::d3d9resource`).
+    pub(super) resources: super::d3d9resource::Resources,
 }
 
 fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
@@ -338,7 +340,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 25] = [
+    let device: [(u32, crate::AbiFn); 23] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -406,11 +408,115 @@ fn register_code(e: &mut Engine) {
             69,
             crate::entry!(0, set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
         ),
-        (92, crate::entry!(0, set_vertex_shader(Ptr, u32) -> u32).1),
-        (107, crate::entry!(0, set_pixel_shader(Ptr, u32) -> u32).1),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
     ];
     for (slot, f) in device {
+        e.register(DEVICE_CODE + 4 * slot, f);
+    }
+    use super::d3d9resource as r;
+    let resource: [(u32, crate::AbiFn); 28] = [
+        (
+            26,
+            crate::entry!(0, r::create_vertex_buffer(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            27,
+            crate::entry!(0, r::create_index_buffer(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            86,
+            crate::entry!(0, r::create_vertex_declaration(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            87,
+            crate::entry!(0, r::set_vertex_declaration(Ptr, u32) -> u32).1,
+        ),
+        (89, crate::entry!(0, r::set_fvf(Ptr, u32) -> u32).1),
+        (90, crate::entry!(0, r::get_fvf(Ptr, Ptr) -> u32).1),
+        (
+            91,
+            crate::entry!(0, r::create_vertex_shader(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            92,
+            crate::entry!(0, r::set_vertex_shader(Ptr, u32) -> u32).1,
+        ),
+        (
+            93,
+            crate::entry!(0, r::get_vertex_shader(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            94,
+            crate::entry!(0, r::set_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            95,
+            crate::entry!(0, r::get_vertex_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            96,
+            crate::entry!(0, r::set_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            97,
+            crate::entry!(0, r::get_vertex_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            98,
+            crate::entry!(0, r::set_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            99,
+            crate::entry!(0, r::get_vertex_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            100,
+            crate::entry!(0, r::set_stream_source(Ptr, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            101,
+            crate::entry!(0, r::get_stream_source(Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (104, crate::entry!(0, r::set_indices(Ptr, u32) -> u32).1),
+        (105, crate::entry!(0, r::get_indices(Ptr, Ptr) -> u32).1),
+        (
+            106,
+            crate::entry!(0, r::create_pixel_shader(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            107,
+            crate::entry!(0, r::set_pixel_shader(Ptr, u32) -> u32).1,
+        ),
+        (
+            108,
+            crate::entry!(0, r::get_pixel_shader(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            109,
+            crate::entry!(0, r::set_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            110,
+            crate::entry!(0, r::get_pixel_constant_f(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            111,
+            crate::entry!(0, r::set_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            112,
+            crate::entry!(0, r::get_pixel_constant_i(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            113,
+            crate::entry!(0, r::set_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            114,
+            crate::entry!(0, r::get_pixel_constant_b(Ptr, u32, Ptr, u32) -> u32).1,
+        ),
+    ];
+    for (slot, f) in resource {
         e.register(DEVICE_CODE + 4 * slot, f);
     }
     let surface: [(u32, crate::AbiFn); 9] = [
@@ -669,7 +775,7 @@ fn device(e: &mut Engine, this: Ptr) -> &mut Device {
         .expect("an IDirect3DDevice9 of this layer")
 }
 
-fn iid_is(e: &Engine, iid: Ptr, ids: &[[u8; 16]]) -> bool {
+pub(super) fn iid_is(e: &Engine, iid: Ptr, ids: &[[u8; 16]]) -> bool {
     !iid.is_null()
         && ids
             .iter()
@@ -691,7 +797,7 @@ fn device_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 
     E_NOINTERFACE
 }
 
-fn device_add_ref(e: &mut Engine, this: Ptr) -> u32 {
+pub(super) fn device_add_ref(e: &mut Engine, this: Ptr) -> u32 {
     let d = device(e, this);
     d.references += 1;
     d.references
@@ -699,7 +805,7 @@ fn device_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 
 /// `Release()`: the last reference destroys the device: its implicit surfaces go, the surfaces
 /// it holds in its render target and depth slots are released, and its `IDirect3D9` reference.
-fn device_release(e: &mut Engine, this: Ptr) -> u32 {
+pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
     let d = device(e, this);
     d.references -= 1;
     let left = d.references;
@@ -719,6 +825,7 @@ fn device_release(e: &mut Engine, this: Ptr) -> u32 {
         for texture in d.textures.values() {
             texture_release(e, Ptr::new(*texture));
         }
+        super::d3d9resource::release_bindings(e, this.addr());
         let implicit: Vec<u32> = e
             .kernel
             .graphics
@@ -1150,25 +1257,6 @@ fn get_texture(e: &mut Engine, this: Ptr, sampler: u32, out: Ptr) -> u32 {
         texture_add_ref(e, Ptr::new(texture));
     }
     e.mem.set_u32(out.addr(), texture);
-    D3D_OK
-}
-
-/// `SetPixelShader(shader)`: null (the fixed-function pipeline) is kept; shader objects are not
-/// provided yet.
-fn set_pixel_shader(_e: &mut Engine, _this: Ptr, shader: u32) -> u32 {
-    assert!(
-        shader == 0,
-        "IDirect3DDevice9::SetPixelShader({shader:#x}): shader objects are not provided"
-    );
-    D3D_OK
-}
-
-/// `SetVertexShader(shader)`: as [`set_pixel_shader`].
-fn set_vertex_shader(_e: &mut Engine, _this: Ptr, shader: u32) -> u32 {
-    assert!(
-        shader == 0,
-        "IDirect3DDevice9::SetVertexShader({shader:#x}): shader objects are not provided"
-    );
     D3D_OK
 }
 
@@ -1903,5 +1991,108 @@ mod tests {
         assert!(e.kernel.graphics.device_objects.textures.is_empty());
         assert_eq!(e.vcall(device, 4 * 64, &[0, value]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(value), 0);
+    }
+
+    #[test]
+    fn buffers_shaders_and_declarations_are_made_bound_and_released() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        // A vertex buffer of 64 bytes, locked twice, its description.
+        assert_eq!(
+            e.vcall(device, 4 * 26, &[64, 0, 0x142, 1, out, 0]).u32(),
+            D3D_OK
+        );
+        let vb = e.mem.u32(out);
+        let data = e.mem.alloc(4);
+        assert_eq!(e.vcall(vb, 4 * 11, &[16, 0, data, 0]).u32(), D3D_OK);
+        let bits = e.mem.u32(data) - 16;
+        assert_eq!(e.vcall(vb, 4 * 11, &[0, 0, data, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(data), bits);
+        assert_eq!(
+            e.vcall(vb, 4 * 11, &[60, 8, data, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(vb, 4 * 12, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(vb, 4 * 12, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(vb, 4 * 12, &[]).u32(), D3DERR_INVALIDCALL);
+        let desc = e.mem.alloc(24);
+        assert_eq!(e.vcall(vb, 4 * 13, &[desc]).u32(), D3D_OK);
+        let words: Vec<u32> = (0..6).map(|i| e.mem.u32(desc + 4 * i)).collect();
+        assert_eq!(words, [100, 6, 0, 1, 64, 0x142]);
+        assert_eq!(
+            e.vcall(device, 4 * 26, &[64, 0x200, 0, 1, out, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        // An index buffer; a wrong format is refused.
+        assert_eq!(
+            e.vcall(device, 4 * 27, &[12, 0, 101, 1, out, 0]).u32(),
+            D3D_OK
+        );
+        let ib = e.mem.u32(out);
+        assert_eq!(
+            e.vcall(device, 4 * 27, &[12, 0, 0x16, 1, out, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        // A shader: its tokens up to the end token, given back by GetFunction.
+        let function = e.mem.alloc(16);
+        for (i, token) in [0xfffe_0300u32, 0x1234, 0x0000_ffff].iter().enumerate() {
+            e.mem.set_u32(function + 4 * i as u32, *token);
+        }
+        assert_eq!(e.vcall(device, 4 * 91, &[function, out]).u32(), D3D_OK);
+        let vs = e.mem.u32(out);
+        let size = e.mem.alloc(4);
+        assert_eq!(e.vcall(vs, 4 * 4, &[0, size]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(size), 12);
+        // A declaration of one element and the end.
+        let elements = e.mem.alloc(16);
+        e.mem.set_u16(elements + 8, 0xff);
+        e.mem.set_u8(elements + 12, 17);
+        assert_eq!(e.vcall(device, 4 * 86, &[elements, out]).u32(), D3D_OK);
+        let declaration = e.mem.u32(out);
+        assert_eq!(e.vcall(declaration, 4 * 4, &[0, size]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(size), 2);
+        // Binding: kinds are checked, objects are held.
+        assert_eq!(e.vcall(device, 4 * 100, &[0, vb, 0, 32]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 100, &[0, ib, 0, 32]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 4 * 100, &[16, vb, 0, 32]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 104, &[ib]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 104, &[vb]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 92, &[vs]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 107, &[vs]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 87, &[declaration]).u32(), D3D_OK);
+        let got = e.mem.alloc(12);
+        assert_eq!(
+            e.vcall(device, 4 * 101, &[0, got, got + 4, got + 8]).u32(),
+            D3D_OK
+        );
+        assert_eq!((e.mem.u32(got), e.mem.u32(got + 8)), (vb, 32));
+        assert_eq!(
+            e.vcall(vb, 8, &[]).u32(),
+            2,
+            "the stream's and the program's"
+        );
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "the stream's");
+        // Constants.
+        let four = e.mem.alloc(32);
+        e.mem.set_u32(four + 16, 7);
+        assert_eq!(
+            e.vcall(device, 4 * 94, &[255, four, 2]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 109, &[3, four, 2]).u32(), D3D_OK);
+        let back = e.mem.alloc(32);
+        assert_eq!(e.vcall(device, 4 * 110, &[4, back, 1]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(back), 7);
+        // Unbinding releases: the stream's buffer goes.
+        assert_eq!(e.vcall(device, 4 * 100, &[0, 0, 0, 0]).u32(), D3D_OK);
+        assert!(!e.kernel.graphics.device_objects.resources_hold(vb));
     }
 }
