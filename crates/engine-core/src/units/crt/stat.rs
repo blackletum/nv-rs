@@ -548,8 +548,189 @@ pub fn stat64i32(e: &mut Engine, path: Ptr, out: Ptr) -> i32 {
     })
 }
 
+/// `__isleadbyte_l` (`00ed419c`, cdecl: byte, locale object) and `__crtLCMapStringA_stat`
+/// (`00ed04de`; its locale object comes in `ECX`, the first word here, then eight pushed words).
+const ISLEADBYTE_L: u32 = 0x00ed_419c;
+const CRT_LC_MAP_STRING_A_STAT: u32 = 0x00ed_04de;
+
+// Translated from 00ec67d6 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `___ascii_stricmp` (LIBCMT/stricmp.c, engine map), cdecl: (first, second): compares the
+/// strings byte by byte with `A`..`Z` folded to lower case (`c - 0x41 <= 0x19` unsigned, plus
+/// 0x20), stopping at the first difference or at the first string's end; answers the
+/// difference of the two folded bytes.
+pub fn ascii_stricmp(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
+    let (mut a, mut b) = (first.addr(), second.addr());
+    loop {
+        let mut x = u32::from(e.mem.u8(a));
+        a = a.wrapping_add(1);
+        if x.wrapping_sub(0x41) <= 0x19 {
+            x += 0x20;
+        }
+        let mut y = u32::from(e.mem.u8(b));
+        b = b.wrapping_add(1);
+        if y.wrapping_sub(0x41) <= 0x19 {
+            y += 0x20;
+        }
+        if x == 0 || x != y {
+            return x.wrapping_sub(y) as i32;
+        }
+    }
+}
+
+// Translated from 00ec680f (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__stricmp_l` (LIBCMT/stricmp.c, engine map), cdecl: (first, second, locale). With the
+/// locale taken (`_LocaleUpdate`): a null string (the first checked first) gives `errno`
+/// `EINVAL` (0x16), the invalid-parameter handler and `0x7fffffff`. A locale whose `LC_CTYPE`
+/// handle (`lc_handle[LC_CTYPE]`, `locinfo` +0x14) is 0 (the C locale) compares with
+/// `___ascii_stricmp`; otherwise both strings go through `__tolower_l` (with the update object
+/// as the locale) one byte at a time until the first string's character is 0 or they differ,
+/// answering the difference.
+pub fn stricmp_l(e: &mut Engine, first: Ptr, second: Ptr, locale: u32) -> i32 {
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        if first.is_null() || second.is_null() {
+            set_errno(e, 0x16);
+            invalid_parameter_zeros(e);
+            locale_update_release(e, update);
+            return 0x7fff_ffff;
+        }
+        let info = e.mem.u32(update);
+        let result = if e.mem.u32(info + 0x14) == 0 {
+            ascii_stricmp(e, first, second)
+        } else {
+            let (mut a, mut b) = (first.addr(), second.addr());
+            loop {
+                let x = tolower_l(e, u32::from(e.mem.u8(a)), update);
+                a = a.wrapping_add(1);
+                let y = tolower_l(e, u32::from(e.mem.u8(b)), update);
+                b = b.wrapping_add(1);
+                if x == 0 || x != y {
+                    break x.wrapping_sub(y) as i32;
+                }
+            }
+        };
+        locale_update_release(e, update);
+        result
+    })
+}
+
+// Translated from 00ec6695 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__tolower_l` (LIBCMT/tolower.c, engine map), cdecl: (character, locale). With the locale
+/// taken (`_LocaleUpdate`): a character below 0x100 that is upper case (`_UPPER`, bit 1: through
+/// `__isctype_l` when the locale's `mb_cur_max` (+0xAC) is above 1, else its ctype table entry
+/// at +0xC8) becomes its entry in the lower-case map (+0xCC); other characters below 0x100 stay.
+/// A larger one is two bytes (high, low) when `mb_cur_max` is above 1 and its high byte (`SAR
+/// 8`) is a lead byte (`__isleadbyte_l`); otherwise `errno` becomes `EILSEQ` (0x2A) and only its
+/// low byte is mapped. The bytes go through `__crtLCMapStringA(update, its LC_CTYPE handle
+/// (+0x14), LCMAP_LOWERCASE, bytes, count, out, 3, code page (+4), 1)`: 0 keeps the character,
+/// 1 answers the first byte out, more the first two (high first).
+pub fn tolower_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    e.with_stack(0x18, |e, frame| {
+        let update = frame.addr();
+        let out = update + 0x10;
+        let source = update + 0x14;
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let info = e.mem.u32(update);
+        let mapped = if c < 0x100 {
+            let upper = if e.mem.u32(info + 0xac) as i32 > 1 {
+                e.call(ISCTYPE_L, &[c, 1, update]).u32()
+            } else {
+                let table = e.mem.u32(info + 0xc8);
+                u32::from(e.mem.u16(table.wrapping_add(c.wrapping_mul(2)))) & 1
+            };
+            if upper != 0 {
+                let info = e.mem.u32(update);
+                let map = e.mem.u32(info + 0xcc);
+                Some(u32::from(e.mem.u8(map.wrapping_add(c))))
+            } else {
+                None
+            }
+        } else {
+            let high = ((c as i32) >> 8) as u32;
+            let lead = e.mem.u32(info + 0xac) as i32 > 1
+                && e.call(ISLEADBYTE_L, &[high & 0xff, update]).u32() != 0;
+            let count = if lead {
+                e.mem.set_u8(source, high as u8);
+                e.mem.set_u8(source + 1, c as u8);
+                e.mem.set_u8(source + 2, 0);
+                2u32
+            } else {
+                set_errno(e, 0x2a);
+                e.mem.set_u8(source, c as u8);
+                e.mem.set_u8(source + 1, 0);
+                1u32
+            };
+            let info = e.mem.u32(update);
+            let lcid = e.mem.u32(info + 0x14);
+            let code_page = e.mem.u32(info + 4);
+            let written = e
+                .call(
+                    CRT_LC_MAP_STRING_A,
+                    &args![update, lcid, 0x100u32, source, count, out, 3u32, code_page, 1u32],
+                )
+                .u32();
+            match written {
+                0 => None,
+                1 => Some(u32::from(e.mem.u8(out))),
+                _ => Some((u32::from(e.mem.u8(out)) << 8) | u32::from(e.mem.u8(out + 1))),
+            }
+        };
+        locale_update_release(e, update);
+        mapped.unwrap_or(c)
+    })
+}
+
+// Translated from 00ed0883 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `___crtLCMapStringA` (LIBCMT/a_map.c, engine map), cdecl, nine words: takes the locale
+/// (`_LocaleUpdate`) and passes the update object (in `ECX`) and the eight other words to
+/// `__crtLCMapStringA_stat` (`00ed04de`), answering its result.
+#[allow(clippy::too_many_arguments)]
+pub fn crt_lc_map_string_a(
+    e: &mut Engine,
+    locale: u32,
+    lcid: u32,
+    flags: u32,
+    source: u32,
+    source_count: u32,
+    dest: u32,
+    dest_count: u32,
+    code_page: u32,
+    error: u32,
+) -> u32 {
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let result = e
+            .call(
+                CRT_LC_MAP_STRING_A_STAT,
+                &[
+                    update,
+                    lcid,
+                    flags,
+                    source,
+                    source_count,
+                    dest,
+                    dest_count,
+                    code_page,
+                    error,
+                ],
+            )
+            .u32();
+        locale_update_release(e, update);
+        result
+    })
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_67d6, ascii_stricmp(Ptr, Ptr) -> i32),
+        entry!(0x00ec_680f, stricmp_l(Ptr, Ptr, u32) -> i32),
+        entry!(0x00ec_6695, tolower_l(u32, u32) -> u32),
+        entry!(
+            0x00ed_0883,
+            crt_lc_map_string_a(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
         entry!(0x00ed_76fc, mbspbrk(Ptr, Ptr) -> Ptr),
         entry!(0x00ed_762f, mbspbrk_l(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00ed_761c, mbctolower(u32) -> u32),
@@ -744,5 +925,129 @@ mod tests {
         assert_eq!(e.call(0x00ec_923c, &args![drive, out]).i32(), -1);
         assert_eq!(e.call(0x00ec_923c, &args![drive, 0u32]).i32(), -1);
         assert_eq!(e.mem.u32(block + 8), 0x16);
+    }
+
+    /// The locale information the doubled `_LocaleUpdate` (`locale_info`) hands out at +0: an
+    /// `LC_CTYPE` handle (+0x14), `mb_cur_max` (+0xAC), a ctype table (+0xC8) marking `A`..`Z`
+    /// upper case and a lower-case map (+0xCC).
+    const LOCINFO: u32 = 0x0e50_0000;
+
+    fn locale_info(e: &mut Engine, handle: u32, mb_cur_max: u32) {
+        e.map(LOCINFO, 0x2000);
+        e.mem.set_u32(LOCINFO + 0x14, handle);
+        e.mem.set_u32(LOCINFO + 0xac, mb_cur_max);
+        e.mem.set_u32(LOCINFO + 0xc8, LOCINFO + 0x400);
+        e.mem.set_u32(LOCINFO + 0xcc, LOCINFO + 0x800);
+        for c in 0..0x100u32 {
+            let upper = u16::from((0x41..=0x5a).contains(&c));
+            e.mem.set_u16(LOCINFO + 0x400 + c * 2, upper);
+            let lower = if upper != 0 { c + 0x20 } else { c };
+            e.mem.set_u8(LOCINFO + 0x800 + c, lower as u8);
+        }
+        e.register(LOCALE_UPDATE, |e, a| {
+            e.mem.set_u32(a[0], LOCINFO);
+            e.mem.set_u32(a[0] + 4, MBCINFO);
+            e.mem.set_u8(a[0] + 0xc, 0);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn ascii_stricmp_folds_only_capital_letters() {
+        let (mut e, _) = engine();
+        let a = text(&mut e, b"Data.BSA");
+        let b = text(&mut e, b"data.bsa");
+        assert_eq!(e.call(0x00ec_67d6, &args![a, b]).i32(), 0);
+        let a = text(&mut e, b"a");
+        let b = text(&mut e, b"B");
+        assert_eq!(e.call(0x00ec_67d6, &args![a, b]).i32(), -1);
+        // `[` (0x5B) is not folded; `a` is 0x61.
+        let a = text(&mut e, b"[");
+        let b = text(&mut e, b"A");
+        assert_eq!(e.call(0x00ec_67d6, &args![a, b]).i32(), -6);
+        let a = text(&mut e, b"abc");
+        let b = text(&mut e, b"AB");
+        assert_eq!(e.call(0x00ec_67d6, &args![a, b]).i32(), 0x63);
+    }
+
+    #[test]
+    fn stricmp_l_uses_the_ascii_compare_in_the_c_locale_and_tolower_otherwise() {
+        let (mut e, block) = engine();
+        locale_info(&mut e, 0, 1);
+        let a = text(&mut e, b".EXE");
+        let b = text(&mut e, b".exe");
+        assert_eq!(e.call(0x00ec_680f, &args![a, b, 0u32]).i32(), 0);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|c| c.0 == 0x00ec_6695));
+        // A null string: EINVAL and 0x7fffffff.
+        assert_eq!(
+            e.call(0x00ec_680f, &args![a, 0u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(e.mem.u32(block + 8), 0x16);
+        e.mem.set_u32(block + 8, 0);
+        assert_eq!(
+            e.call(0x00ec_680f, &args![0u32, b, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(e.mem.u32(block + 8), 0x16);
+        // Another locale: through the ctype table and the lower-case map.
+        locale_info(&mut e, 0x409, 1);
+        let a = text(&mut e, b"ABc");
+        let b = text(&mut e, b"abD");
+        assert_eq!(e.call(0x00ec_680f, &args![a, b, 0u32]).i32(), -1);
+        let b = text(&mut e, b"abC");
+        assert_eq!(e.call(0x00ec_680f, &args![a, b, 0u32]).i32(), 0);
+    }
+
+    #[test]
+    fn tolower_l_maps_bytes_and_sends_wider_characters_to_lcmapstring() {
+        let (mut e, block) = engine();
+        locale_info(&mut e, 0x409, 1);
+        assert_eq!(e.call(0x00ec_6695, &args![0x51u32, 0u32]).u32(), 0x71);
+        assert_eq!(e.call(0x00ec_6695, &args![0x71u32, 0u32]).u32(), 0x71);
+        // mb_cur_max above 1: the upper-case test goes through `__isctype_l`.
+        locale_info(&mut e, 0x409, 2);
+        e.register(ISCTYPE_L, |_, a| {
+            u32::from(a[0] == 0x51 && a[1] == 1).into_ret()
+        });
+        assert_eq!(e.call(0x00ec_6695, &args![0x51u32, 0u32]).u32(), 0x71);
+        // A wider character whose high byte is a lead byte: two bytes to LCMapString.
+        e.register(ISLEADBYTE_L, |_, a| u32::from(a[0] == 0x81).into_ret());
+        e.register(CRT_LC_MAP_STRING_A, |e, a| {
+            assert_eq!((a[1], a[2], a[6], a[8]), (0x409, 0x100, 3, 1));
+            let bytes = e.mem.cstr(a[3]);
+            e.mem.set_u8(a[5], b'x');
+            e.mem.set_u8(a[5] + 1, b'y');
+            (if bytes == [0x81, 0x41] { 2u32 } else { 1 }).into_ret()
+        });
+        assert_eq!(e.call(0x00ec_6695, &args![0x8141u32, 0u32]).u32(), 0x7879);
+        assert_eq!(e.mem.u32(block + 8), 0);
+        // Not a lead byte: EILSEQ and the low byte alone.
+        assert_eq!(e.call(0x00ec_6695, &args![0x4241u32, 0u32]).u32(), 0x78);
+        assert_eq!(e.mem.u32(block + 8), 0x2a);
+        // No mapping: the character stays.
+        e.register(CRT_LC_MAP_STRING_A, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ec_6695, &args![0x8141u32, 0u32]).u32(), 0x8141);
+    }
+
+    #[test]
+    fn crt_lc_map_string_a_passes_the_update_object_and_its_words() {
+        let (mut e, _) = engine();
+        locale_info(&mut e, 0x409, 1);
+        e.register(CRT_LC_MAP_STRING_A_STAT, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), LOCINFO);
+            assert_eq!(&a[1..], &[2, 3, 4, 5, 6, 7, 8, 9]);
+            0x55u32.into_ret()
+        });
+        let r = e.call(
+            0x00ed_0883,
+            &args![0u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32],
+        );
+        assert_eq!(r.u32(), 0x55);
     }
 }
