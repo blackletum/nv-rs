@@ -19,6 +19,7 @@ pub mod fpinit;
 pub mod lowio;
 pub mod math;
 pub mod scanf;
+pub mod search;
 pub mod startup;
 pub mod stat;
 pub mod stdio;
@@ -7059,6 +7060,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(lowio::funcs());
     table.extend(math::funcs());
     table.extend(scanf::funcs());
+    table.extend(search::funcs());
     table.extend(stdio::funcs());
     table.extend(string::funcs());
     table.extend(startup::funcs());
