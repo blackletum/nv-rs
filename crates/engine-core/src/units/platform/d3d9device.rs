@@ -27,6 +27,8 @@ pub const DEVICE_CODE: u32 = CODE_BASE + 0x0200;
 pub const SURFACE_CODE: u32 = CODE_BASE + 0x0400;
 /// Where a texture's slots sit.
 pub const TEXTURE_CODE: u32 = CODE_BASE + 0x0500;
+/// `IDirect3DCubeTexture9`'s slots (the texture's names, with `GetCubeMapSurface` at 18).
+pub const CUBE_CODE: u32 = CODE_BASE + 0x0900;
 
 /// `D3DERR_NOTFOUND` (d3d9.h).
 pub const D3DERR_NOTFOUND: u32 = 0x8876_0866;
@@ -330,6 +332,7 @@ pub struct Objects {
     device_vtable: u32,
     surface_vtable: u32,
     texture_vtable: u32,
+    cube_vtable: u32,
     devices: HashMap<u32, Device>,
     surfaces: HashMap<u32, Surface>,
     textures: HashMap<u32, Texture>,
@@ -346,7 +349,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 34] = [
+    let device: [(u32, crate::AbiFn); 35] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -370,6 +373,10 @@ fn register_code(e: &mut Engine) {
         (
             23,
             crate::entry!(0, create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            25,
+            crate::entry!(0, create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             29,
@@ -600,14 +607,38 @@ fn register_code(e: &mut Engine) {
     for (slot, f) in texture {
         e.register(TEXTURE_CODE + 4 * slot, f);
     }
+    // `IDirect3DCubeTexture9`: the base-texture slots are the texture's (they read the same
+    // object kind); its own slots take a face.
+    let cube: [(u32, crate::AbiFn); 15] = [
+        (0, crate::entry!(0, cube_query_interface(Ptr, Ptr, Ptr) -> u32).1),
+        (1, crate::entry!(0, texture_add_ref(Ptr) -> u32).1),
+        (2, crate::entry!(0, texture_release(Ptr) -> u32).1),
+        (3, crate::entry!(0, texture_get_device(Ptr, Ptr) -> u32).1),
+        (7, crate::entry!(0, texture_set_priority(Ptr, u32) -> u32).1),
+        (8, crate::entry!(0, texture_get_priority(Ptr) -> u32).1),
+        (9, crate::entry!(0, texture_pre_load(Ptr)).1),
+        (10, crate::entry!(0, cube_get_type(Ptr) -> u32).1),
+        (11, crate::entry!(0, texture_set_lod(Ptr, u32) -> u32).1),
+        (12, crate::entry!(0, texture_get_lod(Ptr) -> u32).1),
+        (13, crate::entry!(0, texture_get_level_count(Ptr) -> u32).1),
+        (17, crate::entry!(0, texture_get_level_desc(Ptr, u32, Ptr) -> u32).1),
+        (18, crate::entry!(0, cube_get_surface(Ptr, u32, u32, Ptr) -> u32).1),
+        (19, crate::entry!(0, cube_lock_rect(Ptr, u32, u32, Ptr, Ptr, u32) -> u32).1),
+        (20, crate::entry!(0, cube_unlock_rect(Ptr, u32, u32) -> u32).1),
+    ];
+    for (slot, f) in cube {
+        e.register(CUBE_CODE + 4 * slot, f);
+    }
     if e.kernel.graphics.device_objects.device_vtable == 0 {
         let device = vtable(e, DEVICE_CODE, DEVICE_SLOTS.len());
         let surface = vtable(e, SURFACE_CODE, SURFACE_SLOTS.len());
         let texture = vtable(e, TEXTURE_CODE, TEXTURE_SLOTS.len());
+        let cube = vtable(e, CUBE_CODE, TEXTURE_SLOTS.len());
         let objects = &mut e.kernel.graphics.device_objects;
         objects.device_vtable = device;
         objects.surface_vtable = surface;
         objects.texture_vtable = texture;
+        objects.cube_vtable = cube;
     }
 }
 
@@ -1533,6 +1564,9 @@ struct Texture {
     references: u32,
     device: u32,
     pool: u32,
+    /// 1, or 6 for a cube texture.
+    faces: u32,
+    /// The surfaces, face by face (each face's chain largest first).
     levels: Vec<u32>,
     lod: u32,
     priority: u32,
@@ -1671,6 +1705,106 @@ fn create_texture(
             references: 1,
             device: device_addr,
             pool,
+            faces: 1,
+            levels: surfaces,
+            lod: 0,
+            priority: 0,
+        },
+    );
+    device_add_ref(e, this);
+    e.mem.set_u32(out.addr(), object);
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateCubeTexture (vtable +0x64)
+/// `CreateCubeTexture(edge, levels, usage, format, pool, out, shared handle)`: as
+/// [`create_texture`] for six square faces (`D3DRTYPE_CUBETEXTURE` in the table's
+/// `CheckDeviceFormat`), each face with its own chain of surfaces (counted with the cube
+/// texture). Not provided (the run stops): `D3DUSAGE_AUTOGENMIPMAP`, an edge that is not a
+/// power of two on a device whose caps want powers of two for cube maps, and formats
+/// [`format_blocks`] doesn't size.
+#[allow(clippy::too_many_arguments)]
+fn create_cube_texture(
+    e: &mut Engine,
+    this: Ptr,
+    edge: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if edge == 0 || out.is_null() || shared != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & D3DUSAGE_AUTOGENMIPMAP != 0 {
+        panic!("IDirect3DDevice9::CreateCubeTexture: D3DUSAGE_AUTOGENMIPMAP is not provided");
+    }
+    let full = 32 - edge.leading_zeros();
+    if levels > full {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL) != 0 && pool != D3DPOOL_DEFAULT {
+        return D3DERR_INVALIDCALL;
+    }
+    if usage & D3DUSAGE_DYNAMIC != 0 && pool == D3DPOOL_MANAGED {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateCubeTexture");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[adapter, device_type, display_format, usage, D3DRTYPE_CUBETEXTURE, format],
+        )
+        .u32();
+    if check != D3D_OK {
+        return D3DERR_INVALIDCALL;
+    }
+    if !edge.is_power_of_two() {
+        let caps = e.with_stack(0x130, |e, caps| {
+            assert_eq!(get_device_caps(e, this, caps), D3D_OK, "the device's caps");
+            e.mem.u32(caps.addr() + CAPS_TEXTURE_CAPS)
+        });
+        if caps & D3DPTEXTURECAPS_CUBEMAP_POW2 != 0 {
+            panic!("IDirect3DDevice9::CreateCubeTexture: an edge of {edge} on a device that wants powers of two is not provided");
+        }
+    }
+    let count = if levels == 0 { full } else { levels };
+    let lockable = pool != D3DPOOL_DEFAULT || usage & D3DUSAGE_DYNAMIC != 0;
+    let object = e.mem.alloc(8);
+    let table = e.kernel.graphics.device_objects.cube_vtable;
+    e.mem.set_u32(object, table);
+    let device_addr = this.addr();
+    let mut surfaces = Vec::new();
+    for _face in 0..6 {
+        for level in 0..count {
+            let side = (edge >> level).max(1);
+            let desc = [format, D3DRTYPE_SURFACE, usage, pool, 0, 0, side, side];
+            let surface = new_surface(e, device_addr, false, desc);
+            let (pitch, size) = if lockable { level_layout(format, side, side) } else { (0, 0) };
+            let bits = if lockable { e.mem.alloc(size) } else { 0 };
+            let s = e.kernel.graphics.device_objects.surfaces.get_mut(&surface).expect("the level");
+            s.container = object;
+            s.bits = bits;
+            s.pitch = pitch;
+            surfaces.push(surface);
+        }
+    }
+    e.kernel.graphics.device_objects.textures.insert(
+        object,
+        Texture {
+            references: 1,
+            device: device_addr,
+            pool,
+            faces: 6,
             levels: surfaces,
             lod: 0,
             priority: 0,
@@ -1845,7 +1979,7 @@ fn texture_set_lod(e: &mut Engine, this: Ptr, lod: u32) -> u32 {
     if t.pool != D3DPOOL_MANAGED {
         return 0;
     }
-    let last = t.levels.len() as u32 - 1;
+    let last = t.levels.len() as u32 / t.faces - 1;
     std::mem::replace(&mut t.lod, lod.min(last))
 }
 
@@ -1856,11 +1990,86 @@ fn texture_get_lod(e: &mut Engine, this: Ptr) -> u32 {
 
 /// `GetLevelCount()`.
 fn texture_get_level_count(e: &mut Engine, this: Ptr) -> u32 {
-    texture(e, this).levels.len() as u32
+    let t = texture(e, this);
+    t.levels.len() as u32 / t.faces
 }
 
+/// A level's surface (face 0's for a cube texture: its levels all have the same description).
 fn texture_level(e: &mut Engine, this: Ptr, level: u32) -> Option<u32> {
-    texture(e, this).levels.get(level as usize).copied()
+    let t = texture(e, this);
+    if level >= t.levels.len() as u32 / t.faces {
+        return None;
+    }
+    t.levels.get(level as usize).copied()
+}
+
+/// A cube texture's surface for (face, level).
+fn cube_level(e: &mut Engine, this: Ptr, face: u32, level: u32) -> Option<u32> {
+    let t = texture(e, this);
+    let count = t.levels.len() as u32 / t.faces;
+    if face >= t.faces || level >= count {
+        return None;
+    }
+    t.levels.get((face * count + level) as usize).copied()
+}
+
+/// `IID_IDirect3DCubeTexture9` (d3d9.h).
+const IID_CUBETEXTURE9: [u8; 16] = guid(
+    0xfff3_2f81,
+    0xd953,
+    0x473a,
+    [0x92, 0x23, 0x93, 0xd6, 0x52, 0xab, 0xa9, 0x3f],
+);
+/// `D3DRTYPE_CUBETEXTURE`; the cube-map caps `D3DPTEXTURECAPS_CUBEMAP_POW2`.
+const D3DRTYPE_CUBETEXTURE: u32 = 5;
+const D3DPTEXTURECAPS_CUBEMAP_POW2: u32 = 0x2_0000;
+
+/// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
+/// `IDirect3DCubeTexture9` answer the cube texture (counted); others `E_NOINTERFACE`.
+fn cube_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    if iid_is(e, iid, &[IID_IUNKNOWN, IID_RESOURCE9, IID_BASETEXTURE9, IID_CUBETEXTURE9]) {
+        texture_add_ref(e, this);
+        e.mem.set_u32(out.addr(), this.addr());
+        return D3D_OK;
+    }
+    e.mem.set_u32(out.addr(), 0);
+    E_NOINTERFACE
+}
+
+/// `GetType()`: `D3DRTYPE_CUBETEXTURE`.
+fn cube_get_type(_e: &mut Engine, _this: Ptr) -> u32 {
+    D3DRTYPE_CUBETEXTURE
+}
+
+/// `GetCubeMapSurface(face, level, out)`: that surface, counted (with the texture).
+fn cube_get_surface(e: &mut Engine, this: Ptr, face: u32, level: u32, out: Ptr) -> u32 {
+    match cube_level(e, this, face, level) {
+        Some(surface) if !out.is_null() => {
+            texture_add_ref(e, this);
+            e.mem.set_u32(out.addr(), surface);
+            D3D_OK
+        }
+        _ => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `LockRect(face, level, locked out, rectangle, flags)`: [`surface_lock_rect`] on it.
+fn cube_lock_rect(e: &mut Engine, this: Ptr, face: u32, level: u32, locked: Ptr, rect: Ptr, flags: u32) -> u32 {
+    match cube_level(e, this, face, level) {
+        Some(surface) => surface_lock_rect(e, Ptr::new(surface), locked, rect, flags),
+        None => D3DERR_INVALIDCALL,
+    }
+}
+
+/// `UnlockRect(face, level)`: [`surface_unlock_rect`] on it.
+fn cube_unlock_rect(e: &mut Engine, this: Ptr, face: u32, level: u32) -> u32 {
+    match cube_level(e, this, face, level) {
+        Some(surface) => surface_unlock_rect(e, Ptr::new(surface)),
+        None => D3DERR_INVALIDCALL,
+    }
 }
 
 /// `GetLevelDesc(level, out)`: that level's `D3DSURFACE_DESC`; a level past the count or a
@@ -2127,6 +2336,42 @@ mod tests {
         assert_eq!(e.vcall(depth, 4 * 3, &[got]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(got), device);
         assert_eq!(e.vcall(device, 4 * 2, &[]).u32(), 1);
+    }
+
+    #[test]
+    fn cube_textures_have_six_faces_of_lockable_levels() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        // TEST DATA: the table accepts A8R8G8B8 (0x15) cube textures with usage 0.
+        let table = test_table()
+            + "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 0 5\t0\t16=8876086a\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        assert_eq!(e.vcall(device, 4 * 25, &[4, 0, 0, 0x16, 1, out, 0]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 25, &[4, 0, 0, 0x15, 1, out, 0]).u32(), D3D_OK);
+        let cube = e.mem.u32(out);
+        assert_eq!(e.vcall(cube, 4 * 10, &[]).u32(), D3DRTYPE_CUBETEXTURE);
+        assert_eq!(e.vcall(cube, 4 * 13, &[]).u32(), 3, "4, 2, 1");
+        let desc = e.mem.alloc(0x20);
+        assert_eq!(e.vcall(cube, 4 * 17, &[1, desc]).u32(), D3D_OK);
+        assert_eq!((e.mem.u32(desc + 0x18), e.mem.u32(desc + 0x1c)), (2, 2));
+        assert_eq!(e.vcall(cube, 4 * 17, &[3, desc]).u32(), D3DERR_INVALIDCALL);
+        let slot = e.mem.alloc(4);
+        assert_eq!(e.vcall(cube, 4 * 18, &[5, 2, slot]).u32(), D3D_OK);
+        let last = e.mem.u32(slot);
+        assert_eq!(e.vcall(cube, 4 * 18, &[0, 2, slot]).u32(), D3D_OK);
+        assert_ne!(e.mem.u32(slot), last, "each face its own surface");
+        assert_eq!(e.vcall(cube, 4 * 18, &[6, 0, slot]).u32(), D3DERR_INVALIDCALL);
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(cube, 4 * 19, &[5, 0, locked, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(locked), 16, "4 pixels of 4 bytes");
+        assert_eq!(e.vcall(cube, 4 * 20, &[5, 0]).u32(), D3D_OK);
+        // Two surfaces taken, the texture's own reference: three releases free it.
+        e.vcall(cube, 8, &[]);
+        e.vcall(cube, 8, &[]);
+        assert_eq!(e.vcall(cube, 8, &[]).u32(), 0);
+        assert!(!e.kernel.graphics.device_objects.surfaces.contains_key(&last));
     }
 
     #[test]
