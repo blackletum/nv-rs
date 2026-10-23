@@ -118,11 +118,28 @@ pub fn controls_poll(e: &mut Engine, this: Ptr) {
 /// `this` in a local and returns).
 pub fn fn_00a232c0(_e: &mut Engine, _this: Ptr) {}
 
+/// The per-action clear `Controls::ClearUserActions` calls (`00a25410`, `thiscall`, one stack
+/// word: the action index) and the action count it runs over.
+const CLEAR_USER_ACTION: u32 = 0x00a2_5410;
+const USER_ACTION_COUNT: i32 = 0x1c;
+
+// Translated from 00a253d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `Controls::ClearUserActions` (engine map; `thiscall`, no stack words, plain `RET`): `00a25410`
+/// for each action index 0 to 0x1b (the loop compares signed, `JGE`).
+pub fn controls_clear_user_actions(e: &mut Engine, this: Ptr) {
+    let mut i: i32 = 0;
+    while i < USER_ACTION_COUNT {
+        e.call(CLEAR_USER_ACTION, &args![this, i as u32]);
+        i += 1;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a2_3010, controls_poll(Ptr)),
         entry!(0x00a2_32c0, fn_00a232c0(Ptr)),
+        entry!(0x00a2_53d0, controls_clear_user_actions(Ptr)),
     ]
 }
 
@@ -201,5 +218,21 @@ mod tests {
                 (AFTER_MOUSE, vec![this]),
             ]
         );
+    }
+
+    #[test]
+    fn clear_user_actions_clears_each_of_the_0x1c_actions_in_order() {
+        let mut e = Engine::new();
+        e.register(CLEAR_USER_ACTION, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a2_53d0, &args![0x1000u32]);
+        let log = e.call_log.as_ref().unwrap();
+        let cleared: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == CLEAR_USER_ACTION)
+            .map(|c| c.1.clone())
+            .collect();
+        let want: Vec<Vec<u32>> = (0..0x1c).map(|i| vec![0x1000, i]).collect();
+        assert_eq!(cleared, want);
     }
 }

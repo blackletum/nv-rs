@@ -115,6 +115,84 @@ pub fn fn_00b00cf0(e: &mut Engine, _this: Ptr) {
     run_hooks(e, LEAVE_COUNT, LEAVE_HOOKS);
 }
 
+// Translated from 00b00ae0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word, `RET 4`: the address of a task group
+/// pointer): when the manager runs (the byte at `+4`) and the group is set, the manager's
+/// virtual slot `+0x14` with the group answers (a byte); otherwise 0.
+pub fn fn_00b00ae0(e: &mut Engine, this: Ptr, group: u32) -> u8 {
+    if e.mem.u8(this.addr() + 4) == 0 || e.mem.u32(group) == 0 {
+        return 0;
+    }
+    let g = e.mem.u32(group);
+    e.vcall(this.addr(), 0x14, &args![g]).u8()
+}
+
+// Translated from 00b00b40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, three stack words, `RET 0xc`: the address of a task
+/// group pointer, an object whose word `+4` is the task, and a byte): when the manager runs (the
+/// byte at `+4`), the group is set and the task is set, the manager's virtual slot `+0x18` with
+/// (group, task, the byte zero-extended) answers (a byte); otherwise 0.
+pub fn fn_00b00b40(e: &mut Engine, this: Ptr, group: u32, holder: u32, flag: u8) -> u8 {
+    if e.mem.u8(this.addr() + 4) == 0
+        || e.mem.u32(group) == 0
+        || e.mem.u32(holder.wrapping_add(4)) == 0
+    {
+        return 0;
+    }
+    let task = e.mem.u32(holder.wrapping_add(4));
+    let g = e.mem.u32(group);
+    e.vcall(this.addr(), 0x18, &args![g, task, u32::from(flag)])
+        .u8()
+}
+
+// Translated from 00b00bc0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word, `RET 4`: the address of a task group
+/// pointer): when the manager runs (the byte at `+4`) and the group is set, the manager's
+/// virtual slot `+0x1c` with the group answers (a byte); otherwise 0.
+pub fn fn_00b00bc0(e: &mut Engine, this: Ptr, group: u32) -> u8 {
+    if e.mem.u8(this.addr() + 4) == 0 || e.mem.u32(group) == 0 {
+        return 0;
+    }
+    let g = e.mem.u32(group);
+    e.vcall(this.addr(), 0x1c, &args![g]).u8()
+}
+
+// Translated from 00b00c20 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSTaskletManager::DestroyTaskGroup` (engine map; `thiscall`, one stack word, `RET 4`: the
+/// address of a task group pointer). A set group whose byte `+4` is clear first gets its own
+/// virtual slot `+4` with 0; then the manager's virtual slot `+0x20` takes the group and the
+/// pointer is cleared. A null group does nothing.
+pub fn bs_tasklet_manager_destroy_task_group(e: &mut Engine, this: Ptr, group: u32) {
+    if e.mem.u32(group) == 0 {
+        return;
+    }
+    let g = e.mem.u32(group);
+    if g != 0 && e.mem.u8(g + 4) == 0 {
+        e.vcall(g, 4, &args![0u32]);
+    }
+    let g = e.mem.u32(group);
+    e.vcall(this.addr(), 0x20, &args![g]);
+    e.mem.set_u32(group, 0);
+}
+
+/// The KERNEL32 import slots `ReleaseSemaphore` and `InterlockedIncrement`.
+const IMPORT_RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+
+// Translated from 00b00df0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; `this` is a task group as
+/// `00b027c0` builds it, its semaphore block at `+8`): `ReleaseSemaphore(handle at +0xc, 1,
+/// NULL)`, `InterlockedIncrement` of the count at `+8`, the byte `+5` set, then its own virtual
+/// slot `+0x24`.
+pub fn fn_00b00df0(e: &mut Engine, this: Ptr) {
+    let block = this.addr() + 8;
+    let handle = e.mem.u32(block + 4);
+    e.call(IMPORT_RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![block]);
+    e.mem.set_u8(this.addr() + 5, 1);
+    e.vcall(this.addr(), 0x24, &args![]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -123,6 +201,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_27c0, fn_00b027c0(Ptr) -> Ptr),
         entry!(0x00b0_0c90, fn_00b00c90(Ptr)),
         entry!(0x00b0_0cf0, fn_00b00cf0(Ptr)),
+        entry!(0x00b0_0ae0, fn_00b00ae0(Ptr, u32) -> u8),
+        entry!(0x00b0_0b40, fn_00b00b40(Ptr, u32, u32, u8) -> u8),
+        entry!(0x00b0_0bc0, fn_00b00bc0(Ptr, u32) -> u8),
+        entry!(0x00b0_0c20, bs_tasklet_manager_destroy_task_group(Ptr, u32)),
+        entry!(0x00b0_0df0, fn_00b00df0(Ptr)),
     ]
 }
 
@@ -218,5 +301,139 @@ mod hook_tests {
         given.set(0);
         assert_eq!(e.call(0x00b0_2010, &args![0u32, out]).u8(), 0);
         assert_eq!(e.mem.u32(out), 0);
+    }
+
+    /// A manager at `0x1000` (running byte `+4` as given) whose vtable at `0x0300_0000` has the
+    /// recording double `0x00ab_0000` in slots `+0x14` to `+0x24`; the double logs (slot, words)
+    /// at `0x1100` and answers 1.
+    fn manager(running: u8) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0000_1000, 0x200);
+        e.put_vtable(
+            0x0300_0000,
+            &[
+                0,
+                0,
+                0,
+                0,
+                0,
+                0x00ab_0014,
+                0x00ab_0018,
+                0x00ab_001c,
+                0x00ab_0020,
+                0x00ab_0024,
+            ],
+        );
+        e.mem.set_u32(0x1000, 0x0300_0000);
+        e.mem.set_u8(0x1004, running);
+        for slot in [0x14u32, 0x18, 0x1c, 0x20, 0x24] {
+            e.register(0x00ab_0000 + slot, |_, _| 1u32.into_ret());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_manager_slots_run_only_while_it_runs_with_a_group() {
+        let mut e = manager(1);
+        e.mem.set_u32(0x1080, 0x4444);
+        e.mem.set_u32(0x1090, 0x5555);
+        assert_eq!(e.call(0x00b0_0ae0, &args![0x1000u32, 0x1080u32]).u8(), 1);
+        assert_eq!(e.call(0x00b0_0bc0, &args![0x1000u32, 0x1080u32]).u8(), 1);
+        assert_eq!(
+            e.call(
+                0x00b0_0b40,
+                &args![0x1000u32, 0x1080u32, 0x108cu32, 0x1ffu32]
+            )
+            .u8(),
+            1
+        );
+        assert_eq!(calls(&e, 0x00ab_0014), vec![vec![0x1000, 0x4444]]);
+        assert_eq!(calls(&e, 0x00ab_001c), vec![vec![0x1000, 0x4444]]);
+        // The byte argument goes on zero-extended.
+        assert_eq!(
+            calls(&e, 0x00ab_0018),
+            vec![vec![0x1000, 0x4444, 0x5555, 0xff]]
+        );
+        // No task, no group, or a stopped manager: 0 without a call.
+        e.mem.set_u32(0x1090, 0);
+        assert_eq!(
+            e.call(0x00b0_0b40, &args![0x1000u32, 0x1080u32, 0x108cu32, 1u32])
+                .u8(),
+            0
+        );
+        e.mem.set_u32(0x1080, 0);
+        assert_eq!(e.call(0x00b0_0ae0, &args![0x1000u32, 0x1080u32]).u8(), 0);
+        assert_eq!(e.call(0x00b0_0bc0, &args![0x1000u32, 0x1080u32]).u8(), 0);
+        let mut stopped = manager(0);
+        stopped.mem.set_u32(0x1080, 0x4444);
+        stopped.mem.set_u32(0x1090, 0x5555);
+        assert_eq!(
+            stopped.call(0x00b0_0ae0, &args![0x1000u32, 0x1080u32]).u8(),
+            0
+        );
+        assert_eq!(
+            stopped.call(0x00b0_0bc0, &args![0x1000u32, 0x1080u32]).u8(),
+            0
+        );
+        assert_eq!(
+            stopped
+                .call(0x00b0_0b40, &args![0x1000u32, 0x1080u32, 0x108cu32, 1u32])
+                .u8(),
+            0
+        );
+        assert_eq!(calls(&e, 0x00ab_0014).len(), 1);
+        for slot in [0x14u32, 0x18, 0x1c] {
+            assert!(calls(&stopped, 0x00ab_0000 + slot).is_empty());
+        }
+    }
+
+    #[test]
+    fn destroy_task_group_releases_an_idle_group_and_clears_the_pointer() {
+        let mut e = manager(0);
+        // A group at 0x1040 with its own vtable at 0x0300_0100 (slot +4 a double).
+        e.put_vtable(0x0300_0100, &[0, 0x00ab_0104]);
+        e.register(0x00ab_0104, |_, _| Ret::default());
+        e.mem.set_u32(0x1040, 0x0300_0100);
+        e.mem.set_u32(0x1080, 0x1040);
+        e.call(0x00b0_0c20, &args![0x1000u32, 0x1080u32]);
+        assert_eq!(calls(&e, 0x00ab_0104), vec![vec![0x1040, 0]]);
+        assert_eq!(calls(&e, 0x00ab_0020), vec![vec![0x1000, 0x1040]]);
+        assert_eq!(e.mem.u32(0x1080), 0);
+        // A busy group (byte +4 set) only goes to the manager; a null one does nothing.
+        e.mem.set_u8(0x1044, 1);
+        e.mem.set_u32(0x1080, 0x1040);
+        e.call(0x00b0_0c20, &args![0x1000u32, 0x1080u32]);
+        assert_eq!(calls(&e, 0x00ab_0104).len(), 1);
+        assert_eq!(calls(&e, 0x00ab_0020).len(), 2);
+        e.call(0x00b0_0c20, &args![0x1000u32, 0x1080u32]);
+        assert_eq!(calls(&e, 0x00ab_0020).len(), 2);
+    }
+
+    #[test]
+    fn the_group_signal_releases_counts_marks_and_calls_slot_0x24() {
+        let mut e = manager(0);
+        e.register(IMPORT_RELEASE_SEMAPHORE, |_, _| 1u32.into_ret());
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let n = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], n);
+            n.into_ret()
+        });
+        e.mem.set_u32(0x1008, 2);
+        e.mem.set_u32(0x100c, 0x77);
+        e.call(0x00b0_0df0, &args![0x1000u32]);
+        assert_eq!(calls(&e, IMPORT_RELEASE_SEMAPHORE), vec![vec![0x77, 1, 0]]);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_INCREMENT), vec![vec![0x1008]]);
+        assert_eq!(e.mem.u32(0x1008), 3);
+        assert_eq!(e.mem.u8(0x1005), 1);
+        assert_eq!(calls(&e, 0x00ab_0024), vec![vec![0x1000]]);
     }
 }
