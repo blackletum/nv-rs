@@ -107,6 +107,40 @@ mod tests {
             vec![(SIZED_0042F5D0, vec![0x5000, 0x24])]
         );
     }
+
+    #[test]
+    fn at_00691c90_moves_the_tail_down_over_the_removed_range() {
+        let mut e = Engine::new();
+        e.register(TAIL_COUNT_0042F5A0, |_, a| Ret {
+            eax: a[0].min(a[1]),
+            ..Ret::default()
+        });
+        e.register(DESTROY_ELEMENTS, |_, _| Ret::default());
+        e.register(MOVE_ELEMENTS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x9000);
+        e.mem.set_u32(this + 8, 10);
+        // Remove 2 at index 3: 5 elements follow, 2 of them move.
+        assert_eq!(
+            log_of(&mut e, 0x0069_1c90, &[this, 3, 2]),
+            vec![
+                (TAIL_COUNT_0042F5A0, vec![5, 2]),
+                (DESTROY_ELEMENTS, vec![this, 0x9024, 2]),
+                (MOVE_ELEMENTS, vec![this, 0x9024, 0x9000 + 8 * 0xc, 2]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 8), 8);
+        // Remove the last 3: nothing follows, nothing moves.
+        assert_eq!(
+            log_of(&mut e, 0x0069_1c90, &[this, 5, 3]),
+            vec![
+                (TAIL_COUNT_0042F5A0, vec![0, 3]),
+                (DESTROY_ELEMENTS, vec![this, 0x903c, 3]),
+                (MOVE_ELEMENTS, vec![this, 0x903c, 0x9060, 0]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 8), 5);
+    }
 }
 
 #[cfg(test)]
