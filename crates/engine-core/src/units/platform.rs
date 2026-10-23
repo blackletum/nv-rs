@@ -375,6 +375,9 @@ pub fn counted_semaphore_release(e: &mut Engine, this: Ptr) {
 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ed_193c, d3d9::cpu_id_flag_test() -> u32),
+        entry!(0x00ed_1951, d3d9::cpuid(u32, Ptr)),
+        entry!(0x00ed_1964, d3d9::cpuid(u32, Ptr)),
         entry!(0x0044_24e0, counted_semaphore_wait(Ptr)),
         entry!(0x0044_2550, counted_semaphore_release(Ptr)),
         entry!(0x00401020, get_memory_manager() -> Ptr),

@@ -72,9 +72,11 @@ impl Host {
         start_crt_heap(&mut engine, &mut movement);
         start_crt_threads(&mut engine, &mut movement);
         start_crt_io(&mut engine, &mut movement);
+        // The machine table before the C initializers: `__get_sse2_info` (`00ed1927`, from
+        // the initializer `00ed454f`) asks the processor, which the table answers.
+        load_adapter_table(&mut engine);
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
-        load_adapter_table(&mut engine);
         let ni_init = if engine.is_translated(WIN_MAIN) {
             // The game's own `main` (`WinMain`, after the CRT start-up above) as its main
             // thread: `NiInit`, the INI files, the window, `Main`, the renderer, the scene

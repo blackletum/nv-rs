@@ -111,6 +111,10 @@ pub struct Adapter {
     display_devices: HashMap<u32, (u32, Vec<u8>)>,
     /// The `NvApi*` lines (`scripts/nvapi-capture`).
     nvapi: super::nvapi::Table,
+    /// The processor: the `ID` flag test's answer and `CPUID` leaves by number (`EAX EBX ECX
+    /// EDX`), for the CRT's `__get_sse2_info`.
+    cpu_id_flag_test: Option<u32>,
+    cpuid: HashMap<u32, [u32; 4]>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -157,6 +161,11 @@ impl Adapter {
                     a.caps.insert(words(f[1])[1], (hex(2), bytes(f[3])));
                 }
                 "GetWindowsDirectoryA" => a.windows_directory = bytes(f[3]),
+                "CpuIdFlagTest" => a.cpu_id_flag_test = Some(hex(2)),
+                "Cpuid" => {
+                    let r = words(f[2]);
+                    a.cpuid.insert(words(f[1])[0], [r[0], r[1], r[2], r[3]]);
+                }
                 "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
                 "EnumDisplayDevicesA" => {
                     a.display_devices
@@ -308,6 +317,30 @@ pub fn enum_display_devices_a(
         e.mem.write(info.addr(), &bytes);
     }
     answer
+}
+
+// Platform: answers the processor at 00ed193c (the ID flag test in __get_sse2_info 00ed1927)
+/// The `ID` flag test `__get_sse2_info` runs (`00ed193c`: EFLAGS read back after flipping bit
+/// 21, minus the entry flags): the player's processor's answer from the machine table
+/// (`scripts/d3d9-capture` writes it); without it the run stops.
+pub fn cpu_id_flag_test(e: &mut Engine) -> u32 {
+    match adapter(e).cpu_id_flag_test {
+        Some(change) => change,
+        None => panic!("the machine table has no processor lines (CpuIdFlagTest): run `d3d9-capture cpu` and add them: {CAPTURE_HINT}"),
+    }
+}
+
+// Platform: answers the processor at 00ed1951 and 00ed1964 (CPUID in __get_sse2_info 00ed1927)
+/// `CPUID` with `EAX = leaf` (`00ed1951` leaf 0, `00ed1964` leaf 1; cdecl: the leaf, the four
+/// words `EAX`, `EBX`, `ECX`, `EDX` are written to): the player's processor's answer from the
+/// machine table; a leaf it lacks stops the run.
+pub fn cpuid(e: &mut Engine, leaf: u32, out: Ptr) {
+    let Some(r) = adapter(e).cpuid.get(&leaf).copied() else {
+        panic!("CPUID leaf {leaf:#x} is not in the machine table: run `d3d9-capture cpu` and add the lines: {CAPTURE_HINT}");
+    };
+    for (i, w) in r.iter().enumerate() {
+        e.mem.set_u32(out.addr() + 4 * i as u32, *w);
+    }
 }
 
 /// The player's time zone from the table (`GetTimeZoneInformation`'s 172 bytes); the run stops
@@ -849,5 +882,23 @@ mod tests_display_devices {
             0
         );
         assert_eq!(e.mem.u8(info + 0xa4), 9);
+    }
+}
+
+#[cfg(test)]
+mod tests_processor {
+    use super::*;
+
+    #[test]
+    fn the_processor_answers_come_from_the_table() {
+        let mut e = Engine::new();
+        // TEST DATA: made-up processor lines.
+        load_adapter_table(&mut e, "CpuIdFlagTest\t\t200000\nCpuid\t0\t10 68747541 444d4163 69746e65\nCpuid\t1\ta20f10 800 7ed8320b 178bfbff\n");
+        assert_eq!(e.call(0x00ed_193c, &[]).u32(), 0x20_0000);
+        let out = e.mem.alloc(16);
+        e.call(0x00ed_1964, &[1, out]);
+        assert_eq!(e.mem.u32(out + 0xc), 0x178b_fbff);
+        e.call(0x00ed_1951, &[0, out]);
+        assert_eq!(e.mem.u32(out + 4), 0x6874_7541);
     }
 }

@@ -199,9 +199,37 @@ const USAGES: &[u32] = &[
     0x200000,
 ];
 
+/// The processor's answers the CRT's `__get_sse2_info` (`00ed1927`) asks for: the `ID` flag test
+/// (EFLAGS read back after flipping bit 21, minus the entry flags, low 32 bits: `0x00200000`
+/// when the bit starts clear) and `CPUID` leaves 0 and 1 (`EAX EBX ECX EDX`). Leaf 1's `EBX`
+/// high byte is the APIC id of whichever core ran this; only `EDX` bit 26 decides anything.
+fn processor(o: &mut impl Write) {
+    let change: u64;
+    // SAFETY: flips EFLAGS.ID and puts the entry flags back.
+    unsafe {
+        std::arch::asm!(
+            "pushfq", "pop rax", "mov rcx, rax", "xor rax, 0x200000", "push rax", "popfq",
+            "pushfq", "pop rdx", "push rcx", "popfq", "sub rdx, rcx",
+            out("rax") _, out("rcx") _, out("rdx") change,
+        );
+    }
+    writeln!(o, "CpuIdFlagTest\t\t{:x}", change as u32).unwrap();
+    for leaf in [0u32, 1] {
+        // SAFETY: CPUID is available on every x86-64 processor.
+        #[allow(unused_unsafe)] // `__cpuid` is unsafe on older toolchains.
+        let r = unsafe { std::arch::x86_64::__cpuid(leaf) };
+        writeln!(o, "Cpuid\t{leaf:x}\t{:x} {:x} {:x} {:x}", r.eax, r.ebx, r.ecx, r.edx).unwrap();
+    }
+}
+
 fn main() {
     let out = std::io::stdout();
     let mut o = out.lock();
+    // `d3d9-capture cpu`: the processor lines alone (to add them to a table made before them).
+    processor(&mut o);
+    if std::env::args().nth(1).as_deref() == Some("cpu") {
+        return;
+    }
     let mut checks: Vec<(&str, String, String)> = Vec::new();
     unsafe {
         for index in (0..=0x5f).chain(0x1000..=0x1003).chain(0x2000..=0x2003) {
