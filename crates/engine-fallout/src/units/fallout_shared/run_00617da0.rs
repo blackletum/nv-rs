@@ -62,12 +62,41 @@ pub fn fn_00617ea0(e: &mut Engine, this: Ptr) {
     e.call(RESET_TAIL_00460110, &args![this]);
 }
 
+// Translated from 00617e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the form `fn_00617da0` builds: runs
+/// `fn_00617f40` on `this`, then frees `this` with `00401030` when bit 0 of
+/// `flags` is set. Returns `this` (`RET 4`).
+pub fn fn_00617e50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00617f40(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00617f40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00617f40 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated
+/// The destructor body of the form `fn_00617da0` builds: stores the
+/// vtables back (`0104cc0c`, +0x18 `0104cbf4`, +0x20 `0104cbd4`), destroys
+/// the component at +0x20 (`0048e2e0`) and the form (`TESForm::~TESForm`,
+/// `00483630`).
+pub fn fn_00617f40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0104_cc0c);
+    e.mem.set_u32(base + 0x18, 0x0104_cbf4);
+    e.mem.set_u32(base + 0x20, 0x0104_cbd4);
+    e.call(0x0048_e2e0, &args![base + 0x20]);
+    e.call(0x0048_3630, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0061_7e80, fn_00617e80(Ptr)),
         entry!(0x0061_7da0, fn_00617da0(Ptr) -> Ptr),
         entry!(0x0061_7ea0, fn_00617ea0(Ptr)),
+        entry!(0x0061_7e50, fn_00617e50(Ptr, u32) -> Ptr),
+        entry!(0x0061_7f40, fn_00617f40(Ptr)),
     ]
 }
 
@@ -157,5 +186,37 @@ mod thunk_tests {
         assert_eq!(called, components);
         assert_eq!(calls_to(&e, 0x0e20_0000), vec![vec![this, 0]]);
         assert_eq!(calls_to(&e, RESET_TAIL_00460110), vec![vec![this]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n042 {
+    use super::*;
+
+    #[test]
+    fn destructor_restores_vtables_and_deletes_with_flag_1() {
+        let mut e = Engine::new();
+        for addr in [0x0048_e2e0, 0x0048_3630, 0x0040_1030] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x60);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_7e50, &args![this, 1u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0048_e2e0, vec![this + 0x20]),
+                (0x0048_3630, vec![this]),
+                (0x0040_1030, vec![this])
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0104_cc0c);
+        assert_eq!(e.mem.u32(this + 0x18), 0x0104_cbf4);
+        assert_eq!(e.mem.u32(this + 0x20), 0x0104_cbd4);
+        e.call_log = Some(vec![]);
+        e.call(0x0061_7e50, &args![this, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != 0x0040_1030));
     }
 }
