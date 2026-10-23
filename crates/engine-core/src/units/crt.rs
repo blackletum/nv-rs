@@ -23,6 +23,7 @@ pub mod stat;
 pub mod stdio;
 pub mod string;
 pub mod time;
+pub mod trig;
 
 // ---- Memory ---------------------------------------------------------------
 
@@ -2233,39 +2234,9 @@ pub fn eh_vector_constructor_iterator(
     }
 }
 
-// Platform: replaces 00ec9f70 (_CIcos, LIBCMT): argument in ST0.
-pub fn ci_cos(_e: &mut Engine, v: f64) -> f64 {
-    v.cos()
-}
-
-// Platform: replaces 00eca0a0 (_CIsin, LIBCMT): argument in ST0.
-pub fn ci_sin(_e: &mut Engine, v: f64) -> f64 {
-    v.sin()
-}
-
-// Platform: replaces 00ec9f30 (cos, LIBCMT): argument on the stack.
-pub fn cos(_e: &mut Engine, v: f64) -> f64 {
-    v.cos()
-}
-
-// Platform: replaces 00eca060 (sin, LIBCMT): argument on the stack.
-pub fn sin(_e: &mut Engine, v: f64) -> f64 {
-    v.sin()
-}
-
 // Platform: replaces 00ec9b00 (pow, LIBCMT)
 pub fn pow(_e: &mut Engine, x: f64, y: f64) -> f64 {
     x.powf(y)
-}
-
-// Platform: replaces 00eca590 (tan, LIBCMT)
-/// `tan` (`cdecl`, one double on the stack, the result in `ST0`): with `__use_sse2_mathfcns`
-/// (`01270a64`) set and every MXCSR and x87 exception masked it jumps to the SSE2 body
-/// (`00edb898`), otherwise it loads the argument (`00ed27c5`) and runs the x87 body (`FPTAN`,
-/// `00eca628`). Both give the tangent; the error handling for NaN and infinite arguments is not
-/// modelled.
-pub fn tan(_e: &mut Engine, x: f64) -> f64 {
-    x.tan()
 }
 
 // Platform: replaces 00eca1d0 (acos, LIBCMT)
@@ -6960,15 +6931,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00ec782f,
             eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
         ),
-        entry!(0x00ec9f70, ci_cos(f64) -> f64),
-        entry!(0x00eca0a0, ci_sin(f64) -> f64),
-        entry!(0x00ec9f30, cos(f64) -> f64),
-        entry!(0x00eca060, sin(f64) -> f64),
         entry!(0x00ec9b00, pow(f64, f64) -> f64),
         entry!(0x00eca1d0, acos(f64) -> f64),
         entry!(0x00ec9ac0, pow_cdecl(f64, f64) -> f64),
         entry!(0x00eca190, acos_cdecl(f64) -> f64),
-        entry!(0x00ec_a590, tan(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec9050, ci_atan(f64) -> f64),
         entry!(0x00ec9760, atan2(f64, f64) -> f64),
@@ -7051,6 +7017,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(startup::funcs());
     table.extend(stat::funcs());
     table.extend(time::funcs());
+    table.extend(trig::funcs());
     table
 }
 
@@ -10124,18 +10091,6 @@ mod runtime_support_tests {
         e.call_log = Some(vec![]);
         e.call(0x00ed_11f8, &[0]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
-    }
-}
-
-#[cfg(test)]
-mod tan_tests {
-    use super::*;
-
-    #[test]
-    fn tan_takes_one_double() {
-        let mut e = Engine::new();
-        assert_eq!(e.call(0x00ec_a590, &args![1.0f64]).f64(), 1.0f64.tan());
-        assert_eq!(e.call(0x00ec_a590, &args![0.0f64]).f64(), 0.0);
     }
 }
 
