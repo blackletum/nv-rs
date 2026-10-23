@@ -122,6 +122,41 @@ fn invalid_parameter(what: &str) -> ! {
     panic!("CRT invalid parameter: {what}")
 }
 
+/// `__gcvt_s` (`00ecdbf6`, cdecl: buffer, size, the double's two words, digits).
+const GCVT_S: u32 = 0x00ec_dbf6;
+
+// Translated from 00ecdd16 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_gcvt` (LIBCMT/gcvt.c, Ghidra library match), cdecl: (value, digits, buffer):
+/// `__gcvt_s(buffer, -1 (no size limit), value, digits)`; the buffer when it answers 0, else
+/// null. The value goes through `FLD`/`FSTP double` (a signalling NaN comes out quiet).
+pub fn gcvt(e: &mut Engine, value: f64, digits: i32, buffer: Ptr) -> Ptr {
+    let value = crate::prelude::x87_load64(value.to_bits());
+    let failed = e.call(GCVT_S, &args![buffer, 0xffff_ffffu32, value, digits]).u32();
+    if failed == 0 {
+        buffer
+    } else {
+        Ptr::new(0)
+    }
+}
+
+// Translated from 00ec5fce (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec5fce - the SEH frame (__SEH_prolog4/__SEH_epilog4) and its __finally block 00ec6019 (which calls __ArrayUnwind 00ec5f70 only when a destructor raised an exception, which the engine does not model) are not translated.
+/// `eh vector destructor iterator` (MSVC runtime, Ghidra library match), stdcall: (array, the
+/// element size, the count, the destructor): runs the destructor (`thiscall`, no stack words)
+/// on each element, last first.
+pub fn eh_vector_destructor_iterator(e: &mut Engine, array: Ptr, size: u32, count: i32, destructor: u32) {
+    let mut at = array.addr().wrapping_add(size.wrapping_mul(count as u32));
+    let mut left = count;
+    loop {
+        left = left.wrapping_sub(1);
+        if left < 0 {
+            break;
+        }
+        at = at.wrapping_sub(size);
+        e.call(destructor, &args![at]);
+    }
+}
+
 // Platform: replaces 00ec6bd2 (_strcat_s, LIBCMT)
 pub fn strcat_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
     let mut d = e.mem.cstr(dst.addr());
@@ -6846,6 +6881,8 @@ pub fn strcat(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     let mut table = vec![
+        entry!(0x00ec_dd16, gcvt(f64, i32, Ptr) -> Ptr),
+        entry!(0x00ec_5fce, eh_vector_destructor_iterator(Ptr, u32, i32, u32)),
         entry!(0x00ec_be7c, access_s(Ptr, u32) -> u32),
         entry!(0x00ec_bf05, access(Ptr, u32) -> i32),
         entry!(0x00ec_6380, strcat(Ptr, Ptr) -> Ptr),
@@ -11221,5 +11258,45 @@ mod control_word_tests {
             assert_eq!(x87_control_word(&mut e), read, "{loaded:#06x}");
         }
         set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+    }
+}
+
+#[cfg(test)]
+mod tests_gcvt_and_iterator {
+    use super::*;
+
+    #[test]
+    fn gcvt_hands_the_value_on_and_answers_the_buffer_or_null() {
+        let mut e = Engine::new();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(GCVT_S, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            u32::from(a[4] == 99).into_ret()
+        });
+        let buffer: Ptr = Ptr::new(0x1000);
+        assert_eq!(e.call(0x00ec_dd16, &args![1.5f64, 6i32, buffer]).u32(), 0x1000);
+        assert_eq!(e.call(0x00ec_dd16, &args![1.5f64, 99i32, buffer]).u32(), 0);
+        let bits = 1.5f64.to_bits();
+        assert_eq!(seen.borrow()[0], vec![0x1000, 0xffff_ffff, bits as u32, (bits >> 32) as u32, 6]);
+        // A signalling NaN arrives quiet.
+        e.call(0x00ec_dd16, &args![f64::from_bits(0x7ff0_0000_0000_0001), 6i32, buffer]);
+        assert_eq!(seen.borrow()[2][3], 0x7ff8_0000);
+    }
+
+    #[test]
+    fn the_vector_destructor_iterator_runs_last_first() {
+        let mut e = Engine::new();
+        let order = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = order.clone();
+        e.register_double(0x7f00_0300, move |_, a| {
+            record.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        e.call(0x00ec_5fce, &args![0x2000u32, 0x10u32, 3i32, 0x7f00_0300u32]);
+        assert_eq!(*order.borrow(), vec![0x2020, 0x2010, 0x2000]);
+        order.borrow_mut().clear();
+        e.call(0x00ec_5fce, &args![0x2000u32, 0x10u32, 0i32, 0x7f00_0300u32]);
+        assert!(order.borrow().is_empty());
     }
 }

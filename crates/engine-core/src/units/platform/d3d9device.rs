@@ -349,7 +349,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 35] = [
+    let device: [(u32, crate::AbiFn); 36] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -377,6 +377,10 @@ fn register_code(e: &mut Engine) {
         (
             25,
             crate::entry!(0, create_cube_texture(Ptr, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            28,
+            crate::entry!(0, create_render_target(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             29,
@@ -1152,13 +1156,20 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
     let (left, implicit) = (s.references, s.implicit);
     let surface_owner = s.device;
     if left == 0 && !implicit {
-        e.kernel
+        let removed = e
+            .kernel
             .graphics
             .device_objects
             .surfaces
             .remove(&this.addr());
+        if let Some(s) = removed {
+            if s.bits != 0 {
+                e.mem.free(s.bits);
+            }
+        }
         e.mem.free(this.addr());
-        // A surface the program made (CreateDepthStencilSurface) held its device.
+        // A surface the program made (CreateRenderTarget, CreateDepthStencilSurface) held its
+        // device.
         let owner = surface_owner;
         device_release(e, Ptr::new(owner));
     }
@@ -1815,6 +1826,84 @@ fn create_cube_texture(
     D3D_OK
 }
 
+/// Whether a surface of `format` may have `multisample` samples at `quality`: `D3DMULTISAMPLE_NONE`
+/// (0) always; otherwise the device's `IDirect3D9::CheckDeviceMultiSampleType` (its adapter and
+/// type, windowed as the device is) answers `D3D_OK` with more quality levels than `quality`.
+fn multisample_supported(e: &mut Engine, this: Ptr, format: u32, multisample: u32, quality: u32) -> bool {
+    if multisample == 0 {
+        return true;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let windowed = u32::from_le_bytes(d.present[PP_WINDOWED as usize..PP_WINDOWED as usize + 4].try_into().unwrap());
+    e.with_stack(4, |e, levels| {
+        let hr = e
+            .vcall(direct3d, 4 * 11, &[adapter, device_type, format, windowed, multisample, levels.addr()])
+            .u32();
+        hr == D3D_OK && quality < e.mem.u32(levels.addr())
+    })
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateRenderTarget (vtable +0x70)
+/// `CreateRenderTarget(width, height, format, multisample type, quality, lockable, out, shared
+/// handle)`. A zero size, a null out, a shared handle (Direct3D 9Ex only), a format the table's
+/// `CheckDeviceFormat` (the device's adapter and type, the display format,
+/// `D3DUSAGE_RENDERTARGET`, `D3DRTYPE_SURFACE`) refuses, or a multisample type and quality its
+/// `CheckDeviceMultiSampleType` refuses answer `D3DERR_INVALIDCALL`. The surface
+/// (`D3DPOOL_DEFAULT`, usage `D3DUSAGE_RENDERTARGET`, reference count 1) holds its device until
+/// released; a lockable one gets memory in the game's address space (rows packed). Not
+/// provided (the run stops): a lockable multisampled target (Direct3D refuses it) and formats
+/// [`format_blocks`] doesn't size.
+#[allow(clippy::too_many_arguments)]
+fn create_render_target(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    lockable: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if width == 0 || height == 0 || out.is_null() || shared != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateRenderTarget");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[adapter, device_type, display_format, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, format],
+        )
+        .u32();
+    if check != D3D_OK || !multisample_supported(e, this, format, multisample, quality) {
+        return D3DERR_INVALIDCALL;
+    }
+    if lockable != 0 && multisample != 0 {
+        panic!("IDirect3DDevice9::CreateRenderTarget: a lockable multisampled target is not provided");
+    }
+    let desc = [format, D3DRTYPE_SURFACE, D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT, multisample, quality, width, height];
+    let surface = new_surface(e, this.addr(), false, desc);
+    if lockable != 0 {
+        let (pitch, size) = level_layout(format, width, height);
+        let bits = e.mem.alloc(size);
+        let s = e.kernel.graphics.device_objects.surfaces.get_mut(&surface).expect("the target");
+        s.bits = bits;
+        s.pitch = pitch;
+    }
+    device_add_ref(e, this);
+    e.mem.set_u32(out.addr(), surface);
+    D3D_OK
+}
+
 // Platform: replaces D3D9.DLL IDirect3DDevice9::CreateDepthStencilSurface (vtable +0x74)
 /// `CreateDepthStencilSurface(width, height, format, multisample type, quality, discard, out,
 /// shared handle)`. A zero size, a null out, a shared handle (Direct3D 9Ex only) or a format
@@ -1822,8 +1911,8 @@ fn create_cube_texture(
 /// `D3DUSAGE_DEPTHSTENCIL`, `D3DRTYPE_SURFACE`) refuses answer `D3DERR_INVALIDCALL`. The
 /// surface (`D3DPOOL_DEFAULT`, usage `D3DUSAGE_DEPTHSTENCIL`, reference count 1) holds its
 /// device until released; it has no memory the program can lock (the depth formats the game
-/// uses are not lockable), so `LockRect` answers `D3DERR_INVALIDCALL`. Not provided (the run
-/// stops): multisampling.
+/// uses are not lockable), so `LockRect` answers `D3DERR_INVALIDCALL`. A multisample type and
+/// quality the table's `CheckDeviceMultiSampleType` refuses answer `D3DERR_INVALIDCALL`.
 #[allow(clippy::too_many_arguments)]
 fn create_depth_stencil_surface(
     e: &mut Engine,
@@ -1840,8 +1929,8 @@ fn create_depth_stencil_surface(
     if width == 0 || height == 0 || out.is_null() || shared != 0 {
         return D3DERR_INVALIDCALL;
     }
-    if multisample != 0 {
-        panic!("IDirect3DDevice9::CreateDepthStencilSurface: multisampling is not provided");
+    if !multisample_supported(e, this, format, multisample, quality) {
+        return D3DERR_INVALIDCALL;
     }
     let d = device(e, this);
     let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
@@ -2372,6 +2461,39 @@ mod tests {
         e.vcall(cube, 8, &[]);
         assert_eq!(e.vcall(cube, 8, &[]).u32(), 0);
         assert!(!e.kernel.graphics.device_objects.surfaces.contains_key(&last));
+    }
+
+    #[test]
+    fn render_targets_check_their_format_and_multisampling() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        // TEST DATA: A8R8G8B8 render targets accepted; 4 samples with 2 quality levels.
+        let table = test_table()
+            + "\nDomain\td1\t15,16\nCheckDeviceFormat\t0 1 16 1 1\t8876086a\t15=0\td1"
+            + "\nDomain\td2\t0,1,2,3,4\nCheckDeviceMultiSampleType\t0 1 15 1\t8876086a/0\t0=0/1,4=0/2\td2";
+        d3d9::load_adapter_table(&mut e, &table);
+        let create = |e: &mut Engine, format: u32, ms: u32, q: u32, lockable: u32| {
+            e.vcall(device, 4 * 28, &[640, 480, format, ms, q, lockable, out, 0]).u32()
+        };
+        assert_eq!(create(&mut e, 0x16, 0, 0, 0), D3DERR_INVALIDCALL);
+        assert_eq!(create(&mut e, 0x15, 2, 0, 0), D3DERR_INVALIDCALL);
+        assert_eq!(create(&mut e, 0x15, 4, 2, 0), D3DERR_INVALIDCALL);
+        assert_eq!(create(&mut e, 0x15, 4, 1, 0), D3D_OK);
+        let target = e.mem.u32(out);
+        let desc = e.mem.alloc(0x20);
+        assert_eq!(e.vcall(target, 4 * 12, &[desc]).u32(), D3D_OK);
+        let words: Vec<u32> = (0..8).map(|i| e.mem.u32(desc + 4 * i)).collect();
+        assert_eq!(words, [0x15, 1, 1, 0, 4, 1, 640, 480]);
+        assert_eq!(create(&mut e, 0x15, 0, 0, 1), D3D_OK);
+        let lockable = e.mem.u32(out);
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(lockable, 4 * 13, &[locked, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(locked), 640 * 4);
+        assert_eq!(e.vcall(lockable, 4 * 14, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(lockable, 8, &[]).u32(), 0);
+        assert_eq!(e.vcall(target, 8, &[]).u32(), 0);
     }
 
     #[test]
