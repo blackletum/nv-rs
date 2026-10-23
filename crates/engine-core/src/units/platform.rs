@@ -36,14 +36,20 @@ pub fn operator_delete(e: &mut Engine, block: Ptr) {
 
 // Platform: replaces 00aa3e40 (MemoryManager::Allocate (Xbox PDB), FalloutNV.exe 1.4.0.525)
 /// Allocates from [`crate::Mem`]'s heap instead of the game's pools.
-/// Blocks are 8-byte aligned and zero-filled.
+/// Blocks are 8-byte aligned and zero-filled. With no pools, every block is one the game's
+/// manager would hand out from the CRT heap (its `00aa4290` is `_malloc`), so it is a CRT
+/// block for `_msize` and `realloc` (`MemoryManager`'s reallocation `00aa4150` sends a block
+/// no pool knows to `realloc`).
 pub fn memory_manager_allocate(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(size))
+    let block = e.mem.alloc(size);
+    e.kernel.crt_block_sizes.insert(block, size.max(1));
+    Ptr::new(block)
 }
 
 // Platform: replaces 00aa4060 (MemoryManager::Deallocate (Xbox PDB), FalloutNV.exe 1.4.0.525)
 /// Frees a block from [`memory_manager_allocate`]; null does nothing.
 pub fn memory_manager_deallocate(e: &mut Engine, _this: Ptr, block: Ptr) {
+    e.kernel.crt_block_sizes.remove(&block.addr());
     e.mem.free(block.addr());
 }
 
