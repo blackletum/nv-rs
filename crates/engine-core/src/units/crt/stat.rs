@@ -1,6 +1,7 @@
 //! The C runtime's `_stat64i32` (MSVC 2008 LIBCMT, statically linked into FalloutNV.exe
 //! 1.4.0.525), translated from the exe, and the functions it calls: the multibyte helpers
-//! `_mbspbrk`, `_mbctolower` and `_mbsrchr` (each with its `_l` body), `__getdrive`,
+//! `_mbspbrk`, `_mbctolower` and `_mbsrchr` (each with its `_l` body), `_ismbblead` (and
+//! `_ismbbtype_l`, which `_splitpath_s` reaches through it), `__getdrive`,
 //! `__dtoxmode` and `_IsRootUNCName`. The archive constructor (`00af7eb0`) takes each archive's
 //! file time from it.
 
@@ -25,6 +26,9 @@ const MBCTOLOWER: u32 = 0x00ed_761c;
 const MBCTOLOWER_L: u32 = 0x00ed_7576;
 const MBSRCHR: u32 = 0x00ee_248c;
 const MBSRCHR_L: u32 = 0x00ee_23d0;
+/// `_ismbbtype_l` (cdecl: locale, character, ctype mask, mbctype mask).
+const ISMBBTYPE_L: u32 = 0x00ed_5c21;
+const ISMBBLEAD: u32 = 0x00ed_5c8d;
 const GETDRIVE: u32 = 0x00ed_74ad;
 const FULLPATH_HELPER: u32 = 0x00ec_91dc;
 const STRLEN: u32 = 0x00ec_6130;
@@ -179,6 +183,41 @@ pub fn mbctolower_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
         locale_update_release(e, update);
         result
     })
+}
+
+// Translated from 00ed5c21 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_ismbbtype_l` (LIBCMT/ismbbyte.c, Ghidra library match), cdecl: (locale, character,
+/// ctype mask, mbctype mask). With the locale taken (`_LocaleUpdate`): 1 when the character's
+/// low byte has a bit of the mbctype mask in the multibyte table (`mbctype` +0x1D), or, with a
+/// nonzero ctype mask, a bit of it in the locale's `pctype` word table (locale info +0xC8);
+/// otherwise 0.
+pub fn ismbbtype_l(e: &mut Engine, locale: u32, c: u32, ctype_mask: u32, mbctype_mask: u32) -> u32 {
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let byte = c & 0xff;
+        let mbcinfo = e.mem.u32(update + 4);
+        let result = if e.mem.u8(mbcinfo.wrapping_add(0x1d).wrapping_add(byte)) & mbctype_mask as u8 != 0 {
+            1
+        } else {
+            let ctype = if ctype_mask == 0 {
+                0
+            } else {
+                let table = e.mem.u32(e.mem.u32(update).wrapping_add(0xc8));
+                u32::from(e.mem.u16(table.wrapping_add(byte * 2))) & ctype_mask
+            };
+            u32::from(ctype != 0)
+        };
+        locale_update_release(e, update);
+        result
+    })
+}
+
+// Translated from 00ed5c8d (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_ismbblead` (LIBCMT/ismbbyte.c), cdecl: (character): `_ismbbtype_l(NULL, character, 0,
+/// _MLEAD (4))`.
+pub fn ismbblead(e: &mut Engine, c: u32) -> u32 {
+    e.call(ISMBBTYPE_L, &args![0u32, c, 0u32, 4u32]).u32()
 }
 
 // Translated from 00ee248c (disassembled, FalloutNV.exe 1.4.0.525)
@@ -735,6 +774,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_762f, mbspbrk_l(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00ed_761c, mbctolower(u32) -> u32),
         entry!(0x00ed_7576, mbctolower_l(u32, u32) -> u32),
+        entry!(0x00ed_5c21, ismbbtype_l(u32, u32, u32, u32) -> u32),
+        entry!(0x00ed_5c8d, ismbblead(u32) -> u32),
         entry!(0x00ee_248c, mbsrchr(Ptr, u32) -> Ptr),
         entry!(0x00ee_23d0, mbsrchr_l(Ptr, u32, u32) -> Ptr),
         entry!(0x00ed_7185, dtoxmode(u8, Ptr) -> u32),
@@ -1049,5 +1090,33 @@ mod tests {
             &args![0u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32],
         );
         assert_eq!(r.u32(), 0x55);
+    }
+}
+
+#[cfg(test)]
+mod tests_ismbb {
+    use super::*;
+
+    #[test]
+    fn lead_bytes_and_ctype_bits_come_from_the_locale_tables() {
+        let mut e = Engine::new();
+        // TEST DATA: a multibyte table with 0x81 a lead byte; a ctype table with 0x41 marked 0x100.
+        let mbcinfo = e.mem.alloc(0x200);
+        e.mem.set_u8(mbcinfo + 0x1d + 0x81, 4);
+        let ctype = e.mem.alloc(0x200);
+        e.mem.set_u16(ctype + 2 * 0x41, 0x100);
+        let locinfo = e.mem.alloc(0x100);
+        e.mem.set_u32(locinfo + 0xc8, ctype);
+        e.register_double(LOCALE_UPDATE, move |e, a| {
+            e.mem.set_u32(a[0], locinfo);
+            e.mem.set_u32(a[0] + 4, mbcinfo);
+            e.mem.set_u8(a[0] + 0xc, 0);
+            Ret::default()
+        });
+        assert_eq!(e.call(ISMBBLEAD, &args![0x81u32]).u32(), 1);
+        assert_eq!(e.call(ISMBBLEAD, &args![0x4181u32]).u32(), 1, "the low byte counts");
+        assert_eq!(e.call(ISMBBLEAD, &args![0x41u32]).u32(), 0);
+        assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x100u32, 4u32]).u32(), 1);
+        assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x200u32, 4u32]).u32(), 0);
     }
 }

@@ -5,6 +5,7 @@
 //! CPU-specific path, so the answers are this machine's: the first lines name the CPU.
 //!
 //! `cargo run --release --target i686-pc-windows-msvc --manifest-path scripts/d3dx-measure/Cargo.toml -- matrix-multiply [count] > FILE`
+//! `-- functions [count] [D3DXName]` measures the other maths functions (`functions.rs`).
 //! (`-- check FILE` compares a measurement file with the possible orders of the arithmetic.)
 //!
 //! Each `MatrixMultiply` line: `alias<TAB>x87 control word<TAB>M1 (16 words)<TAB>M2 (16 words)
@@ -12,6 +13,7 @@
 //! which pointers were the same: `none`, `out=m1`, `out=m2`, `m1=m2`, `out=m1=m2` (the inputs
 //! written are the values before the call).
 mod analyze;
+mod functions;
 
 use std::ffi::c_void;
 use std::io::Write;
@@ -203,6 +205,10 @@ fn main() {
                 let p = GetProcAddress(module, b"D3DXMatrixMultiply\0".as_ptr());
                 assert!(!p.is_null());
                 matrix_multiply(&mut o, std::mem::transmute(p), count);
+            }
+            "functions" => {
+                let name = args.get(3).map(String::as_str).unwrap_or("all");
+                functions::measure(&mut o, module, name, count);
             }
             other => panic!("unknown measurement {other}"),
         }
