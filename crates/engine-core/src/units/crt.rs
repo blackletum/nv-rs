@@ -2269,32 +2269,14 @@ pub fn eh_vector_constructor_iterator(
     }
 }
 
-// Platform: replaces 00ec9b00 (pow, LIBCMT)
-pub fn pow(_e: &mut Engine, x: f64, y: f64) -> f64 {
-    x.powf(y)
-}
-
 // Platform: replaces 00eca1d0 (acos, LIBCMT)
 pub fn acos(_e: &mut Engine, x: f64) -> f64 {
     x.acos()
 }
 
-/// `_CIpow` (`00ec9b00`, base in `ST1`, exponent in `ST0`) and `_CIacos` (`00eca1d0`,
-/// argument in `ST0`): the register-argument entries that stand in for the shared bodies.
-const CI_POW: u32 = 0x00ec_9b00;
+/// `_CIacos` (`00eca1d0`, argument in `ST0`): the register-argument entry that stands in for the
+/// shared bodies.
 const CI_ACOS: u32 = 0x00ec_a1d0;
-
-// Translated from 00ec9ac0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `pow` (LIBCMT, `cdecl`, the base then the exponent as doubles on the stack, the result in
-/// `ST0`). It makes the same choice as `_CIpow` (`00ec9b00`): with `__use_sse2_mathfcns`
-/// (`01270a64`) set and every MXCSR and x87 exception masked it jumps to the SSE2 body
-/// (`00ed87a9`, the stack form of `_CIpow`'s `00ed8790`), otherwise it loads the exponent from
-/// the stack (`00ed27c5`) and runs the x87 body `00ec9b5d`, the one `_CIpow` calls after storing
-/// its two registers to the same stack slots. Only where the arguments come from differs, so
-/// the bodies are reached through `_CIpow`, which stands in for them (`Platform`).
-pub fn pow_cdecl(e: &mut Engine, x: f64, y: f64) -> f64 {
-    e.call(CI_POW, &args![x, y]).f64()
-}
 
 // Translated from 00eca190 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `acos` (LIBCMT, `cdecl`, one double on the stack, the result in `ST0`). It makes the same
@@ -6968,9 +6950,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00ec782f,
             eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
         ),
-        entry!(0x00ec9b00, pow(f64, f64) -> f64),
         entry!(0x00eca1d0, acos(f64) -> f64),
-        entry!(0x00ec9ac0, pow_cdecl(f64, f64) -> f64),
         entry!(0x00eca190, acos_cdecl(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec9050, ci_atan(f64) -> f64),
@@ -7823,34 +7803,6 @@ mod exit_tests {
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.call(0x00eccd99, &args![0u32, 0u32, 1u32]);
         assert_eq!(*order.borrow(), [0x0090_0010]);
-    }
-
-    #[test]
-    fn the_stack_forms_of_pow_and_acos_reach_the_register_forms_bodies() {
-        let mut e = Engine::new();
-        e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x00ec9ac0, &args![2.0f64, 10.0f64]).f64(), 1024.0);
-        assert_eq!(e.call(0x00eca190, &args![0.5f64]).f64(), 0.5f64.acos());
-        let log = e.call_log.take().unwrap();
-        let words = |addr: u32| -> Vec<Vec<u32>> {
-            log.iter()
-                .filter(|(a, _)| *a == addr)
-                .map(|(_, w)| w.clone())
-                .collect()
-        };
-        let two = 2.0f64.to_bits();
-        let ten = 10.0f64.to_bits();
-        let half = 0.5f64.to_bits();
-        assert_eq!(
-            words(CI_POW),
-            [vec![
-                two as u32,
-                (two >> 32) as u32,
-                ten as u32,
-                (ten >> 32) as u32
-            ]]
-        );
-        assert_eq!(words(CI_ACOS), [vec![half as u32, (half >> 32) as u32]]);
     }
 
     #[test]
