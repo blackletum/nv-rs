@@ -51,6 +51,20 @@ const CRC_TABLE: u32 = 0x010a_6550;
 /// `00b4a670`.
 const CRC_TAKEN_HELPER: u32 = 0x00b4_a270;
 const CRC_OTHER_HELPER: u32 = 0x00b4_a670;
+/// The three further 256-word tables that follow `CRC_TABLE` in `.rdata`,
+/// which `00b4a270`'s word steps index with the CRC's bytes 2, 1 and 0
+/// (`CRC_TABLE` takes byte 3).
+const CRC_TABLE_1: u32 = 0x010a_6950;
+const CRC_TABLE_2: u32 = 0x010a_6d50;
+const CRC_TABLE_3: u32 = 0x010a_7150;
+/// The four 256-word tables after those, which `00b4a670` reads (its byte
+/// steps the first; its word steps the four, with the CRC's bytes 0 to 3).
+/// The words sampled from the exe are those of `CRC_TABLE` and its three
+/// followers with their bytes reversed.
+const CRC_SWAPPED_TABLE_0: u32 = 0x010a_7550;
+const CRC_SWAPPED_TABLE_1: u32 = 0x010a_7950;
+const CRC_SWAPPED_TABLE_2: u32 = 0x010a_7d50;
+const CRC_SWAPPED_TABLE_3: u32 = 0x010a_8150;
 
 /// The messages `00b49070` leaves in the stream's message word (`+0x18`):
 /// "invalid distance too far back", "invalid distance code" and
@@ -627,6 +641,130 @@ pub fn fn_00b4a070(e: &mut Engine, crc: u32, buffer: u32, length: u32) -> u32 {
     crc ^ 0xffff_ffff
 }
 
+/// The word `index` of the 256-word table at `table`.
+fn crc_word(e: &mut Engine, table: u32, index: u32) -> u32 {
+    e.mem.u32(table.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// One word step of `00b4a270` (after the word is xored in): the CRC's
+/// bytes 0, 1, 2 and 3 index `CRC_TABLE_3`, `_2`, `_1` and `CRC_TABLE`, the
+/// four words xored in the exe's order.
+fn crc_word_step(e: &mut Engine, crc: u32) -> u32 {
+    let mut next = crc_word(e, CRC_TABLE_3, crc & 0xff);
+    next ^= crc_word(e, CRC_TABLE_2, (crc >> 8) & 0xff);
+    next ^= crc_word(e, CRC_TABLE_1, (crc >> 0x10) & 0xff);
+    next ^ crc_word(e, CRC_TABLE, crc >> 0x18)
+}
+
+// Translated from 00b4a270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words: a running CRC, a buffer
+/// and its length; the branch `00b4a070` takes). The CRC is complemented,
+/// then the bytes before the first 4-byte-aligned address go through one at
+/// a time (`CRC_TABLE`, as `00b4a070`'s own byte branch), then words read
+/// little-endian are xored in and stepped through the four tables, eight
+/// per round while at least 32 bytes remain, then one per round while at
+/// least four remain, then the last bytes one at a time; answers the CRC
+/// complemented again.
+pub fn fn_00b4a270(e: &mut Engine, crc: u32, buffer: u32, length: u32) -> u32 {
+    let mut crc = !crc;
+    let mut buffer = buffer;
+    let mut length = length;
+    while length != 0 && buffer & 3 != 0 {
+        crc = crc_table_step(e, crc, buffer);
+        buffer = buffer.wrapping_add(1);
+        length -= 1;
+    }
+    let mut at = buffer;
+    while length >= 0x20 {
+        for _ in 0..8 {
+            crc ^= e.mem.u32(at);
+            at = at.wrapping_add(4);
+            crc = crc_word_step(e, crc);
+        }
+        length -= 0x20;
+    }
+    while length >= 4 {
+        crc ^= e.mem.u32(at);
+        at = at.wrapping_add(4);
+        crc = crc_word_step(e, crc);
+        length -= 4;
+    }
+    let mut buffer = at;
+    while length != 0 {
+        crc = crc_table_step(e, crc, buffer);
+        buffer = buffer.wrapping_add(1);
+        length -= 1;
+    }
+    !crc
+}
+
+/// The word with its four bytes reversed, as `00b4a670` builds it: the four
+/// bytes shifted into place and added.
+fn crc_bytes_reversed(value: u32) -> u32 {
+    (value >> 0x18) + ((value >> 8) & 0xff00) + ((value & 0xff00) << 8) + ((value & 0xff) << 0x18)
+}
+
+/// One byte step of `00b4a670`: the CRC shifted up a byte, xor the word of
+/// `CRC_SWAPPED_TABLE_0` the CRC's top byte xor the buffer's byte selects.
+fn crc_swapped_byte_step(e: &mut Engine, crc: u32, at: u32) -> u32 {
+    let index = (crc >> 0x18) ^ u32::from(e.mem.u8(at));
+    (crc << 8) ^ crc_word(e, CRC_SWAPPED_TABLE_0, index)
+}
+
+/// One word step of `00b4a670` (after the word is xored in): the CRC's
+/// bytes 0, 1, 2 and 3 index `CRC_SWAPPED_TABLE_0` to `_3`, the four words
+/// xored in the exe's order.
+fn crc_swapped_word_step(e: &mut Engine, crc: u32) -> u32 {
+    let mut next = crc_word(e, CRC_SWAPPED_TABLE_0, crc & 0xff);
+    next ^= crc_word(e, CRC_SWAPPED_TABLE_1, (crc >> 8) & 0xff);
+    next ^= crc_word(e, CRC_SWAPPED_TABLE_2, (crc >> 0x10) & 0xff);
+    next ^ crc_word(e, CRC_SWAPPED_TABLE_3, crc >> 0x18)
+}
+
+// Translated from 00b4a670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words: a running CRC, a buffer
+/// and its length; the branch `00b4a070` does not take). It works on the
+/// CRC with its bytes reversed, complemented: the bytes before the first
+/// 4-byte-aligned address one at a time (`CRC_SWAPPED_TABLE_0`), then words
+/// (read little-endian, as every load on this CPU) xored in and stepped
+/// through the four swapped tables, eight per round while at least 32 bytes
+/// remain, then one per round while at least four remain, then the last
+/// bytes one at a time; answers the result complemented with its bytes
+/// reversed back. Its word pointer starts four bytes before the aligned
+/// address and moves before each read, as the exe's does.
+pub fn fn_00b4a670(e: &mut Engine, crc: u32, buffer: u32, length: u32) -> u32 {
+    let mut crc = !crc_bytes_reversed(crc);
+    let mut buffer = buffer;
+    let mut length = length;
+    while length != 0 && buffer & 3 != 0 {
+        crc = crc_swapped_byte_step(e, crc, buffer);
+        buffer = buffer.wrapping_add(1);
+        length -= 1;
+    }
+    let mut at = buffer.wrapping_sub(4);
+    while length >= 0x20 {
+        for _ in 0..8 {
+            at = at.wrapping_add(4);
+            crc ^= e.mem.u32(at);
+            crc = crc_swapped_word_step(e, crc);
+        }
+        length -= 0x20;
+    }
+    while length >= 4 {
+        at = at.wrapping_add(4);
+        crc ^= e.mem.u32(at);
+        crc = crc_swapped_word_step(e, crc);
+        length -= 4;
+    }
+    let mut buffer = at.wrapping_add(4);
+    while length != 0 {
+        crc = crc_swapped_byte_step(e, crc, buffer);
+        buffer = buffer.wrapping_add(1);
+        length -= 1;
+    }
+    crc_bytes_reversed(!crc)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -634,6 +772,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_9070, fn_00b49070(u32, u32)),
         entry!(0x00b4_97d0, fn_00b497d0(u32, u32, u32, u32, u32, u32) -> i32),
         entry!(0x00b4_a070, fn_00b4a070(u32, u32, u32) -> u32),
+        entry!(0x00b4_a270, fn_00b4a270(u32, u32, u32) -> u32),
+        entry!(0x00b4_a670, fn_00b4a670(u32, u32, u32) -> u32),
     ]
 }
 
@@ -982,5 +1122,131 @@ mod tests {
         };
         assert_eq!(calls(CRC_TAKEN_HELPER), vec![vec![0x1111, 0x2000, 7]]);
         assert!(calls(CRC_OTHER_HELPER).is_empty());
+    }
+
+    /// The reflected CRC-32 table (polynomial `edb88320`) and the three
+    /// tables that step it a further byte each, built here (tests run without
+    /// the exe).
+    fn crc_tables() -> Vec<[u32; 256]> {
+        let mut first = [0u32; 256];
+        for (n, word) in first.iter_mut().enumerate() {
+            let mut c = n as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 {
+                    (c >> 1) ^ 0xedb8_8320
+                } else {
+                    c >> 1
+                };
+            }
+            *word = c;
+        }
+        let mut tables = vec![first];
+        for _ in 1..4 {
+            let prior = tables[tables.len() - 1];
+            let mut next = [0u32; 256];
+            for (word, &before) in next.iter_mut().zip(prior.iter()) {
+                *word = (before >> 8) ^ first[(before & 0xff) as usize];
+            }
+            tables.push(next);
+        }
+        tables
+    }
+
+    /// An engine with the eight tables where the exe keeps them: the four
+    /// above, then the same four with each word's bytes reversed.
+    fn crc_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(CRC_TABLE, 0x2000);
+        let tables = crc_tables();
+        for (k, table) in tables.iter().enumerate() {
+            for (n, &word) in table.iter().enumerate() {
+                let at = CRC_TABLE + (k as u32) * 0x400 + (n as u32) * 4;
+                e.mem.set_u32(at, word);
+                e.mem.set_u32(at + 0x1000, word.swap_bytes());
+            }
+        }
+        e
+    }
+
+    /// CRC-32 a byte at a time, for the check.
+    fn crc32(crc: u32, bytes: &[u8]) -> u32 {
+        let first = crc_tables()[0];
+        let mut c = !crc;
+        for &b in bytes {
+            c = (c >> 8) ^ first[((c ^ u32::from(b)) & 0xff) as usize];
+        }
+        !c
+    }
+
+    /// Writes `data` `offset` bytes past an aligned allocation; its address.
+    fn place(e: &mut Engine, data: &[u8], offset: u32) -> u32 {
+        let base = e.mem.alloc(data.len() as u32 + 8);
+        assert_eq!(base & 3, 0);
+        e.mem.write(base + offset, data);
+        base + offset
+    }
+
+    #[test]
+    fn fn_00b4a270_matches_crc32_through_every_loop() {
+        let mut e = crc_engine();
+        // Leaves the CRC as it is for an empty buffer (complemented twice).
+        assert_eq!(
+            e.call(0x00b4_a270, &args![0x1234_5678u32, 0u32, 0u32])
+                .u32(),
+            0x1234_5678
+        );
+        // The check value, from an unaligned start (bytes, words, bytes).
+        let check = place(&mut e, b"123456789", 1);
+        assert_eq!(
+            e.call(0x00b4_a270, &args![0u32, check, 9u32]).u32(),
+            0xcbf4_3926
+        );
+        // 78 bytes from +1: 3 alignment bytes, two 32-byte rounds, two words,
+        // 3 bytes left; and from an aligned start; and chained in two calls.
+        let data: Vec<u8> = (0..78u32).map(|i| (i * 37 + 11) as u8).collect();
+        for offset in [0u32, 1, 2, 3] {
+            let at = place(&mut e, &data, offset);
+            assert_eq!(
+                e.call(0x00b4_a270, &args![0u32, at, 78u32]).u32(),
+                crc32(0, &data)
+            );
+            let head = e.call(0x00b4_a270, &args![0u32, at, 5u32]).u32();
+            assert_eq!(
+                e.call(0x00b4_a270, &args![head, at + 5, 73u32]).u32(),
+                crc32(0, &data)
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b4a670_steps_words_as_their_bytes_reversed() {
+        let mut e = crc_engine();
+        assert_eq!(
+            e.call(0x00b4_a670, &args![0x1234_5678u32, 0u32, 0u32])
+                .u32(),
+            0x1234_5678
+        );
+        // Bytes only (three from +1): the plain CRC-32.
+        let short = place(&mut e, b"abc", 1);
+        assert_eq!(
+            e.call(0x00b4_a670, &args![0u32, short, 3u32]).u32(),
+            crc32(0, b"abc")
+        );
+        // With word steps, each aligned word's bytes count in reverse order
+        // (the words are loaded little-endian, the tables step big-endian).
+        let data: Vec<u8> = (0..78u32).map(|i| (i * 53 + 7) as u8).collect();
+        for offset in [0u32, 1, 3] {
+            let at = place(&mut e, &data, offset);
+            let head = ((4 - offset) & 3) as usize;
+            let words = (78 - head) / 4 * 4;
+            let mut seen = data.clone();
+            for group in seen[head..head + words].chunks_mut(4) {
+                group.reverse();
+            }
+            assert_eq!(
+                e.call(0x00b4_a670, &args![0x0bad_cafeu32, at, 78u32]).u32(),
+                crc32(0x0bad_cafe, &seen)
+            );
+        }
     }
 }
