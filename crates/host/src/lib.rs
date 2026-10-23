@@ -2,10 +2,7 @@
 //!
 //! The engine crate holds FalloutNV.exe 1.4.0.525 translated function by
 //! function on a model of the game's memory (docs/ENGINE_CRATE.md). This
-//! crate starts it for the running game: it finds the p    if let Some(dir) = texture_cache_path() {
-        engine::units::platform::d3dx::set_texture_cache(e, dir);
-    }
-layer's own
+//! crate starts it for the running game: it finds the player's own
 //! FalloutNV.exe in the installation that holds `Data`, refuses any build
 //! but 1.4.0.525 (the one every translated address belongs to), maps the
 //! executable's data sections (read-only use of the file: nothing is
