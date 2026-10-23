@@ -23,11 +23,11 @@ layout! {
 /// The word saved before the cause list (the Xbox PDB has the static
 /// `ActorCause::iActorCauseIDCounter`; not tied to this address).
 const CAUSE_ID_COUNTER: u32 = 0x011d_60cc;
-/// The list of causes `0066e6d0` saves and `0066df40` adds to (the Xbox
+/// The list of causes `0066e6d0` saves and `0066df40` (the destructor body) removes from (the Xbox
 /// PDB has the static `ActorCause::kCauseList`; not tied to this address).
 const CAUSE_LIST: u32 = 0x011d_6124;
 /// The global whose `0042ce10` test decides whether a cause without an id
-/// is kept.
+/// stays on the list.
 const GAME_STATE: u32 = 0x011d_df38;
 /// The zero point (`NiPoint3`, three words).
 const ZERO_POINT: u32 = 0x011f_426c;
@@ -48,9 +48,6 @@ const LIST_DELETE: u32 = 0x0047_02f0;
 /// `0042ce10` (`thiscall`, no stack words): a test on the global at
 /// `011ddf38` (`AL`).
 const GAME_STATE_TEST: u32 = 0x0042_ce10;
-/// `00905330` (`thiscall`, `RET 4`): adds the item whose word is at the
-/// given address to the list.
-const LIST_ADD: u32 = 0x0090_5330;
 /// `operator delete` (`00401030`, `cdecl`).
 const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// `004019a0` (`cdecl`, the engine map's name `WaitForSingleObjectEx` is a
@@ -99,16 +96,16 @@ pub fn fn_0066df40(e: &mut Engine, this: Ptr<ActorCause>) {
         e.call(LIST_DELETE, &args![witnesses, 1u32]);
     }
     e.set(this, ActorCause::pWitnesses, 0);
-    let mut keep = true;
+    let mut remove = true;
     let state = e.global::<u32>(GAME_STATE);
     if e.call(GAME_STATE_TEST, &args![state]).bool() && e.get(this, ActorCause::iActorCauseID) == -1
     {
-        keep = false;
+        remove = false;
     }
-    if keep {
+    if remove {
         e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), this.addr());
-            e.call(LIST_ADD, &args![CAUSE_LIST, slot]);
+            e.call(LIST_REMOVE_ITEM, &args![CAUSE_LIST, slot]);
         });
     }
 }
@@ -570,7 +567,7 @@ mod tests {
         e.register(OPERATOR_DELETE, nothing);
         e.register(LIST_DELETE, nothing);
         e.register_double(GAME_STATE_TEST, move |_, _| word(u32::from(state_test)));
-        e.register(LIST_ADD, |e, a| word(e.mem.u32(a[1])));
+        e.register(LIST_REMOVE_ITEM, |e, a| word(e.mem.u32(a[1])));
         e
     }
 
@@ -589,9 +586,9 @@ mod tests {
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![0x71], vec![0x72]]);
         assert_eq!(calls_to(&e, LIST_DELETE), vec![vec![list, 1]]);
         assert_eq!(calls_to(&e, GAME_STATE_TEST), vec![vec![0x4444]]);
-        let adds = calls_to(&e, LIST_ADD);
-        assert_eq!(adds.len(), 1);
-        assert_eq!(adds[0][0], CAUSE_LIST);
+        let removes = calls_to(&e, LIST_REMOVE_ITEM);
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0][0], CAUSE_LIST);
     }
 
     #[test]
@@ -602,11 +599,11 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0066_df40, &args![cause]);
         assert!(calls_to(&e, LIST_DELETE).is_empty());
-        assert!(calls_to(&e, LIST_ADD).is_empty());
-        // With an id it is handed on.
+        assert!(calls_to(&e, LIST_REMOVE_ITEM).is_empty());
+        // With an id it is taken off the cause list.
         e.mem.set_i32(cause + 0x14, 5);
         e.call(0x0066_df40, &args![cause]);
-        assert_eq!(calls_to(&e, LIST_ADD).len(), 1);
+        assert_eq!(calls_to(&e, LIST_REMOVE_ITEM).len(), 1);
     }
 
     #[test]
