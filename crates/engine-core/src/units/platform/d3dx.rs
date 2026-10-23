@@ -117,6 +117,10 @@ const DDPF_ALPHAPIXELS: u32 = 0x1;
 const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 const DDSCAPS2_CUBEMAP: u32 = 0x200;
+/// `DDSCAPS2_CUBEMAP_POSITIVEX` .. `NEGATIVEZ`.
+const DDSCAPS2_ALL_FACES: u32 = 0xfc00;
+/// `D3DRTYPE_CUBETEXTURE`.
+const D3DRTYPE_CUBETEXTURE: u32 = 5;
 const DDSCAPS2_VOLUME: u32 = 0x20_0000;
 
 /// What a DDS file describes (`D3DXIMAGE_INFO`'s words) and where its levels are.
@@ -128,7 +132,9 @@ pub struct DdsImage {
     pub format: u32,
     /// The side of the format's blocks in pixels (4 for DXT, 1 otherwise).
     pub block: u32,
-    /// Each level's bytes: (offset in the file, length), largest first.
+    /// 1, or 6 for a cube map.
+    pub faces: u32,
+    /// Each level's bytes: (offset in the file, length), largest first, face by face.
     pub levels: Vec<(usize, usize)>,
 }
 
@@ -160,7 +166,7 @@ fn dds_format(flags: u32, fourcc: u32, bits: u32, masks: [u32; 4]) -> (u32, u32,
 /// header's field whatever `DDSD_MIPMAPCOUNT` says, 0 counting as 1; the file must hold every
 /// level, or the answer is `D3DXERR_INVALIDDATA` (a file one byte short, the header alone, a
 /// mip count beyond the data, a broken magic). Not provided (the run stops): other image file
-/// formats, cube and volume textures, more levels than the full chain, and the pixel formats
+/// formats, volume textures and cube maps without all six faces, more levels than the full chain, and the pixel formats
 /// [`dds_format`] doesn't list.
 pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
     // Measured: a DDS file with its first byte broken, or cut short of its header, is refused.
@@ -172,9 +178,20 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         return Err(D3DXERR_INVALIDDATA);
     }
     let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
-    if word(DDS_CAPS2) & (DDSCAPS2_CUBEMAP | DDSCAPS2_VOLUME) != 0 {
-        panic!("D3DX: cube and volume DDS files are not provided");
+    let caps2 = word(DDS_CAPS2);
+    if caps2 & DDSCAPS2_VOLUME != 0 {
+        panic!("D3DX: volume DDS files are not provided");
     }
+    // A cube map with all six faces (measured: the game's six cube maps, 2026-10-23); one with
+    // some faces only is not provided.
+    let faces = if caps2 & DDSCAPS2_CUBEMAP != 0 {
+        if caps2 & DDSCAPS2_ALL_FACES != DDSCAPS2_ALL_FACES {
+            panic!("D3DX: a cube map DDS file without all six faces is not provided");
+        }
+        6
+    } else {
+        1
+    };
     let (width, height) = (word(DDS_WIDTH), word(DDS_HEIGHT));
     let mip_levels = word(DDS_MIP_COUNT).max(1);
     let full = 32 - width.max(height).max(1).leading_zeros();
@@ -186,11 +203,13 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         dds_format(word(DDS_PF_FLAGS), word(DDS_PF_FOURCC), word(DDS_PF_BITS), masks);
     let mut levels = Vec::new();
     let mut at = DDS_HEADER_SIZE;
-    for level in 0..mip_levels {
-        let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-        let size = (w.div_ceil(block) * h.div_ceil(block) * bytes) as usize;
-        levels.push((at, size));
-        at += size;
+    for _face in 0..faces {
+        for level in 0..mip_levels {
+            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+            let size = (w.div_ceil(block) * h.div_ceil(block) * bytes) as usize;
+            levels.push((at, size));
+            at += size;
+        }
     }
     if at > data.len() {
         return Err(D3DXERR_INVALIDDATA);
@@ -201,6 +220,7 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         mip_levels,
         format,
         block,
+        faces,
         levels,
     })
 }
@@ -208,7 +228,8 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
 // Platform: replaces d3dx9_38.dll D3DXGetImageInfoFromFileInMemory (import)
 /// `D3DXGetImageInfoFromFileInMemory(data, size, info)` (stdcall): for a DDS file
 /// ([`read_dds`]) `D3D_OK` and the `D3DXIMAGE_INFO` (width, height, depth 1, mip levels,
-/// format, `D3DRTYPE_TEXTURE`, `D3DXIFF_DDS`); a file it refuses answers its error and writes
+/// format, `D3DRTYPE_TEXTURE` or for a cube map `D3DRTYPE_CUBETEXTURE`, `D3DXIFF_DDS`); a file it
+/// refuses answers its error and writes
 /// nothing (measured). A null info is not provided.
 pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, info: Ptr) -> u32 {
     assert!(!info.is_null(), "D3DXGetImageInfoFromFileInMemory without an info is not provided");
@@ -221,7 +242,7 @@ pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, 
                 1,
                 image.mip_levels,
                 image.format,
-                D3DRTYPE_TEXTURE,
+                if image.faces == 6 { D3DRTYPE_CUBETEXTURE } else { D3DRTYPE_TEXTURE },
                 D3DXIFF_DDS,
             ];
             for (i, w) in words.iter().enumerate() {
@@ -335,8 +356,23 @@ const D3DPOOL_MANAGED: u32 = 1;
 /// `missing-<key>.dds` so the capture can be run for it), cube and volume entries, a rule
 /// the cache contradicts.
 pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr) -> u32 {
+    create_from_file(e, device, data, size, out, false)
+}
+
+// Platform: replaces d3dx9_38.dll D3DXCreateCubeTextureFromFileInMemory (import)
+/// `D3DXCreateCubeTextureFromFileInMemory(device, data, size, out)` (stdcall): as
+/// [`create_texture_from_file_in_memory`] for a cube map, through the device's
+/// `CreateCubeTexture`, face by face (the DDS order: +X, -X, +Y, -Y, +Z, -Z).
+pub fn create_cube_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr) -> u32 {
+    create_from_file(e, device, data, size, out, true)
+}
+
+/// `IDirect3DDevice9::CreateCubeTexture`, `IDirect3DCubeTexture9::LockRect`/`UnlockRect`.
+const DEVICE_CREATE_CUBE_TEXTURE: u32 = 4 * 25;
+
+fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr, cube: bool) -> u32 {
     let bytes = e.mem.bytes(data.addr(), size);
-    let call = "CreateTextureFromFileInMemory";
+    let call = if cube { "CreateCubeTextureFromFileInMemory" } else { "CreateTextureFromFileInMemory" };
     let key = texture_key(call, &bytes);
     let Some(dir) = e.kernel.graphics.d3dx_texture_cache.clone() else {
         panic!("D3DX{call}: no texture cache is set: {TEXTURE_CACHE_HINT}");
@@ -351,45 +387,65 @@ pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr
     if entry.hr != 0 {
         return entry.hr;
     }
-    assert_eq!(entry.faces, 1, "D3DX{call}: a {}-face entry is not provided", entry.faces);
+    let faces = if cube { 6 } else { 1 };
+    assert_eq!(entry.faces, faces, "D3DX{call}: a {}-face entry is not provided", entry.faces);
     let image = read_dds(&bytes).expect("a file the DLL took");
-    for (level, s) in entry.surfaces.iter().enumerate() {
+    assert_eq!(image.faces, faces, "D3DX{call}: a file with {} faces is not provided", image.faces);
+    // The file's level for (face, level), when it has one.
+    let stored = |face: u32, level: u32| -> Option<(usize, usize)> {
+        (level < image.mip_levels).then(|| image.levels[(face * image.mip_levels + level) as usize])
+    };
+    for (i, s) in entry.surfaces.iter().enumerate() {
+        let (face, level) = (i as u32 / entry.levels, i as u32 % entry.levels);
         // A level the rule copies must be one D3DX left as stored. The other way round is
         // allowed: D3DX can make a level that comes out the same as the file's (a 1x1 DXT1
         // level re-encoded to the same block, 2026-10-23), and the cache then keeps no bytes
         // for it, so the file's are D3DX's.
-        if copies_level(&image, s, level as u32) && s.bytes.is_some() {
-            panic!("D3DX{call} {key}: level {level}: the copy rule copies it, the cache has D3DX's own bytes (not provided)");
+        if copies_level(&image, s, level) && s.bytes.is_some() {
+            panic!("D3DX{call} {key}: face {face} level {level}: the copy rule copies it, the cache has D3DX's own bytes (not provided)");
         }
-        if s.bytes.is_none() && level >= image.levels.len() {
-            panic!("D3DX{call} {key}: level {level}: the cache says copy, the file has no such level");
+        if s.bytes.is_none() && stored(face, level).is_none() {
+            panic!("D3DX{call} {key}: face {face} level {level}: the cache says copy, the file has no such level");
         }
     }
     let top = &entry.surfaces[0];
     let made = e.with_stack(4, |e, slot| {
-        let hr = e
-            .vcall(
+        let hr = if cube {
+            e.vcall(
+                device.addr(),
+                DEVICE_CREATE_CUBE_TEXTURE,
+                &[top.width, entry.levels, 0, top.format, D3DPOOL_MANAGED, slot.addr(), 0],
+            )
+        } else {
+            e.vcall(
                 device.addr(),
                 DEVICE_CREATE_TEXTURE,
                 &[top.width, top.height, entry.levels, 0, top.format, D3DPOOL_MANAGED, slot.addr(), 0],
             )
-            .u32();
+        }
+        .u32();
         (hr, e.mem.u32(slot.addr()))
     });
     if made.0 != 0 {
-        panic!("D3DX{call}: the device's CreateTexture answered {:#x} (not provided)", made.0);
+        panic!("D3DX{call}: the device answered {:#x} (not provided)", made.0);
     }
     let texture = made.1;
-    for (level, s) in entry.surfaces.iter().enumerate() {
+    for (i, s) in entry.surfaces.iter().enumerate() {
+        let (face, level) = (i as u32 / entry.levels, i as u32 % entry.levels);
         let level_bytes: &[u8] = match &s.bytes {
             Some(b) => b,
             None => {
-                let (at, len) = image.levels[level];
+                let (at, len) = stored(face, level).expect("checked above");
                 &bytes[at..at + len]
             }
         };
         let (pitch, bits) = e.with_stack(8, |e, locked| {
-            let hr = e.vcall(texture, TEXTURE_LOCK_RECT, &[level as u32, locked.addr(), 0, 0]).u32();
+            let hr = if cube {
+                e.vcall(texture, TEXTURE_LOCK_RECT, &[face, level, locked.addr(), 0, 0])
+            } else {
+                e.vcall(texture, TEXTURE_LOCK_RECT, &[level, locked.addr(), 0, 0])
+            }
+            .u32();
             assert_eq!(hr, 0, "LockRect of a managed level");
             (e.mem.u32(locked.addr()), e.mem.u32(locked.addr() + 4))
         });
@@ -399,7 +455,11 @@ pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr
         for r in 0..rows {
             e.mem.write(bits + r as u32 * pitch, &level_bytes[r * row..(r + 1) * row]);
         }
-        e.vcall(texture, TEXTURE_UNLOCK_RECT, &[level as u32]);
+        if cube {
+            e.vcall(texture, TEXTURE_UNLOCK_RECT, &[face, level]);
+        } else {
+            e.vcall(texture, TEXTURE_UNLOCK_RECT, &[level]);
+        }
     }
     e.mem.set_u32(out.addr(), texture);
     0
@@ -524,19 +584,32 @@ mod tests {
     #[ignore]
     fn image_info_matches_the_measured_dll() {
         let dir = std::path::PathBuf::from(std::env::var("NV_D3DX_IMAGE_INFO").expect("the measure dir"));
-        let table = std::fs::read_dir(&dir)
+        // Every table: `d3dx-imageinfo-cube-*` for the cube maps in `dds-cube`, the others for `dds`.
+        let tables: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|d| d.ok())
             .map(|d| d.path())
-            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("d3dx-imageinfo-"))
-            .expect("a d3dx-imageinfo table");
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("d3dx-imageinfo-"))
+            .collect();
+        assert!(!tables.is_empty(), "a d3dx-imageinfo table");
         let mut checked = 0;
-        for line in std::fs::read_to_string(table).unwrap().lines() {
+        let lines: Vec<(String, String)> = tables
+            .iter()
+            .flat_map(|t| {
+                let files = if t.to_string_lossy().contains("-cube-") { "dds-cube" } else { "dds" };
+                std::fs::read_to_string(t)
+                    .unwrap()
+                    .lines()
+                    .map(|l| (files.to_string(), l.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (files, line) in &lines {
             let f: Vec<&str> = line.split('\t').collect();
             if f[0] != "ImageInfo" {
                 continue;
             }
-            let file = std::fs::read(dir.join("dds").join(f[1])).unwrap();
+            let file = std::fs::read(dir.join(files).join(f[1])).unwrap();
             let size = usize::from_str_radix(f[3], 16).unwrap();
             let mut data = file.clone();
             match f[2] {
