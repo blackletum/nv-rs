@@ -455,7 +455,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_0650, bs_file_read_f(Ptr<BSFile>, Ptr, u32) -> u32),
         entry!(0x00b0_0590, fn_00b00590(Ptr<BSFile>, u32, u32)),
         entry!(0x00b0_04e0, fn_00b004e0(Ptr<BSFile>) -> u32),
-        entry!(0x00b0_0260, bs_file_bs_file(Ptr<BSFile>, Ptr, u32, u32, u8) -> Ptr<BSFile>),
+        entry!(
+            0x00b0_0260,
+            bs_file_bs_file(Ptr<BSFile>, Ptr, u32, u32, u8) -> Ptr<BSFile>
+        ),
         entry!(0x00af_f990, fn_00aff990(Ptr<BSFile>, bool)),
         entry!(0x00af_f9d0, fn_00aff9d0(Ptr, Ptr, u32) -> u32),
         entry!(0x00af_f9f0, fn_00aff9f0(Ptr, Ptr, u32) -> u32),
@@ -846,7 +849,9 @@ mod constructor_tests {
     fn mode_0_copies_the_name_and_asks_whether_it_exists() {
         let (mut e, file, path) = engine();
         e.call_log = Some(vec![]);
-        let made = e.call(0x00b0_0260, &args![file, path, 0u32, 0x4000u32, 1u32]).u32();
+        let made = e
+            .call(0x00b0_0260, &args![file, path, 0u32, 0x4000u32, 1u32])
+            .u32();
         assert_eq!(made, file);
         assert_eq!(e.mem.u32(file), BSFILE_VTABLE);
         assert_eq!(e.mem.u32(file + 0x10), 0x4000);

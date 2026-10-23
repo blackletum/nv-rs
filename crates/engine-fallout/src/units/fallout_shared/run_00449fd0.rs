@@ -187,4 +187,23 @@ mod b014_tests {
             vec![(TIDY, vec![0x1000]), (BASE_DESTRUCT, vec![0x1000])]
         );
     }
+
+    #[test]
+    fn fn_00449fd0_passes_the_copied_slot_word_to_the_base_constructor() {
+        let mut e = Engine::new();
+        // The copy step leaves a different word in the slot: that word is
+        // the base constructor's stack argument.
+        e.register(ANSWER_THIS, |e, a| {
+            e.mem.set_u32(a[0], 0x0bad_0001);
+            a[0].into_ret()
+        });
+        e.register(BASE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(FINISH, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00449fd0, &args![0x7000u32]);
+        let log = e.call_log.take().unwrap();
+        let base: Vec<_> = log.iter().filter(|c| c.0 == BASE_CONSTRUCT).collect();
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].1, vec![0x7000, 0x0bad_0001]);
+    }
 }
