@@ -29,6 +29,9 @@ const MBSRCHR_L: u32 = 0x00ee_23d0;
 /// `_ismbbtype_l` (cdecl: locale, character, ctype mask, mbctype mask).
 const ISMBBTYPE_L: u32 = 0x00ed_5c21;
 const ISMBBLEAD: u32 = 0x00ed_5c8d;
+/// `__strlwr_s_l` and its body `_strlwr_s_l_stat` (cdecl: string, size, locale / `_LocaleUpdate`).
+const STRLWR_S_L: u32 = 0x00ec_8fb7;
+const STRLWR_S_L_STAT: u32 = 0x00ec_8e34;
 const GETDRIVE: u32 = 0x00ed_74ad;
 const FULLPATH_HELPER: u32 = 0x00ec_91dc;
 const STRLEN: u32 = 0x00ec_6130;
@@ -218,6 +221,25 @@ pub fn ismbbtype_l(e: &mut Engine, locale: u32, c: u32, ctype_mask: u32, mbctype
 /// _MLEAD (4))`.
 pub fn ismbblead(e: &mut Engine, c: u32) -> u32 {
     e.call(ISMBBTYPE_L, &args![0u32, c, 0u32, 4u32]).u32()
+}
+
+// Translated from 00ec8fb7 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__strlwr_s_l` (LIBCMT/strlwr.c, Ghidra library match), cdecl: (string, size, locale): with
+/// the locale taken (`_LocaleUpdate`), `_strlwr_s_l_stat(string, size, the update)`'s answer.
+pub fn strlwr_s_l(e: &mut Engine, string: Ptr, size: u32, locale: u32) -> u32 {
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let result = e.call(STRLWR_S_L_STAT, &args![string, size, update]).u32();
+        locale_update_release(e, update);
+        result
+    })
+}
+
+// Translated from 00ec8feb (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_strlwr_s` (LIBCMT/strlwr.c), cdecl: (string, size): `__strlwr_s_l` with no locale.
+pub fn strlwr_s(e: &mut Engine, string: Ptr, size: u32) -> u32 {
+    e.call(STRLWR_S_L, &args![string, size, 0u32]).u32()
 }
 
 // Translated from 00ee248c (disassembled, FalloutNV.exe 1.4.0.525)
@@ -776,6 +798,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_7576, mbctolower_l(u32, u32) -> u32),
         entry!(0x00ed_5c21, ismbbtype_l(u32, u32, u32, u32) -> u32),
         entry!(0x00ed_5c8d, ismbblead(u32) -> u32),
+        entry!(0x00ec_8fb7, strlwr_s_l(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_8feb, strlwr_s(Ptr, u32) -> u32),
         entry!(0x00ee_248c, mbsrchr(Ptr, u32) -> Ptr),
         entry!(0x00ee_23d0, mbsrchr_l(Ptr, u32, u32) -> Ptr),
         entry!(0x00ed_7185, dtoxmode(u8, Ptr) -> u32),
@@ -1118,5 +1142,33 @@ mod tests_ismbb {
         assert_eq!(e.call(ISMBBLEAD, &args![0x41u32]).u32(), 0);
         assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x100u32, 4u32]).u32(), 1);
         assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x200u32, 4u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_strlwr {
+    use super::*;
+
+    #[test]
+    fn strlwr_s_takes_the_locale_and_hands_on_to_the_body() {
+        let mut e = Engine::new();
+        let update_seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen = update_seen.clone();
+        e.register_double(LOCALE_UPDATE, move |e, a| {
+            seen.set(a[0]);
+            e.mem.set_u8(a[0] + 0xc, 0);
+            Ret::default()
+        });
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = calls.clone();
+        e.register_double(STRLWR_S_L_STAT, move |_, a| {
+            record.borrow_mut().push(a.to_vec());
+            0x22u32.into_ret()
+        });
+        assert_eq!(e.call(0x00ec_8feb, &args![0x1000u32, 9u32]).u32(), 0x22);
+        let calls = calls.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(&calls[0][..2], &[0x1000, 9]);
+        assert_eq!(calls[0][2], update_seen.get());
     }
 }
