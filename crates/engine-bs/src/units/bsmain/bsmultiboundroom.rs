@@ -26,9 +26,64 @@ pub fn fn_00c3a610(_e: &mut Engine, _this: Ptr) -> u32 {
     0x0120_2828
 }
 
+/// `BSMultiBoundNode::BSMultiBoundNode` (engine map, `00c46970`; `thiscall`, no stack words).
+const MULTI_BOUND_NODE_CONSTRUCT: u32 = 0x00c4_6970;
+/// `BSMultiBoundRoom`'s vtable (RTTI `.?AVBSMultiBoundRoom@@`).
+const MULTI_BOUND_ROOM_VTABLE: u32 = 0x010c_1064;
+/// `BSSimpleArray<ShadowSceneLight*,1024>::_InitialSetup` (engine map, `00c3a220`;
+/// `thiscall`, no stack words): the array's constructor.
+const LIGHT_ARRAY_CONSTRUCT: u32 = 0x00c3_a220;
+/// `BSMultiBoundRoom` (Xbox PDB) on PC, 0x2C lower than the PDB's offsets (as
+/// `BSMultiBoundNode::spMultiBound`, PDB +0xD0, is at +0xAC): `kPortalList` +0xB4,
+/// `lOccluderList` +0xC0, `pCompoundFrustum` +0xCC, `kJoinedMultiBoundList` +0xD0 (each list
+/// an `NiTPointerList` of head, tail and count) and `kLights` +0xDC; `NiAVObject::m_uFlags`
+/// at +0x30.
+const PORTAL_LIST: u32 = 0xb4;
+const OCCLUDER_LIST: u32 = 0xc0;
+const COMPOUND_FRUSTUM: u32 = 0xcc;
+const JOINED_MULTI_BOUND_LIST: u32 = 0xd0;
+const LIGHTS: u32 = 0xdc;
+const AV_OBJECT_FLAGS: u32 = 0x30;
+
+/// An inlined `NiTPointerList` constructor: count (+8), head and tail cleared in the exe's
+/// order.
+fn clear_pointer_list(e: &mut Engine, list: u32) {
+    e.mem.set_u32(list + 8, 0);
+    e.mem.set_u32(list, 0);
+    e.mem.set_u32(list + 4, 0);
+}
+
+// Translated from 00c39640 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c39640 - the compiler's exception frame (FS:[0] chain, handler 00f2da62, states 0 to 3) is not translated
+/// `BSMultiBoundRoom::BSMultiBoundRoom` (engine map; `thiscall`, no stack words): the
+/// `BSMultiBoundNode` base (`00c46970`), the vtable, the three pointer lists cleared, the
+/// light array constructed (`00c3a220`), flag `0x800` of `m_uFlags` set (the compiler kept a
+/// test of the constant 1 here; its clearing branch never runs) and `pCompoundFrustum`
+/// cleared. Returns `this`.
+pub fn bs_multi_bound_room_bs_multi_bound_room(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(MULTI_BOUND_NODE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(base, MULTI_BOUND_ROOM_VTABLE);
+    clear_pointer_list(e, base + PORTAL_LIST);
+    clear_pointer_list(e, base + OCCLUDER_LIST);
+    clear_pointer_list(e, base + JOINED_MULTI_BOUND_LIST);
+    e.call(LIGHT_ARRAY_CONSTRUCT, &args![base + LIGHTS]);
+    // `MOV ECX,1; TEST ECX,ECX; JZ`: the set branch always runs; the clear branch is the
+    // exe's unreachable one (`black_box` keeps it as written).
+    let flags = e.mem.u32(base + AV_OBJECT_FLAGS);
+    if std::hint::black_box(1u32) != 0 {
+        e.mem.set_u32(base + AV_OBJECT_FLAGS, flags | 0x800);
+    } else {
+        e.mem.set_u32(base + AV_OBJECT_FLAGS, !0x800 & flags);
+    }
+    e.mem.set_u32(base + COMPOUND_FRUSTUM, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c3_9640, bs_multi_bound_room_bs_multi_bound_room(Ptr) -> Ptr),
         entry!(0x00c3_a610, fn_00c3a610(Ptr) -> u32),
         entry!(0x00c3_a140, bs_multi_bound_room_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(
@@ -184,5 +239,43 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c3_a610, &args![0x1000u32]).u32(), 0x0120_2828);
         assert_eq!(e.call(0x00c3_a610, &args![0u32]).u32(), 0x0120_2828);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn the_room_constructor_clears_its_lists_and_sets_the_flag() {
+        let mut e = Engine::new();
+        e.register(MULTI_BOUND_NODE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0x30, 0x0000_0001);
+            Ret::default()
+        });
+        e.register(LIGHT_ARRAY_CONSTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0xec);
+        for offset in (0xb4u32..0xe8).step_by(4) {
+            e.mem.set_u32(this + offset, 0xdddd_dddd);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c3_9640, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), MULTI_BOUND_ROOM_VTABLE);
+        for list in [PORTAL_LIST, OCCLUDER_LIST, JOINED_MULTI_BOUND_LIST] {
+            for word in 0..3 {
+                assert_eq!(e.mem.u32(this + list + 4 * word), 0);
+            }
+        }
+        assert_eq!(e.mem.u32(this + COMPOUND_FRUSTUM), 0);
+        assert_eq!(e.mem.u32(this + 0x30), 0x801);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (MULTI_BOUND_NODE_CONSTRUCT, vec![this]),
+                (LIGHT_ARRAY_CONSTRUCT, vec![this + LIGHTS]),
+            ]
+        );
     }
 }
