@@ -957,9 +957,12 @@ fn os_sse_probe_filter(code: u32) -> u32 {
 // with the control word the exit leaves (the caller's `FSTP`).
 //
 // Not modelled: the x87 status word's exception flags, which the exits read (`FSTSW`, the
-// precision flag 0x20): the engine keeps no status word, so they read as clear (each such
-// function says so). The register stack of the caller below the values a body works on is
-// untouched, as `FSAVE`/`FRSTOR` keep it.
+// precision flag 0x20): the engine keeps no status word; the flag is taken as set, as
+// `trig.rs`'s `__math_exit` takes it (each such function says so). The `_CI` entries take
+// their register arguments as `FLD qword` leaves a double (a signalling NaN quiet); the
+// registered forms of the internal helpers take the register exactly (a signalling NaN kept,
+// as `__fload_withFB` loads one). The register stack of the caller below the values a body
+// works on is untouched, as `FSAVE`/`FRSTOR` keep it.
 
 use crate::x87::{
     x87_fabs, x87_fadd, x87_fchs, x87_fcom, x87_fdiv, x87_fld_constant, x87_fmul, x87_fsqrt,
