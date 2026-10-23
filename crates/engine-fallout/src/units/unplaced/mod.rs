@@ -2,6 +2,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod atexit_irregular;
+pub mod atexit_irregular_b;
 pub mod run_00401000;
 pub mod run_004012a0;
 pub mod run_004019b0;
@@ -467,9 +468,11 @@ pub mod run_00fb56c0;
 pub mod run_00fd9bf0;
 pub mod static_init_irregular;
 pub mod static_init_irregular_b;
+pub mod static_init_irregular_c;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(atexit_irregular::funcs());
+    out.extend(atexit_irregular_b::funcs());
     out.extend(run_00401000::funcs());
     out.extend(run_004012a0::funcs());
     out.extend(run_004019b0::funcs());
@@ -935,4 +938,5 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00fd9bf0::funcs());
     out.extend(static_init_irregular::funcs());
     out.extend(static_init_irregular_b::funcs());
+    out.extend(static_init_irregular_c::funcs());
 }
