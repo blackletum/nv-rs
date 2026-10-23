@@ -11,7 +11,7 @@
 //! gave. Nothing is drawn yet.
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
-use super::d3d9device::{device_add_ref, device_release, guid, iid_is, IID_IUNKNOWN};
+use super::d3d9device::{device_add_ref, device_release, guid, iid_is, in_scene, IID_IUNKNOWN};
 use crate::{Engine, Ptr};
 use std::collections::HashMap;
 
@@ -798,4 +798,70 @@ impl super::d3d9device::Objects {
     pub(super) fn resources_hold(&self, object: u32) -> bool {
         self.resources.objects.contains_key(&object)
     }
+}
+
+/// `D3DPT_POINTLIST` .. `D3DPT_TRIANGLEFAN` (`D3DPRIMITIVETYPE`).
+const D3DPT_POINTLIST: u32 = 1;
+const D3DPT_TRIANGLEFAN: u32 = 6;
+
+/// What every draw needs before it can be answered: a scene, a primitive type, a vertex
+/// declaration or FVF and stream 0. Nothing is drawn yet (the viewer draws), so a draw only
+/// answers; a draw the documented semantics leave open here (outside a scene, without a
+/// declaration or FVF or stream 0, an unknown primitive type) stops the run as not provided.
+fn draw_checks(e: &mut Engine, this: Ptr, what: &str, kind: u32) {
+    let b = bindings(e, this).clone();
+    let open = if !in_scene(e, this) {
+        Some("outside a scene")
+    } else if !(D3DPT_POINTLIST..=D3DPT_TRIANGLEFAN).contains(&kind) {
+        Some("an unknown primitive type")
+    } else if b.declaration == 0 && b.fvf == 0 {
+        Some("without a vertex declaration or FVF")
+    } else if !b.streams.contains_key(&0) {
+        Some("without stream 0")
+    } else {
+        None
+    };
+    if let Some(open) = open {
+        panic!("IDirect3DDevice9::{what} {open} is not provided");
+    }
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::DrawPrimitive (vtable +0x144)
+/// `DrawPrimitive(type, start vertex, primitive count)`: answers `D3D_OK` after
+/// [`draw_checks`]; nothing is drawn yet.
+pub(super) fn draw_primitive(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    _start: u32,
+    _count: u32,
+) -> u32 {
+    draw_checks(e, this, "DrawPrimitive", kind);
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::DrawIndexedPrimitive (vtable +0x148)
+/// `DrawIndexedPrimitive(type, base vertex, min index, vertex count, start index, primitive
+/// count)`: answers `D3D_OK` after [`draw_checks`] and with an index buffer set (without one,
+/// or for a point list, which indexed draws do not take, the run stops as not provided);
+/// nothing is drawn yet.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_indexed_primitive(
+    e: &mut Engine,
+    this: Ptr,
+    kind: u32,
+    _base_vertex: u32,
+    _min_index: u32,
+    _vertices: u32,
+    _start_index: u32,
+    _count: u32,
+) -> u32 {
+    draw_checks(e, this, "DrawIndexedPrimitive", kind);
+    if bindings(e, this).indices == 0 {
+        panic!("IDirect3DDevice9::DrawIndexedPrimitive without an index buffer is not provided");
+    }
+    if kind == D3DPT_POINTLIST {
+        panic!("IDirect3DDevice9::DrawIndexedPrimitive of a point list is not provided");
+    }
+    D3D_OK
 }

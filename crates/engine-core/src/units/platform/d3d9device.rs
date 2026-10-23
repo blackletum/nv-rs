@@ -451,7 +451,7 @@ fn register_code(e: &mut Engine) {
         e.register(DEVICE_CODE + 4 * slot, f);
     }
     use super::d3d9resource as r;
-    let resource: [(u32, crate::AbiFn); 28] = [
+    let resource: [(u32, crate::AbiFn); 30] = [
         (
             26,
             crate::entry!(0, r::create_vertex_buffer(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
@@ -513,6 +513,14 @@ fn register_code(e: &mut Engine) {
         (
             101,
             crate::entry!(0, r::get_stream_source(Ptr, u32, Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            81,
+            crate::entry!(0, r::draw_primitive(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            82,
+            crate::entry!(0, r::draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
         ),
         (104, crate::entry!(0, r::set_indices(Ptr, u32) -> u32).1),
         (105, crate::entry!(0, r::get_indices(Ptr, Ptr) -> u32).1),
@@ -853,6 +861,11 @@ fn device(e: &mut Engine, this: Ptr) -> &mut Device {
         .devices
         .get_mut(&this.addr())
         .expect("an IDirect3DDevice9 of this layer")
+}
+
+/// Whether the device is between `BeginScene` and `EndScene`.
+pub(super) fn in_scene(e: &mut Engine, this: Ptr) -> bool {
+    device(e, this).in_scene
 }
 
 pub(super) fn iid_is(e: &Engine, iid: Ptr, ids: &[[u8; 16]]) -> bool {
@@ -2889,6 +2902,34 @@ mod tests {
         // Unbinding releases: the stream's buffer goes.
         assert_eq!(e.vcall(device, 4 * 100, &[0, 0, 0, 0]).u32(), D3D_OK);
         assert!(!e.kernel.graphics.device_objects.resources_hold(vb));
+    }
+
+    #[test]
+    fn draws_answer_inside_a_scene_with_their_bindings() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        e.vcall(device, 4 * 26, &[64, 0, 0x142, 1, out, 0]);
+        let vb = e.mem.u32(out);
+        e.vcall(device, 4 * 27, &[12, 0, 101, 1, out, 0]);
+        let ib = e.mem.u32(out);
+        let elements = e.mem.alloc(16);
+        e.mem.set_u16(elements + 8, 0xff);
+        e.mem.set_u8(elements + 12, 17);
+        e.vcall(device, 4 * 86, &[elements, out]);
+        let declaration = e.mem.u32(out);
+        e.vcall(device, 4 * 100, &[0, vb, 0, 32]);
+        e.vcall(device, 4 * 104, &[ib]);
+        e.vcall(device, 4 * 87, &[declaration]);
+        assert_eq!(e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 81, &[4, 0, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 82, &[4, 0, 0, 4, 0, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 42, &[]).u32(), D3D_OK);
+        let outside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.vcall(device, 4 * 81, &[4, 0, 2]);
+        }));
+        assert!(outside.is_err(), "a draw outside a scene stops the run");
     }
 
     #[test]
