@@ -519,8 +519,78 @@ pub fn fn_00b01d20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 }
 
 /// This unit's translated functions, by exe address.
+/// `00b01930`'s calls: KERNEL32 `FindFirstFileA`, `FindNextFileA` and `FindClose` (import
+/// slots), `strlen` (`00ec6130`), `strrchr` (`00ec6e30`), `strcpy_s` (`00ec65a6`), the memory
+/// manager's allocation (`00aa3e40`, `thiscall` on `011f6238`, one word) and the list's add
+/// (`005ae3d0`, `thiscall`, one word: the address of a word holding the new name).
+const FIND_FIRST_FILE_A: u32 = 0x00fd_f070;
+const FIND_NEXT_FILE_A: u32 = 0x00fd_f068;
+const FIND_CLOSE: u32 = 0x00fd_f064;
+const STRLEN: u32 = 0x00ec_6130;
+const STRRCHR: u32 = 0x00ec_6e30;
+const STRCPY_S: u32 = 0x00ec_65a6;
+const ALLOCATE: u32 = 0x00aa_3e40;
+const LIST_ADD: u32 = 0x005a_e3d0;
+/// `00b01930`'s frame (`SUB ESP,0x17c`), as offsets below `EBP`: the `WIN32_FIND_DATAA`
+/// (`EBP-0x148`, its `cFileName` at `EBP-0x11c`) and the word holding the new name
+/// (`EBP-0x15c`) whose address the list's add gets.
+const LOOSE_FRAME: u32 = 0x17c;
+const LOOSE_FIND_DATA: u32 = 0x148;
+const LOOSE_FILE_NAME: u32 = 0x11c;
+const LOOSE_NAME_WORD: u32 = 0x15c;
+
+// Translated from 00b01930 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b01930 - the /GS stack cookie check (00ec408c) is not translated.
+/// The loose files of a pattern added to a file list (no label; cdecl: the pattern, the path
+/// the names are made from, the list). `FindFirstFileA(pattern)`; nothing more when it answers
+/// `INVALID_HANDLE_VALUE`. The directory part of the path is its length less what follows its
+/// last `'\\'` (`strrchr`; the whole path without one). For each file found (the first, then
+/// while `FindNextFileA` answers nonzero): a block of that length plus the file name's plus 1
+/// is allocated (`00aa3e40`), the directory part copied into it (`memcpy`) and ended with a
+/// zero; when that text has a `'\\'` (`strrchr`), the file name is copied after its last one
+/// (`strcpy_s` with the room left) and the name added to the list (`005ae3d0`). Then
+/// `FindClose`.
+pub fn add_loose_files(e: &mut Engine, pattern: u32, path: u32, list: u32) {
+    e.with_stack(LOOSE_FRAME, |e, frame| {
+        let at = |offset: u32| frame.addr() + LOOSE_FRAME - offset;
+        let find_data = at(LOOSE_FIND_DATA);
+        let file_name = at(LOOSE_FILE_NAME);
+        let name_word = at(LOOSE_NAME_WORD);
+        let handle = e.call(FIND_FIRST_FILE_A, &args![pattern, find_data]).u32();
+        if handle == 0xffff_ffff {
+            return;
+        }
+        let mut length = e.call(STRLEN, &args![path]).u32();
+        let last = e.call(STRRCHR, &args![path, 0x5c_u32]).u32();
+        if last != 0 {
+            let tail = e.call(STRLEN, &args![last.wrapping_add(1)]).u32();
+            length = length.wrapping_sub(tail);
+        }
+        loop {
+            let name_length = e.call(STRLEN, &args![file_name]).u32();
+            let total = length.wrapping_add(name_length).wrapping_add(1);
+            let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, total]).u32();
+            e.mem.set_u32(name_word, block);
+            e.call(MEMCPY, &args![block, path, length]);
+            e.mem.set_u8(block.wrapping_add(length), 0);
+            let slash = e.call(STRRCHR, &args![block, 0x5c_u32]).u32();
+            if slash != 0 {
+                let after = slash.wrapping_add(1);
+                let room = total.wrapping_sub(after.wrapping_sub(block));
+                e.call(STRCPY_S, &args![after, room, file_name]);
+                e.call(LIST_ADD, &args![list, name_word]);
+            }
+            if e.call(FIND_NEXT_FILE_A, &args![handle, find_data]).u32() == 0 {
+                break;
+            }
+        }
+        e.call(FIND_CLOSE, &args![handle]);
+    })
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_1930, add_loose_files(u32, u32, u32)),
         entry!(0x00b0_1800, fn_00b01800(Ptr, u32, u32) -> u32),
         entry!(0x00b0_1bc0, fn_00b01bc0(Ptr, u32, u32) -> u32),
         entry!(0x00b0_1be0, fn_00b01be0(Ptr, u32, u32) -> u32),
@@ -934,5 +1004,133 @@ mod tests_file_cache_slots {
             .map(|(_, w)| w.clone())
             .collect();
         assert_eq!(frees, [vec![MEMORY_MANAGER, this]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_loose_files {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Names = Rc<RefCell<Vec<Vec<u8>>>>;
+
+    /// Doubles for the find calls (answering `files` in turn into `cFileName` at +0x2c), the
+    /// CRT string calls, the allocation and the list's add (recording the names added).
+    fn engine(files: &'static [&'static [u8]]) -> (Engine, Names) {
+        let mut e = Engine::new();
+        let next = Rc::new(RefCell::new(0usize));
+        let first = next.clone();
+        e.register_double(FIND_FIRST_FILE_A, move |e, a| {
+            if files.is_empty() {
+                return 0xffff_ffffu32.into_ret();
+            }
+            e.mem.set_cstr(a[1] + 0x2c, files[0]);
+            *first.borrow_mut() = 1;
+            0x77u32.into_ret()
+        });
+        let more = next.clone();
+        e.register_double(FIND_NEXT_FILE_A, move |e, a| {
+            let i = *more.borrow();
+            if i >= files.len() {
+                return 0u32.into_ret();
+            }
+            e.mem.set_cstr(a[1] + 0x2c, files[i]);
+            *more.borrow_mut() = i + 1;
+            1u32.into_ret()
+        });
+        e.register(FIND_CLOSE, |_, _| 1u32.into_ret());
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.register(STRRCHR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            match text.iter().rposition(|&c| u32::from(c) == a[1]) {
+                Some(i) => (a[0] + i as u32).into_ret(),
+                None => 0u32.into_ret(),
+            }
+        });
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            assert!(text.len() < a[1] as usize, "room");
+            e.mem.set_cstr(a[0], &text);
+            0u32.into_ret()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        let names: Names = Rc::default();
+        let seen = names.clone();
+        e.register_double(LIST_ADD, move |e, a| {
+            let name = e.mem.u32(a[1]);
+            seen.borrow_mut().push(e.mem.cstr(name));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, names)
+    }
+
+    fn text(e: &mut Engine, t: &[u8]) -> u32 {
+        let at = e.mem.alloc(t.len() as u32 + 1);
+        e.mem.set_cstr(at, t);
+        at
+    }
+
+    #[test]
+    fn each_found_file_gets_the_paths_directory() {
+        let (mut e, names) = engine(&[b"a.nif", b"bb.dds"]);
+        let pattern = text(&mut e, b"Data\\Meshes\\*.nif");
+        let path = text(&mut e, b"Data\\Meshes\\x.nif");
+        add_loose_files(&mut e, pattern, path, 0x1234);
+        assert_eq!(
+            *names.borrow(),
+            vec![
+                b"Data\\Meshes\\a.nif".to_vec(),
+                b"Data\\Meshes\\bb.dds".to_vec()
+            ]
+        );
+        let log = e.call_log.as_ref().unwrap();
+        let closes: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == FIND_CLOSE)
+            .map(|c| &c.1)
+            .collect();
+        assert_eq!(closes, vec![&vec![0x77]]);
+        let adds: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == LIST_ADD)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(adds, vec![0x1234, 0x1234]);
+    }
+
+    #[test]
+    fn a_path_without_a_backslash_adds_nothing() {
+        let (mut e, names) = engine(&[b"a.nif"]);
+        let pattern = text(&mut e, b"*.nif");
+        let path = text(&mut e, b"x.nif");
+        add_loose_files(&mut e, pattern, path, 0x1234);
+        assert!(names.borrow().is_empty());
+        let log = e.call_log.as_ref().unwrap();
+        // The block is still allocated (the whole path, 5, + 5 + 1) and the search closed.
+        let sizes: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == ALLOCATE)
+            .map(|c| c.1[1])
+            .collect();
+        assert_eq!(sizes, vec![11]);
+        assert_eq!(log.iter().filter(|c| c.0 == FIND_CLOSE).count(), 1);
+    }
+
+    #[test]
+    fn nothing_found_closes_nothing() {
+        let (mut e, names) = engine(&[]);
+        let pattern = text(&mut e, b"*.nif");
+        let path = text(&mut e, b"Data\\x");
+        e.call(0x00b0_1930, &args![pattern, path, 0x1234u32]);
+        assert!(names.borrow().is_empty());
+        let log = e.call_log.as_ref().unwrap();
+        assert!(log.iter().all(|c| c.0 != FIND_CLOSE && c.0 != STRLEN));
     }
 }

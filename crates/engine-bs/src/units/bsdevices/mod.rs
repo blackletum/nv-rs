@@ -2,7 +2,9 @@
 #![allow(clippy::module_inception)]
 
 pub mod xcontrols;
+pub mod xgamerprofile;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(xcontrols::funcs());
+    out.extend(xgamerprofile::funcs());
 }
