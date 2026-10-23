@@ -637,6 +637,20 @@ pub(super) fn set_vertex_declaration(e: &mut Engine, this: Ptr, declaration: u32
     D3D_OK
 }
 
+// Platform: replaces D3D9.DLL IDirect3DDevice9::GetVertexDeclaration (vtable +0x160)
+/// `GetVertexDeclaration(out)`: the declaration held (counted), or null.
+pub(super) fn get_vertex_declaration(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let held = bindings(e, this).declaration;
+    if held != 0 {
+        add_ref(e, Ptr::new(held));
+    }
+    e.mem.set_u32(out.addr(), held);
+    D3D_OK
+}
+
 // Platform: replaces D3D9.DLL IDirect3DDevice9::SetFVF (vtable +0x164)
 /// `SetFVF(fvf)`: kept. (Direct3D replaces the declaration by one made from the FVF; that
 /// implicit declaration is not modelled yet, so a `GetVertexDeclaration` after it is not

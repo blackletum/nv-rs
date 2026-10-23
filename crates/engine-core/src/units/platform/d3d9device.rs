@@ -451,7 +451,7 @@ fn register_code(e: &mut Engine) {
         e.register(DEVICE_CODE + 4 * slot, f);
     }
     use super::d3d9resource as r;
-    let resource: [(u32, crate::AbiFn); 30] = [
+    let resource: [(u32, crate::AbiFn); 31] = [
         (
             26,
             crate::entry!(0, r::create_vertex_buffer(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
@@ -521,6 +521,10 @@ fn register_code(e: &mut Engine) {
         (
             82,
             crate::entry!(0, r::draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            88,
+            crate::entry!(0, r::get_vertex_declaration(Ptr, Ptr) -> u32).1,
         ),
         (104, crate::entry!(0, r::set_indices(Ptr, u32) -> u32).1),
         (105, crate::entry!(0, r::get_indices(Ptr, Ptr) -> u32).1),
@@ -2925,6 +2929,10 @@ mod tests {
         assert_eq!(e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
         assert_eq!(e.vcall(device, 4 * 81, &[4, 0, 2]).u32(), D3D_OK);
         assert_eq!(e.vcall(device, 4 * 82, &[4, 0, 0, 4, 0, 2]).u32(), D3D_OK);
+        let held = e.mem.alloc(4);
+        assert_eq!(e.vcall(device, 4 * 88, &[held]).u32(), D3D_OK);
+        assert_eq!(e.mem.u32(held), declaration);
+        assert_eq!(e.vcall(device, 4 * 88, &[0]).u32(), D3DERR_INVALIDCALL);
         assert_eq!(e.vcall(device, 4 * 42, &[]).u32(), D3D_OK);
         let outside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             e.vcall(device, 4 * 81, &[4, 0, 2]);
