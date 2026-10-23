@@ -329,7 +329,7 @@ const D3DPOOL_MANAGED: u32 = 1;
 /// makes with its defaults (size, levels and format from the file, `D3DPOOL_MANAGED`). The
 /// levels D3DX leaves as stored ([`copies_level`]) are copied from the file; the others come
 /// from the machine-local texture cache, which also gives the call's answer and the texture's
-/// level count and formats; the copy rule must agree with the cache on every level. The texture
+/// level count and formats; a level the rule copies must be one the cache marks as left as stored. The texture
 /// is made through the device's own `CreateTexture` and filled through `LockRect`. Not provided
 /// (the run stops): a file the cache does not have (its bytes are saved beside the cache as
 /// `missing-<key>.dds` so the capture can be run for it), cube and volume entries, a rule
@@ -354,12 +354,16 @@ pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr
     assert_eq!(entry.faces, 1, "D3DX{call}: a {}-face entry is not provided", entry.faces);
     let image = read_dds(&bytes).expect("a file the DLL took");
     for (level, s) in entry.surfaces.iter().enumerate() {
-        let rule = copies_level(&image, s, level as u32);
-        assert_eq!(
-            rule,
-            s.bytes.is_none(),
-            "D3DX{call} {key}: level {level}: the copy rule says {rule}, the cache the opposite (not provided)"
-        );
+        // A level the rule copies must be one D3DX left as stored. The other way round is
+        // allowed: D3DX can make a level that comes out the same as the file's (a 1x1 DXT1
+        // level re-encoded to the same block, 2026-10-23), and the cache then keeps no bytes
+        // for it, so the file's are D3DX's.
+        if copies_level(&image, s, level as u32) && s.bytes.is_some() {
+            panic!("D3DX{call} {key}: level {level}: the copy rule copies it, the cache has D3DX's own bytes (not provided)");
+        }
+        if s.bytes.is_none() && level >= image.levels.len() {
+            panic!("D3DX{call} {key}: level {level}: the cache says copy, the file has no such level");
+        }
     }
     let top = &entry.surfaces[0];
     let made = e.with_stack(4, |e, slot| {
