@@ -346,7 +346,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 33] = [
+    let device: [(u32, crate::AbiFn); 34] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -370,6 +370,10 @@ fn register_code(e: &mut Engine) {
         (
             23,
             crate::entry!(0, create_texture(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            29,
+            crate::entry!(0, create_depth_stencil_surface(Ptr, u32, u32, u32, u32, u32, u32, Ptr, u32) -> u32).1,
         ),
         (
             37,
@@ -1115,6 +1119,7 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
     let s = surface(e, this);
     s.references = s.references.saturating_sub(1);
     let (left, implicit) = (s.references, s.implicit);
+    let surface_owner = s.device;
     if left == 0 && !implicit {
         e.kernel
             .graphics
@@ -1122,6 +1127,9 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
             .surfaces
             .remove(&this.addr());
         e.mem.free(this.addr());
+        // A surface the program made (CreateDepthStencilSurface) held its device.
+        let owner = surface_owner;
+        device_release(e, Ptr::new(owner));
     }
     left
 }
@@ -1673,6 +1681,74 @@ fn create_texture(
     D3D_OK
 }
 
+// Platform: replaces D3D9.DLL IDirect3DDevice9::CreateDepthStencilSurface (vtable +0x74)
+/// `CreateDepthStencilSurface(width, height, format, multisample type, quality, discard, out,
+/// shared handle)`. A zero size, a null out, a shared handle (Direct3D 9Ex only) or a format
+/// the table's `CheckDeviceFormat` (the device's adapter and type, the display format,
+/// `D3DUSAGE_DEPTHSTENCIL`, `D3DRTYPE_SURFACE`) refuses answer `D3DERR_INVALIDCALL`. The
+/// surface (`D3DPOOL_DEFAULT`, usage `D3DUSAGE_DEPTHSTENCIL`, reference count 1) holds its
+/// device until released; it has no memory the program can lock (the depth formats the game
+/// uses are not lockable), so `LockRect` answers `D3DERR_INVALIDCALL`. Not provided (the run
+/// stops): multisampling.
+#[allow(clippy::too_many_arguments)]
+fn create_depth_stencil_surface(
+    e: &mut Engine,
+    this: Ptr,
+    width: u32,
+    height: u32,
+    format: u32,
+    multisample: u32,
+    quality: u32,
+    _discard: u32,
+    out: Ptr,
+    shared: u32,
+) -> u32 {
+    if width == 0 || height == 0 || out.is_null() || shared != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    if multisample != 0 {
+        panic!("IDirect3DDevice9::CreateDepthStencilSurface: multisampling is not provided");
+    }
+    let d = device(e, this);
+    let (direct3d, [adapter, device_type, ..]) = (d.direct3d, d.creation);
+    let display_format = e.with_stack(0x10, |e, mode| {
+        let hr = e.vcall(direct3d, 4 * 8, &[adapter, mode.addr()]).u32();
+        assert_eq!(hr, D3D_OK, "GetAdapterDisplayMode for CreateDepthStencilSurface");
+        e.mem.u32(mode.addr() + 0xc)
+    });
+    let check = e
+        .vcall(
+            direct3d,
+            4 * 10,
+            &[
+                adapter,
+                device_type,
+                display_format,
+                D3DUSAGE_DEPTHSTENCIL,
+                D3DRTYPE_SURFACE,
+                format,
+            ],
+        )
+        .u32();
+    if check != D3D_OK {
+        return D3DERR_INVALIDCALL;
+    }
+    let desc = [
+        format,
+        D3DRTYPE_SURFACE,
+        D3DUSAGE_DEPTHSTENCIL,
+        D3DPOOL_DEFAULT,
+        multisample,
+        quality,
+        width,
+        height,
+    ];
+    let surface = new_surface(e, this.addr(), false, desc);
+    device_add_ref(e, this);
+    e.mem.set_u32(out.addr(), surface);
+    D3D_OK
+}
+
 /// `QueryInterface(iid, out)`: `IUnknown`, `IDirect3DResource9`, `IDirect3DBaseTexture9` and
 /// `IDirect3DTexture9` answer the texture (counted); others `E_NOINTERFACE` with a null out.
 fn texture_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
@@ -2051,6 +2127,40 @@ mod tests {
         assert_eq!(e.vcall(depth, 4 * 3, &[got]).u32(), D3D_OK);
         assert_eq!(e.mem.u32(got), device);
         assert_eq!(e.vcall(device, 4 * 2, &[]).u32(), 1);
+    }
+
+    #[test]
+    fn depth_stencil_surfaces_are_made_unlockable_and_hold_their_device() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        // TEST DATA: the table accepts D24S8 (0x4b) as a depth-stencil surface, refuses D16 (0x50).
+        let table = test_table()
+            + "\nDomain\td1\t4b,50\nCheckDeviceFormat\t0 1 16 2 1\t0\t50=8876086a\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        let refs = |e: &mut Engine| {
+            e.vcall(device, 4, &[]);
+            e.vcall(device, 8, &[]).u32()
+        };
+        let before = refs(&mut e);
+        let create = |e: &mut Engine, format: u32| {
+            e.vcall(device, 4 * 29, &[1920, 1080, format, 0, 0, 0, out, 0]).u32()
+        };
+        assert_eq!(create(&mut e, 0x50), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 29, &[0, 1080, 0x4b, 0, 0, 0, out, 0]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(create(&mut e, 0x4b), D3D_OK);
+        let surface = e.mem.u32(out);
+        assert_eq!(refs(&mut e), before + 1);
+        let desc = e.mem.alloc(0x20);
+        assert_eq!(e.vcall(surface, 4 * 12, &[desc]).u32(), D3D_OK);
+        let words: Vec<u32> = (0..8).map(|i| e.mem.u32(desc + 4 * i)).collect();
+        assert_eq!(words, [0x4b, 1, 2, 0, 0, 0, 1920, 1080]);
+        let locked = e.mem.alloc(8);
+        assert_eq!(e.vcall(surface, 4 * 13, &[locked, 0, 0]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(surface, 8, &[]).u32(), 0);
+        assert!(!e.kernel.graphics.device_objects.surfaces.contains_key(&surface));
+        assert_eq!(refs(&mut e), before);
     }
 
     #[test]
