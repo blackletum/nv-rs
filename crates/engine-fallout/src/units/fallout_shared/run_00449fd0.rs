@@ -6,7 +6,7 @@ use crate::prelude::*;
 
 /// `006815c0` (`ECX` = a pointer): answers `ECX` itself.
 const ANSWER_THIS: u32 = 0x0068_15c0;
-/// `0065d3a0` (`ECX` = object): the base constructor `00449fd0` runs first.
+/// `0065d3a0` (`ECX` = object, one word: an allocator by value): the base constructor.
 const BASE_CONSTRUCT: u32 = 0x0065_d3a0;
 /// `0044a240` (`ECX` = object, one word): run last by `00449fd0` with 0.
 const FINISH: u32 = 0x0044_a240;
@@ -22,14 +22,18 @@ const COMBINE: u32 = 0x0044_a1a0;
 // Translation incomplete: 00449fd0 - the exception-unwinding frame (FS:[0]) is not translated.
 /// The engine map gives it no name. `thiscall`, no stack arguments, answers
 /// `this`: calls `006815c0` with the address of a stack slot holding `this`
-/// (the compiler pushed `ECX` and passed `ESP`), then `0065d3a0` on the
-/// object, then `0044a240` on it with 0. The exception-unwinding frame is not
+/// (the compiler pushed `ECX` and passed `ESP`), then `0065d3a0` on the object with that
+/// slot's word as its one stack argument (the push stays for it), then `0044a240` on it with
+/// 0. The exception-unwinding frame is not
 /// translated.
 pub fn fn_00449fd0(e: &mut Engine, this: Ptr) -> Ptr {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), this.addr());
         e.call(ANSWER_THIS, &args![slot]);
-        e.call(BASE_CONSTRUCT, &args![this]);
+        // The pushed word stays on the stack as 0065d3a0's by-value argument (it pops it,
+        // `RET 4`).
+        let argument = e.mem.u32(slot.addr());
+        e.call(BASE_CONSTRUCT, &args![this, argument]);
         e.call(FINISH, &args![this, 0u32]);
     });
     this
@@ -119,7 +123,7 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let order: Vec<u32> = log[1..].iter().map(|c| c.0).collect();
         assert_eq!(order, vec![ANSWER_THIS, BASE_CONSTRUCT, FINISH]);
-        assert_eq!(log[2].1, vec![0x7000]);
+        assert_eq!(log[2].1, vec![0x7000, 0x7000]);
         assert_eq!(log[3].1, vec![0x7000, 0]);
     }
 
