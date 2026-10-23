@@ -1091,14 +1091,15 @@ const PAIR_TEXTURE_011F95E4: u32 = 0x011f_95e4;
 const PAIR_TEXTURE_011F95E8: u32 = 0x011f_95e8;
 
 // Translated from 00b7cfb0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with one word, the pass type.
+/// Unnamed in the engine map (`shadowlightshader.cpp`), a vtable slot (`thiscall`, `RET 4`; `this` is
+/// not read; its callers 00bcc590 and 00bce800 pass it) with one word, the pass type.
 /// The textures `011f95e4` and `011f95e8` go to a pair of the current pass's stages chosen by
 /// the type (the exe's two jump tables): stages 2 and 3 for 0x94 and 0x1f3; 6 and 7 for 0xa0 to
 /// 0xa2, 0xa6 to 0xa8, 0xb6 to 0xb8, 0xbc to 0xbe, 0x10a to 0x10c, 0x110 to 0x112, 0x115, 0x121,
 /// 0x122, 0x126 to 0x128 and 0x12b; 5 and 6 for 0xe0, 0xe1, 0xe5, 0xe6, 0xf2, 0xf3, 0xf7 and
 /// 0xf8; 4 and 5 for 0x160, 0x161, 0x163 and 0x164; 14 and 15 for every fourth type from 0x1f8
 /// to 0x22c; none for other types.
-pub fn fn_00b7cfb0(e: &mut Engine, pass_type: u32) {
+pub fn fn_00b7cfb0(e: &mut Engine, _this: Ptr, pass_type: u32) {
     let first = match pass_type {
         0x94 | 0x1f3 => 2u32,
         0xa0..=0xa2
@@ -4887,7 +4888,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_b930,
             shadow_light_shader_setup_geometry_constants_shadow_proj(Ptr, u32, Ptr)
         ),
-        entry!(0x00b7_cfb0, fn_00b7cfb0(u32)),
+        entry!(0x00b7_cfb0, fn_00b7cfb0(Ptr, u32)),
         entry!(
             0x00b7_b730,
             shadow_light_shader_setup_geometry_constants_obj_to_cube(Ptr, Ptr, u32, u32, u32)
@@ -5720,7 +5721,7 @@ mod batch2_tests {
             for stage in &stages {
                 e.mem.set_u32(stage + 8, 0);
             }
-            e.call(0x00b7_cfb0, &args![pass_type]);
+            e.call(0x00b7_cfb0, &args![0u32, pass_type]);
             assert_eq!(e.mem.u32(stages[first] + 8), 0x0e00_00e4, "{pass_type:#x}");
             assert_eq!(e.mem.u32(stages[first + 1] + 8), 0x0e00_00e8);
         }
@@ -5728,7 +5729,7 @@ mod batch2_tests {
             e.mem.set_u32(stage + 8, 0);
         }
         for pass_type in [0x95u32, 0x1fd, 0x22d, 0x162] {
-            e.call(0x00b7_cfb0, &args![pass_type]);
+            e.call(0x00b7_cfb0, &args![0u32, pass_type]);
         }
         assert!(stages.iter().all(|stage| e.mem.u32(stage + 8) == 0));
     }
