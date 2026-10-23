@@ -1363,7 +1363,7 @@ mod n038_tests {
             assert_eq!(e.mem.u8(this + 0xd), 0x80);
             e.mem.set_u8(this + 0xd, 0xff);
             e.call(addr, &args![this, 0u32]);
-            assert_eq!(e.mem.u8(this + 0xd), 0xff & !bit);
+            assert_eq!(e.mem.u8(this + 0xd), !bit);
         }
     }
 
