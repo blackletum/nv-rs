@@ -12,6 +12,8 @@
 //!   `Do_SetCameraData` `00e6c780` in `NiDX9Renderer::Initialize` `00e72e60`.
 //! - `D3DXMatrixMultiplyTranspose` (slot `00fdf410`, thunk `00ee6dfe`): first reached
 //!   by `00e83db0` < `00e826d0` < `00bca980` (a shader pass's set-up, in `00b994f0`).
+//! - `D3DXMatrixTranspose` (slot `00fdf42c`, thunk `00ee6dd4`): written ahead, from the same
+//!   measurement.
 
 use crate::{Engine, Ptr};
 
@@ -117,6 +119,28 @@ pub fn matrix_multiply_transpose(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> 
 /// The transpose of a row-major matrix: word `4 * i + j` from word `4 * j + i`.
 fn transpose(m: &[u32; 16]) -> [u32; 16] {
     std::array::from_fn(|n| m[4 * (n % 4) + n / 4])
+}
+
+// Platform: replaces d3dx9_38.dll D3DXMatrixTranspose (import)
+/// `D3DXMatrixTranspose(out, m)` (stdcall): `out[i][j] = m[j][i]`, each word copied as a float
+/// load and store would copy it (a signalling NaN comes out quiet), except that with `out` the
+/// same matrix as `m` the diagonal is not written (it keeps its bits). All 4000 measured calls
+/// (`measure/d3dx-functions-2026-10-22.tsv`, both control words, `out` = `m` and not) match
+/// this; answers `out`.
+pub fn matrix_transpose(e: &mut Engine, out: Ptr, m: Ptr) -> u32 {
+    let t = transpose(&matrix(e, m.addr()));
+    for (n, w) in t.iter().enumerate() {
+        if out == m && n % 5 == 0 {
+            continue;
+        }
+        let quiet = if w & 0x7fff_ffff > 0x7f80_0000 {
+            w | 0x0040_0000
+        } else {
+            *w
+        };
+        e.mem.set_u32(out.addr().wrapping_add(4 * n as u32), quiet);
+    }
+    out.addr()
 }
 
 /// `D3DXERR_INVALIDDATA`.
@@ -666,6 +690,37 @@ mod tests {
                 (f[1].to_string(), words(f[3]), words(f[4]), words(f[5]))
             })
             .collect()
+    }
+
+    #[test]
+    fn transpose_matches_the_measured_dll_bit_for_bit() {
+        let text = include_str!("../../../data/d3dx/matrix_transpose.tsv");
+        let words = |t: &str| -> [u32; 16] {
+            let v: Vec<u32> = t
+                .split(' ')
+                .map(|w| u32::from_str_radix(w, 16).unwrap())
+                .collect();
+            v.try_into().unwrap()
+        };
+        let mut n = 0;
+        for line in text.lines().filter(|l| l.starts_with("MatrixTranspose")) {
+            let f: Vec<&str> = line.split('\t').collect();
+            let (m, want) = (words(f[3]), words(f[4]));
+            let mut e = Engine::new();
+            let at = e.mem.alloc(64);
+            for (i, w) in m.iter().enumerate() {
+                e.mem.set_u32(at + 4 * i as u32, *w);
+            }
+            let out = if f[1] == "out=in" {
+                at
+            } else {
+                e.mem.alloc(64)
+            };
+            assert_eq!(matrix_transpose(&mut e, Ptr::new(out), Ptr::new(at)), out);
+            assert_eq!(matrix(&e, out), want, "{} {m:08x?}", f[1]);
+            n += 1;
+        }
+        assert!(n > 300);
     }
 
     #[test]
