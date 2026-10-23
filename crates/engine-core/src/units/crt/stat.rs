@@ -32,6 +32,9 @@ const ISMBBLEAD: u32 = 0x00ed_5c8d;
 /// `__strlwr_s_l` and its body `_strlwr_s_l_stat` (cdecl: string, size, locale / `_LocaleUpdate`).
 const STRLWR_S_L: u32 = 0x00ec_8fb7;
 const STRLWR_S_L_STAT: u32 = 0x00ec_8e34;
+/// `__mbsdec_l` (cdecl: start, position, locale) and `_mbsdec`.
+const MBSDEC_L: u32 = 0x00ed_5ca5;
+const MBSDEC: u32 = 0x00ed_5d3e;
 const GETDRIVE: u32 = 0x00ed_74ad;
 const FULLPATH_HELPER: u32 = 0x00ec_91dc;
 const STRLEN: u32 = 0x00ec_6130;
@@ -221,6 +224,51 @@ pub fn ismbbtype_l(e: &mut Engine, locale: u32, c: u32, ctype_mask: u32, mbctype
 /// _MLEAD (4))`.
 pub fn ismbblead(e: &mut Engine, c: u32) -> u32 {
     e.call(ISMBBTYPE_L, &args![0u32, c, 0u32, 4u32]).u32()
+}
+
+// Translated from 00ed5ca5 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__mbsdec_l` (LIBCMT/mbsdec.c, Ghidra library match), cdecl: (start, position, locale):
+/// the character before `position`. A null start or position gives `errno` `EINVAL`, the
+/// invalid-parameter handler and null; a position not after the start gives null (neither
+/// with the locale taken). With the locale taken (`_LocaleUpdate`): on a single-byte code page
+/// `position - 1`; otherwise it counts back over the lead bytes before `position - 1` (down to
+/// the start) and answers `position - 1`, or `position - 2` when an odd number of bytes lay
+/// between (so a two-byte character is stepped over whole).
+pub fn mbsdec_l(e: &mut Engine, start: Ptr, position: Ptr, locale: u32) -> Ptr {
+    let (start, position) = (start.addr(), position.addr());
+    if start == 0 || position == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return Ptr::new(0);
+    }
+    if start >= position {
+        return Ptr::new(0);
+    }
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let mbcinfo = e.mem.u32(update + 4);
+        let result = if e.mem.u32(mbcinfo + 8) == 0 {
+            position - 1
+        } else {
+            let mut at = position - 1;
+            loop {
+                at = at.wrapping_sub(1);
+                if start > at || !lead_byte(e, mbcinfo, e.mem.u8(at)) {
+                    break;
+                }
+            }
+            position - 1 - (position.wrapping_sub(at) & 1)
+        };
+        locale_update_release(e, update);
+        Ptr::new(result)
+    })
+}
+
+// Translated from 00ed5d3e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_mbsdec` (LIBCMT/mbsdec.c), cdecl: (start, position): `__mbsdec_l` with no locale.
+pub fn mbsdec(e: &mut Engine, start: Ptr, position: Ptr) -> Ptr {
+    e.call(MBSDEC_L, &args![start, position, 0u32]).ptr()
 }
 
 // Translated from 00ec8fb7 (disassembled, FalloutNV.exe 1.4.0.525)
@@ -800,6 +848,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_5c8d, ismbblead(u32) -> u32),
         entry!(0x00ec_8fb7, strlwr_s_l(Ptr, u32, u32) -> u32),
         entry!(0x00ec_8feb, strlwr_s(Ptr, u32) -> u32),
+        entry!(0x00ed_5ca5, mbsdec_l(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x00ed_5d3e, mbsdec(Ptr, Ptr) -> Ptr),
         entry!(0x00ee_248c, mbsrchr(Ptr, u32) -> Ptr),
         entry!(0x00ee_23d0, mbsrchr_l(Ptr, u32, u32) -> Ptr),
         entry!(0x00ed_7185, dtoxmode(u8, Ptr) -> u32),
@@ -842,6 +892,16 @@ mod tests {
         let at = e.mem.alloc(s.len() as u32 + 1);
         e.mem.set_cstr(at, s);
         at
+    }
+
+    #[test]
+    fn mbsdec_steps_back_over_a_two_byte_character_whole() {
+        let (mut e, _) = engine();
+        // TEST DATA: 0x81 is the doubled locale's lead byte.
+        let s = text(&mut e, b"ab\x81\x82c");
+        assert_eq!(e.call(MBSDEC, &args![s, s + 4]).u32(), s + 2, "before c: the pair");
+        assert_eq!(e.call(MBSDEC, &args![s, s + 2]).u32(), s + 1);
+        assert_eq!(e.call(MBSDEC, &args![s, s]).u32(), 0);
     }
 
     #[test]
