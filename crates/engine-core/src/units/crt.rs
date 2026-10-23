@@ -120,16 +120,6 @@ fn invalid_parameter(what: &str) -> ! {
     panic!("CRT invalid parameter: {what}")
 }
 
-// Platform: replaces 00ec65a6 (_strcpy_s, LIBCMT)
-pub fn strcpy_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
-    let s = e.mem.cstr(src.addr());
-    if dst.is_null() || s.len() as u32 >= size {
-        invalid_parameter("strcpy_s");
-    }
-    e.mem.set_cstr(dst.addr(), &s);
-    0
-}
-
 // Platform: replaces 00ec6bd2 (_strcat_s, LIBCMT)
 pub fn strcat_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
     let mut d = e.mem.cstr(dst.addr());
@@ -6901,7 +6891,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed0d24, calloc_crt(u32, u32) -> Ptr),
         entry!(0x00ec6130, strlen(Ptr) -> u32),
         entry!(0x00ec6370, strcpy(Ptr, Ptr) -> Ptr),
-        entry!(0x00ec65a6, strcpy_s(Ptr, u32, Ptr) -> i32),
         entry!(0x00ec6bd2, strcat_s(Ptr, u32, Ptr) -> i32),
         entry!(0x00ec8d5f, strncpy_s(Ptr, u32, Ptr, u32) -> i32),
         entry!(0x00ec8a19, strncmp(Ptr, Ptr, u32) -> i32),
@@ -7223,15 +7212,6 @@ mod tests {
             80
         );
         assert_eq!(e.mem.cstr(buf.addr()), b"Goodspr");
-    }
-
-    #[test]
-    #[should_panic(expected = "strcpy_s")]
-    fn strcpy_s_overflow_ends_the_program() {
-        let mut e = Engine::new();
-        let a = cstr(&mut e, b"Primm");
-        let buf: Ptr = Ptr::new(e.mem.alloc(4));
-        e.call(0x00ec_65a6, &args![buf, 4u32, a]);
     }
 
     #[test]

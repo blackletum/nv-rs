@@ -6,10 +6,7 @@
 //! handler, `malloc` and `_freea` are in `crt.rs`. Every call is made by address, as the exe
 //! makes it, so a test can double each one.
 //!
-//! `strcpy_s` (`00ec65a6`) is also registered by `crt.rs`'s platform stand-in of the same
-//! name; an address registered twice stops `Engine::new`, so the translation here is not in
-//! this file's `funcs()` until that stand-in's entry is taken out, and the callers (this file
-//! included) reach the stand-in by address meanwhile.
+//! `strcpy_s` (`00ec65a6`) replaces the platform stand-in `crt.rs` had for it (taken out).
 
 use super::*;
 
@@ -262,6 +259,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ec_8e34, strlwr_s_l_stat(Ptr, u32, u32) -> i32),
         entry!(0x00ed_5d55, strnlen(Ptr, u32) -> u32),
+        entry!(0x00ec_65a6, strcpy_s(Ptr, u32, Ptr) -> i32),
     ]
 }
 
