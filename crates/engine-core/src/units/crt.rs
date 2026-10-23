@@ -16,6 +16,7 @@ use crate::prelude::*;
 
 pub mod fpinit;
 pub mod lowio;
+pub mod math;
 pub mod scanf;
 pub mod startup;
 pub mod stat;
@@ -7043,6 +7044,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ];
     table.extend(fpinit::funcs());
     table.extend(lowio::funcs());
+    table.extend(math::funcs());
     table.extend(scanf::funcs());
     table.extend(stdio::funcs());
     table.extend(string::funcs());
