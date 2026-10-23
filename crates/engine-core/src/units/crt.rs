@@ -2462,24 +2462,6 @@ pub fn time64(e: &mut Engine, out: Ptr) -> u64 {
     result
 }
 
-/// The state of `rand`, per engine (MSVC keeps it per thread; one thread
-/// here). Starts at 1 like MSVC's `holdrand`.
-const RAND_STATE: u32 = 0x0e00;
-
-// Platform: replaces 00ecadb8 (_rand, LIBCMT)
-/// MSVC's linear congruential generator: `holdrand * 214013 + 2531011`,
-/// bits 16 to 30 returned.
-pub fn rand(e: &mut Engine) -> i32 {
-    let at = e.tls() + RAND_STATE;
-    let mut s = e.mem.u32(at);
-    if s == 0 {
-        s = 1;
-    }
-    s = s.wrapping_mul(214_013).wrapping_add(2_531_011);
-    e.mem.set_u32(at, s);
-    ((s >> 16) & 0x7fff) as i32
-}
-
 // ---- Program ---------------------------------------------------------------
 
 // Platform: replaces 00ec658f (_atexit, LIBCMT) with its callee 00ec6468 (__onexit_nolock)
@@ -6368,7 +6350,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
-        entry!(0x00ecadb8, rand() -> i32),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
         (0x00eccd99, doexit_entry as AbiFn),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
@@ -6622,7 +6603,11 @@ mod tests {
         assert_eq!(e.call(0x00ec_a6d3, &args![s]).i32(), -42);
         let f = cstr(&mut e, b"1.5e2 rest");
         assert_eq!(e.call(0x00ec_a573, &args![f]).f64(), 150.0);
-        // MSVC rand from the default seed: 41, 18467, 6334.
+        // MSVC rand from the default seed: 41, 18467, 6334. The thread data is a block with
+        // the seed `_initptd` stores (+0x14 = 1), answered by `_getptd` (`00ed11de`).
+        let thread = e.mem.alloc(0x400);
+        e.mem.set_u32(thread + 0x14, 1);
+        e.register_double(0x00ed_11de, move |_, _| thread.into_ret());
         let r: Vec<i32> = (0..3).map(|_| e.call(0x00ec_adb8, &[]).i32()).collect();
         assert_eq!(r, vec![41, 18467, 6334]);
     }

@@ -5,7 +5,7 @@
 //! `00ecdffb`, `_exit` `00eccec5`, `__crtCorExitProcess` `00eccc7e`), the image checks
 //! (`_IsNonwritableInCurrentImage` `00eddcc0`, `_ValidateImageBase` `00eddc30`,
 //! `_FindPESection` `00eddc70`), `__realloc_crt` (`00ed0d70`), the locale accessors
-//! `___pctype_func` (`00ed08c8`) and `___lc_handle_func` (`00ed0cb9`), `srand` (`00ecada6`),
+//! `___pctype_func` (`00ed08c8`) and `___lc_handle_func` (`00ed0cb9`), `srand` (`00ecada6`), `rand` (`00ecadb8`),
 //! `_finite` (`00ec7595`), `_isnan` (`00ec75b1`), `_CIfmod` (`00ec913a`), `__strupr_s`
 //! (`00ecbc5b`), `___ascii_strnicmp` (`00ed5bc0`), the 16-byte aligned stack probe
 //! (`00ec5ec0`), the `eh vector copy constructor iterator` (`00ecaebb`) with its `__finally`
@@ -174,11 +174,25 @@ pub fn fsopen_finally(e: &mut Engine, stream: u32) {
 
 // Translated from 00ecada6 (disassembled, FalloutNV.exe 1.4.0.525)
 /// `srand` (Ghidra's function ID), cdecl: the seed is stored in the thread's data (`_getptd`
-/// +0x14, the `rand` state). The engine's `rand` (`00ecadb8`) is still the platform stand-in in
-/// `crt.rs`, which keeps its state elsewhere, so the seed does not reach it yet.
+/// +0x14, the `rand` state).
 pub fn srand(e: &mut Engine, seed: u32) {
     let ptd = e.call(GETPTD_ADDR, &args![]).u32();
     e.mem.set_u32(ptd.wrapping_add(0x14), seed);
+}
+
+// Translated from 00ecadb8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `rand` (Ghidra's function ID), no arguments: the thread's state (`_getptd` +0x14, which
+/// `_initptd` starts at 1 and `srand` sets) becomes `state * 0x343fd + 0x269ec3` (32-bit), and
+/// its bits 16 to 30 are answered.
+pub fn rand(e: &mut Engine) -> i32 {
+    let ptd = e.call(GETPTD_ADDR, &args![]).u32();
+    let state = e
+        .mem
+        .u32(ptd.wrapping_add(0x14))
+        .wrapping_mul(0x343fd)
+        .wrapping_add(0x269ec3);
+    e.mem.set_u32(ptd.wrapping_add(0x14), state);
+    ((state >> 16) & 0x7fff) as i32
 }
 
 // Translated from 00ecaebb (disassembled, FalloutNV.exe 1.4.0.525)
@@ -751,6 +765,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_9886, fprintf_finally(u32)),
         entry!(0x00ec_9a3d, fsopen_finally(u32)),
         entry!(0x00ec_ada6, srand(u32)),
+        entry!(0x00ec_adb8, rand() -> i32),
         entry!(
             0x00ec_aebb,
             eh_vector_copy_constructor_iterator(u32, u32, u32, i32, u32, u32)
@@ -967,6 +982,26 @@ mod tests {
         sopen_helper_finally(&mut e, 1, 0x16, result);
         assert_eq!(e.mem.u8(osfile), 0x80);
         assert_eq!(calls(&e, UNLOCK_FHANDLE_ADDR), vec![vec![0x23], vec![0x23]]);
+    }
+
+    #[test]
+    fn rand_steps_the_thread_seed_srand_sets() {
+        let mut e = engine(&[]);
+        let ptd = e.mem.alloc(0x100);
+        answer(&mut e, GETPTD_ADDR, ptd);
+        // The seed `_initptd` leaves: MSVC's sequence 41, 18467, 6334.
+        e.mem.set_u32(ptd + 0x14, 1);
+        let r: Vec<i32> = (0..3)
+            .map(|_| e.call(0x00ec_adb8, &args![]).i32())
+            .collect();
+        assert_eq!(r, vec![41, 18467, 6334]);
+        srand(&mut e, 1);
+        assert_eq!(rand(&mut e), 41);
+        // The state wraps at 32 bits.
+        e.mem.set_u32(ptd + 0x14, 0xffff_ffff);
+        let state = 0xffff_ffff_u32.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+        assert_eq!(rand(&mut e), ((state >> 16) & 0x7fff) as i32);
+        assert_eq!(e.mem.u32(ptd + 0x14), state);
     }
 
     #[test]
