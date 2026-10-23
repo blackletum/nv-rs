@@ -2269,27 +2269,6 @@ pub fn eh_vector_constructor_iterator(
     }
 }
 
-// Platform: replaces 00eca1d0 (acos, LIBCMT)
-pub fn acos(_e: &mut Engine, x: f64) -> f64 {
-    x.acos()
-}
-
-/// `_CIacos` (`00eca1d0`, argument in `ST0`): the register-argument entry that stands in for the
-/// shared bodies.
-const CI_ACOS: u32 = 0x00ec_a1d0;
-
-// Translated from 00eca190 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `acos` (LIBCMT, `cdecl`, one double on the stack, the result in `ST0`). It makes the same
-/// choice as `_CIacos` (`00eca1d0`): with `__use_sse2_mathfcns` (`01270a64`) set and every
-/// MXCSR and x87 exception masked it jumps to the SSE2 body (`00ed9b18`, which loads the stack
-/// argument and falls into `_CIacos`'s `00ed9b1e`), otherwise it loads the argument from the
-/// stack (`00ed27c5`) and falls into the x87 body `00eca228` that `_CIacos` calls. Only where the
-/// argument comes from differs, so the bodies are reached through `_CIacos`, which stands in
-/// for them (`Platform`).
-pub fn acos_cdecl(e: &mut Engine, x: f64) -> f64 {
-    e.call(CI_ACOS, &args![x]).f64()
-}
-
 /// Where the engine keeps the running thread's x87 control word (`FSTCW`/`FLDCW`): a word of
 /// the thread's block past the exe's `.tls` data, holding `0x10000 | cw` once set; zero means
 /// the control word every thread starts with, `0x027F` (all exceptions masked, 53-bit
@@ -2333,14 +2312,6 @@ pub fn ctrlfp(e: &mut Engine, newctrl: u32, mask: u32) -> i32 {
     let new = (!mask & u32::from(old)) | (newctrl & mask);
     set_x87_control_word(e, new as u16);
     i32::from(old as i16)
-}
-
-// Platform: replaces 00ec9050 (x87 arctangent, LIBCMT; the name is unconfirmed): argument
-// in ST0. Dispatches on the SSE2 flag (`01270a64`) and the masked exception state to the
-// SSE2 routine `00ed5d80`, otherwise computes `FPATAN` of the argument and 1 through
-// `00ec90a8`; the error handling for NaN and infinite arguments is not modelled.
-pub fn ci_atan(_e: &mut Engine, v: f64) -> f64 {
-    v.atan()
 }
 
 // Platform: replaces 00ec9760 (atan2, LIBCMT): `cdecl`, `y` then `x` as doubles on the stack, the
@@ -6950,10 +6921,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00ec782f,
             eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
         ),
-        entry!(0x00eca1d0, acos(f64) -> f64),
-        entry!(0x00eca190, acos_cdecl(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
-        entry!(0x00ec9050, ci_atan(f64) -> f64),
         entry!(0x00ec9760, atan2(f64, f64) -> f64),
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
@@ -7509,14 +7477,6 @@ mod tests {
         let mut e = Engine::new();
         let f = cstr(&mut e, b"x");
         e.call(0x00eca38d, &args![0u32, 4u32, f]);
-    }
-
-    #[test]
-    fn the_arctangent_takes_its_argument_in_st0() {
-        let mut e = Engine::new();
-        let r = e.call(0x00ec9050, &args![1.0f64]).f64();
-        assert!((r - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
-        assert!(e.call(0x00ec9050, &args![f64::NAN]).f64().is_nan());
     }
 
     #[test]

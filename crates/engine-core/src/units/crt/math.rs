@@ -941,7 +941,10 @@ fn os_sse_probe_filter(code: u32) -> u32 {
 // function says so). The register stack of the caller below the values a body works on is
 // untouched, as `FSAVE`/`FRSTOR` keep it.
 
-use crate::x87::{x87_fabs, x87_fadd, x87_fchs, x87_fcom, x87_fmul, x87_fsub};
+use crate::x87::{
+    x87_fabs, x87_fadd, x87_fchs, x87_fcom, x87_fld_constant, x87_fmul, x87_fsqrt, x87_fsub,
+    X87Constant,
+};
 
 /// The x87 register stack of one routine, `ST0` last.
 #[derive(Default)]
@@ -3068,6 +3071,1246 @@ fn pow_sse2_scaled(
     x87_load64(e.mem.u64(result))
 }
 
+// ---- acos, asin, atan: the entries and the x87 bodies ------------------------------------------
+
+/// The SSE2 bodies: `acos` (`00ed9b00` register, `00ed9b18` stack), `asin` (`00ed7720`,
+/// `00ed7738`) and `atan` (`00ed5d80`, `00ed5d98`).
+const ACOS_SSE2_REGISTER: u32 = 0x00ed_9b00;
+const ACOS_SSE2: u32 = 0x00ed_9b18;
+const ASIN_SSE2: u32 = 0x00ed_7738;
+const ATAN_SSE2_REGISTER: u32 = 0x00ed_5d80;
+const ATAN_SSE2: u32 = 0x00ed_5d98;
+/// The x87 helpers of `trig.rs` the bodies call: `00ed2808` (the stored double's exponent bits)
+/// and `00ed27ac` (a NaN's error type).
+const EXPONENT_BITS: u32 = 0x00ed_2808;
+const NAN_ERROR_TYPE: u32 = 0x00ed_27ac;
+/// The names and operation codes the bodies' error reports pass: `"acos"` (`011c1970`, 0xd),
+/// `"asin"` (`011c1930`, 0xe) and `"atan"` (`011c18d0`, 0xf).
+const ACOS_NAME: u32 = 0x011c_1970;
+const ASIN_NAME: u32 = 0x011c_1930;
+const ATAN_NAME: u32 = 0x011c_18d0;
+const ACOS_OPERATION: u32 = 0xd;
+const ASIN_OPERATION: u32 = 0xe;
+const ATAN_OPERATION: u32 = 0xf;
+/// The extended constant `asin` and `atan` load for `|x| = 1` and an infinity (`011c1d0a`,
+/// pi/2 in the exe), and the control word `atan`'s body loads (`010f2a98`).
+const HALF_PI_EXTENDED: u32 = 0x011c_1d0a;
+const ATAN_CONTROL_WORD: u32 = 0x010f_2a98;
+
+/// The register entries' x87 path (`SUB ESP, 0xc; FST double ptr [ESP]; CALL 00ed2808; CALL
+/// <body>`): `ST0` (as `FLD` leaves a double) stored, its exponent bits and `ZF` from
+/// `00ed2808`, then the body on the register and the stored double.
+fn register_x87(
+    e: &mut Engine,
+    st0: f64,
+    body: fn(&mut Engine, bool, u32, X87Ext, u32, u32) -> X87Ext,
+) -> f64 {
+    let register = X87Ext::load64(st0);
+    let stored = register.store64().to_bits();
+    let (low, high) = (stored as u32, (stored >> 32) as u32);
+    let eax = e.call(EXPONENT_BITS, &args![low, high]).u32();
+    let zf = high & 0x7ff0_0000 == 0x7ff0_0000;
+    body(e, zf, eax, register, low, high).store64()
+}
+
+/// The stack entries' x87 path (`LEA EDX, [ESP+4]; CALL 00ed27c5`, falling into the body): the
+/// double loaded by `__fload_withFB` (a signalling NaN kept), its `EAX` and `ZF`.
+fn stack_x87(
+    e: &mut Engine,
+    x: f64,
+    body: fn(&mut Engine, bool, u32, X87Ext, u32, u32) -> X87Ext,
+) -> f64 {
+    let bits = x.to_bits();
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    let (eax, zf, register) = e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), bits);
+        let mut fpu = Fpu::default();
+        let (eax, zf) = fload_with_fb_at(e, &mut fpu, slot.addr());
+        (eax, zf, fpu.pop())
+    });
+    body(e, zf, eax, register, low, high).store64()
+}
+
+/// The end of the bodies' result paths: the fast exit with the math-error switch set, else
+/// `__math_exit` (`trig.rs`) with the operation and the name.
+fn inverse_exit(
+    e: &mut Engine,
+    result: X87Ext,
+    saved: u16,
+    operation: u32,
+    name: u32,
+    low: u32,
+    high: u32,
+) -> X87Ext {
+    if e.global::<u32>(ERROR_SWITCH) != 0 {
+        fast_exit(e, saved);
+        return result;
+    }
+    let st0 = result.store64();
+    let r = super::trig::math_exit(e, operation, name, st0, u32::from(saved), 0, low, high);
+    X87Ext::load64(r)
+}
+
+/// The end of the bodies' error paths, with the error type in `EAX`: the fast exit with the
+/// switch set, else `__startOneArgErrorHandling` (`trig.rs`).
+#[allow(clippy::too_many_arguments)]
+fn inverse_error(
+    e: &mut Engine,
+    kind: u32,
+    result: X87Ext,
+    saved: u16,
+    operation: u32,
+    name: u32,
+    low: u32,
+    high: u32,
+) -> X87Ext {
+    if e.global::<u32>(ERROR_SWITCH) != 0 {
+        fast_exit(e, saved);
+        return result;
+    }
+    let st0 = result.store64();
+    let r = super::trig::start_one_arg_error_handling(
+        e,
+        kind,
+        name,
+        operation,
+        st0,
+        u32::from(saved),
+        0,
+        low,
+        high,
+    );
+    X87Ext::load64(r)
+}
+
+/// An infinity or NaN argument of the bodies (`ZF` set, `EAX` the high word): a NaN (a fraction
+/// bit in `EAX & 0xfffff` or the low word: `TEST EAX, 0xfffff; JNZ; CMP dword ptr [ESP+8], 0;
+/// JNZ`) gets its error type and `ST0` from `00ed27ac`; `None` for an infinity.
+fn nan_type(e: &mut Engine, eax: u32, register: X87Ext, low: u32) -> Option<(u32, X87Ext)> {
+    if eax & 0xf_ffff != 0 || low != 0 {
+        let st0 = register.store64();
+        let r = e.call(NAN_ERROR_TYPE, &args![eax, st0]);
+        return Some((r.eax, ext_of_double(r.st0.to_bits())));
+    }
+    None
+}
+
+// Translated from 00eca190 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `acos` (LIBCMT; the name `"acos"` its error reports pass, `011c1970`), cdecl, the double on
+/// the stack, the result in `ST0`. With `__use_sse2_mathfcns` set and every `MXCSR` and x87
+/// exception masked (`super::sse2_math_available`) it jumps to the SSE2 body `00ed9b18`;
+/// otherwise it loads the argument with `__fload_withFB` and falls into the x87 body `00eca228`.
+pub fn acos(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(ACOS_SSE2, &args![x]).f64();
+    }
+    stack_x87(e, x, acos_x87)
+}
+
+// Translated from 00eca1d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIacos` (the register form of `acos`; no label in the map, named from its body), `ST0` in,
+/// `ST0` out: the same test picks the SSE2 body `00ed9b00`; otherwise `ST0` is stored, `00ed2808`
+/// gives `EAX` and `ZF`, and the x87 body `00eca228` runs.
+pub fn ci_acos(e: &mut Engine, st0: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(ACOS_SSE2_REGISTER, &args![st0]).f64();
+    }
+    register_x87(e, st0, acos_x87)
+}
+
+// Translated from 00eca228 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `acos`'s x87 body (no label; Ghidra gives it no name): `ZF` (the argument's exponent all
+/// ones), `EAX` (its exponent bits, or the high word then), `ST0` the argument, and the stored
+/// double. It saves the control word and, for a finite argument, runs under `00ed2795`'s unless
+/// it was `0x027f`. `|x| < 1` (`EAX` below `0x3ff00000`): `FPATAN` of `sqrt((1 + x)(1 - x))`
+/// over `x` (`FLD1; FADD; FLD1; FSUB; FMULP; FSQRT; FXCH; FPATAN`), leaving through
+/// `__math_exit` (operation 0xd, `"acos"`). `|x| = 1`: 0 (`FLDZ`) or pi (`FLDPI`) for -1, the
+/// same exit. Anything larger, or an infinity, is a domain error with the indefinite NaN (type
+/// 1); a NaN gets its type from `00ed27ac`; errors go to `__startOneArgErrorHandling`. With the
+/// math-error switch set every path leaves through the fast exit.
+pub fn fn_00eca228(e: &mut Engine, zf: bool, eax: u32, st0: f64, low: u32, high: u32) -> f64 {
+    acos_x87(e, zf, eax, ext_of_double(st0.to_bits()), low, high).store64()
+}
+
+fn acos_x87(e: &mut Engine, zf: bool, eax: u32, x: X87Ext, low: u32, high: u32) -> X87Ext {
+    let (operation, name) = (ACOS_OPERATION, ACOS_NAME);
+    // PUSH EDX; FSTCW word ptr [ESP].
+    let saved = x87_control_word(e);
+    let (kind, result) = if zf {
+        // 00eca29c
+        match nan_type(e, eax, x, low) {
+            Some(found) => found,
+            None => (1, load_extended(e, INDEFINITE)),
+        }
+    } else {
+        if saved != 0x027f {
+            fn_00ed2795(e, u32::from(saved));
+        }
+        if eax < 0x3ff0_0000 {
+            let one = X87Ext::load64(1.0);
+            // FLD1; FADD ST0, ST1; FLD1; FSUB ST0, ST2; FMULP; FSQRT; FXCH; FPATAN.
+            let sum = x87_fadd(one, x);
+            let difference = x87_fsub(one, x);
+            let root = x87_fsqrt(x87_fmul(sum, difference));
+            let result = x87_fpatan(root, x);
+            return inverse_exit(e, result, saved, operation, name, low, high);
+        }
+        if eax == 0x3ff0_0000 && (high & 0xf_ffff) | low == 0 {
+            // 00eca283: FSTP ST0; FLDPI for -1, FLDZ for 1.
+            let result = if high & 0x8000_0000 != 0 {
+                x87_fld_constant(X87Constant::Pi)
+            } else {
+                X87Ext::load64(0.0)
+            };
+            return inverse_exit(e, result, saved, operation, name, low, high);
+        }
+        // 00eca2aa
+        (1, load_extended(e, INDEFINITE))
+    };
+    inverse_error(e, kind, result, saved, operation, name, low, high)
+}
+
+// Translated from 00ec9610 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `asin` (LIBCMT; Ghidra's function ID gives this body a conflicting name, the name `"asin"`
+/// its error reports pass at `011c1930` decides), cdecl, the double on the stack, the result in
+/// `ST0`: the same test picks the SSE2 body `00ed7738`; otherwise `__fload_withFB` and the x87
+/// body `00ec96a8`.
+pub fn asin(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(ASIN_SSE2, &args![x]).f64();
+    }
+    stack_x87(e, x, asin_x87)
+}
+
+// Translated from 00ec96a8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `asin`'s x87 body (no label; Ghidra gives it no name), with the inputs of `acos`'s
+/// (`fn_00eca228`): `|x| < 1` is `FPATAN` of `x` over `sqrt((1 + x)(1 - x))`, `|x| = 1` the
+/// extended constant at `011c1d0a` (pi/2), negated for -1, both through `__math_exit`
+/// (operation 0xe, `"asin"`); errors as `acos`'s.
+pub fn fn_00ec96a8(e: &mut Engine, zf: bool, eax: u32, st0: f64, low: u32, high: u32) -> f64 {
+    asin_x87(e, zf, eax, ext_of_double(st0.to_bits()), low, high).store64()
+}
+
+fn asin_x87(e: &mut Engine, zf: bool, eax: u32, x: X87Ext, low: u32, high: u32) -> X87Ext {
+    let (operation, name) = (ASIN_OPERATION, ASIN_NAME);
+    let saved = x87_control_word(e);
+    let (kind, result) = if zf {
+        // 00ec971c
+        match nan_type(e, eax, x, low) {
+            Some(found) => found,
+            None => (1, load_extended(e, INDEFINITE)),
+        }
+    } else {
+        if saved != 0x027f {
+            fn_00ed2795(e, u32::from(saved));
+        }
+        if eax < 0x3ff0_0000 {
+            let one = X87Ext::load64(1.0);
+            // FLD1; FADD ST0, ST1; FLD1; FSUB ST0, ST2; FMULP; FSQRT; FPATAN.
+            let sum = x87_fadd(one, x);
+            let difference = x87_fsub(one, x);
+            let root = x87_fsqrt(x87_fmul(sum, difference));
+            let result = x87_fpatan(x, root);
+            return inverse_exit(e, result, saved, operation, name, low, high);
+        }
+        if eax == 0x3ff0_0000 && (high & 0xf_ffff) | low == 0 {
+            // 00ec9701: AND ECX, 0x80000000; FSTP ST0; FLD tbyte [011c1d0a]; FCHS for -1.
+            let mut result = load_extended(e, HALF_PI_EXTENDED);
+            if high & 0x8000_0000 != 0 {
+                result = x87_fchs(result);
+            }
+            return inverse_exit(e, result, saved, operation, name, low, high);
+        }
+        // 00ec972a
+        (1, load_extended(e, INDEFINITE))
+    };
+    inverse_error(e, kind, result, saved, operation, name, low, high)
+}
+
+// Translated from 00ec9010 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan` (LIBCMT; Ghidra's function ID gives this body a conflicting name, the name `"atan"`
+/// its error reports pass at `011c18d0` decides), cdecl, the double on the stack, the result in
+/// `ST0`: the same test picks the SSE2 body `00ed5d98`; otherwise `__fload_withFB` and the x87
+/// body `00ec90a8`.
+pub fn atan(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(ATAN_SSE2, &args![x]).f64();
+    }
+    stack_x87(e, x, atan_x87)
+}
+
+// Translated from 00ec9050 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIatan` (the register form of `atan`; no label in the map, named from its body), `ST0` in,
+/// `ST0` out: the same test picks the SSE2 body `00ed5d80`; otherwise `ST0` is stored,
+/// `00ed2808` gives `EAX` and `ZF`, and the x87 body `00ec90a8` runs.
+pub fn ci_atan(e: &mut Engine, st0: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(ATAN_SSE2_REGISTER, &args![st0]).f64();
+    }
+    register_x87(e, st0, atan_x87)
+}
+
+// Translated from 00ec90a8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan`'s x87 body (no label; Ghidra gives it no name), with the inputs of `acos`'s
+/// (`fn_00eca228`). A finite argument runs under the control word at `010f2a98` (loaded with
+/// `FLDCW` unless the saved word is `0x027f`) and is `FPATAN` of `x` over 1, leaving through
+/// `__math_exit` (operation 0xf, `"atan"`). An infinity gives the extended pi/2 (`011c1d0a`),
+/// negated for -infinity, through the same exit, without changing the control word; a NaN gets
+/// its type from `00ed27ac` and goes to `__startOneArgErrorHandling`.
+pub fn fn_00ec90a8(e: &mut Engine, zf: bool, eax: u32, st0: f64, low: u32, high: u32) -> f64 {
+    atan_x87(e, zf, eax, ext_of_double(st0.to_bits()), low, high).store64()
+}
+
+fn atan_x87(e: &mut Engine, zf: bool, eax: u32, x: X87Ext, low: u32, high: u32) -> X87Ext {
+    let (operation, name) = (ATAN_OPERATION, ATAN_NAME);
+    let saved = x87_control_word(e);
+    if zf {
+        // 00ec90e5
+        if let Some((kind, result)) = nan_type(e, eax, x, low) {
+            return inverse_error(e, kind, result, saved, operation, name, low, high);
+        }
+        // FSTP ST0; FLD tbyte [011c1d0a]; TEST EAX, 0x80000000; FCHS.
+        let mut result = load_extended(e, HALF_PI_EXTENDED);
+        if eax & 0x8000_0000 != 0 {
+            result = x87_fchs(result);
+        }
+        return inverse_exit(e, result, saved, operation, name, low, high);
+    }
+    if saved != 0x027f {
+        let word = e.mem.u16(ATAN_CONTROL_WORD);
+        set_x87_control_word(e, word);
+    }
+    // FLD1; FPATAN.
+    let result = x87_fpatan(x, X87Ext::load64(1.0));
+    inverse_exit(e, result, saved, operation, name, low, high)
+}
+/// `ANDNPD dest, src`: `!dest & src`.
+fn andnpd(dest: Xmm, src: Xmm) -> Xmm {
+    [!dest[0] & src[0], !dest[1] & src[1]]
+}
+
+/// `CMPLTSD dest, src`: the low lane all ones when `dest < src` (ordered), else zero.
+fn cmpltsd(dest: Xmm, src: u64) -> Xmm {
+    let less = f64::from_bits(dest[0]) < f64::from_bits(src);
+    [if less { u64::MAX } else { 0 }, dest[1]]
+}
+
+/// A body's `___libm_error_support(&x, &x, &result, code)` with `XMM0`'s low lane in the result
+/// slot (`SUB ESP, 0x1c` and the pointers into it: the argument slot `[ESP+4]` twice), then the
+/// slot as the result (`MOVLPD` back, `FLD`).
+fn sse2_error_one(e: &mut Engine, argument: u32, xmm0: u64, code: u32) -> f64 {
+    e.with_stack(8, |e, slot| {
+        let result = slot.addr();
+        e.mem.set_u64(result, xmm0);
+        e.call(LIBM_ERROR_SUPPORT, &args![argument, argument, result, code]);
+        x87_load64(e.mem.u64(result))
+    })
+}
+
+/// `acos`'s SSE2 constants and tables, named by their addresses (`010fXXXX`): the masks and
+/// constants `010fae90` (also `ANDNPD`'s mask), `010faea0`, `010fae98`, `010faea8`, the
+/// polynomial coefficients `010fae38`, `010fae40`, `010fae48`, `010fae10` and the pairs
+/// `010fae50`, `010fae60`, `010fae70`, `010fadd0` (also two results, the low and high lanes
+/// added for a tiny argument) and `010fade0`, the results `010fadf0`/`010fadf8` of `|x| = 1`,
+/// and the tables `010fa5d0` (doubles) and `010f96d0` (pairs).
+const ACOS_AE90: u32 = 0x010f_ae90;
+const ACOS_AEA0: u32 = 0x010f_aea0;
+const ACOS_AE98: u32 = 0x010f_ae98;
+const ACOS_AEA8: u32 = 0x010f_aea8;
+const ACOS_AE38: u32 = 0x010f_ae38;
+const ACOS_AE40: u32 = 0x010f_ae40;
+const ACOS_AE48: u32 = 0x010f_ae48;
+const ACOS_AE10: u32 = 0x010f_ae10;
+const ACOS_AE50: u32 = 0x010f_ae50;
+const ACOS_AE60: u32 = 0x010f_ae60;
+const ACOS_AE70: u32 = 0x010f_ae70;
+const ACOS_ADD0: u32 = 0x010f_add0;
+const ACOS_ADE0: u32 = 0x010f_ade0;
+const ACOS_ADF0: u32 = 0x010f_adf0;
+const ACOS_TABLE_DOUBLES: u32 = 0x010f_a5d0;
+const ACOS_TABLE_PAIRS: u32 = 0x010f_96d0;
+
+// Translated from 00ed9b00 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `acos`'s SSE2 body (no label; Ghidra gives it no name), `ST0` in: a
+/// 16-byte aligned frame, `ST0` stored to it (`FSTP`, a signalling NaN quiet), `MOVQ XMM0` of
+/// it, and the core `00ed9b1e` called with the stored double above its return address.
+pub fn fn_00ed9b00(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        acos_sse2(e, slot.addr(), movq(stored.to_bits()))
+    })
+}
+
+// Translated from 00ed9b18 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `acos`'s SSE2 body (no label), cdecl: `MOVLPD XMM0, [ESP+4]` (the high
+/// lane as the caller left it) and the core `00ed9b1e` that follows.
+pub fn fn_00ed9b18(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        acos_sse2(e, slot.addr(), movlpd([0; 2], x.to_bits()))
+    })
+}
+
+// Translated from 00ed9b1e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `acos`'s SSE2 core (no label; Ghidra gives it no name), `XMM0` the argument (registered with
+/// the double above the return address, which is the same value). Every instruction is the
+/// exe's, in its order. The argument's top bits (`>> 44`, the sign dropped, less `0x3fb00`)
+/// pick the path: up to `0x3bb` past it a table pair (`010f96d0`) and double (`010fa5d0`) with
+/// `sqrt(1 - x^2)` (`SQRTSD`) and a short polynomial; the next 0x41 steps a reduction through
+/// `sqrt` of the complement and the same tables, the sign applied at the end (`XORPD`); small
+/// arguments a polynomial from pi/2 (`010fadd0`); the last four steps below 1 a polynomial in
+/// `1 - |x|`. A tiny argument gives the sum of `010fadd0`'s two lanes; `|x| = 1` the sum of
+/// `010fadf0` and `010fadf8` masked by the sign (0 for 1). A NaN is quieted (`ADDSD` with 0)
+/// and goes to `___libm_error_support` with code 0x3f0; any other argument above 1 gives `0 *
+/// infinity` (the default NaN) with code 0x3a. The error support gets the argument's slot
+/// twice and a result slot, whose value is the result.
+pub fn fn_00ed9b1e(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        acos_sse2(e, slot.addr(), movq(x.to_bits()))
+    })
+}
+
+#[allow(unused_assignments)] // the exe's register writes, kept where a path overwrites them
+fn acos_sse2(e: &mut Engine, argument: u32, xmm0: Xmm) -> f64 {
+    let m = |e: &Engine, a: u32| e.mem.u64(a);
+    let mut x: [Xmm; 8] = [[0; 2]; 8];
+    x[0] = xmm0;
+    let (mut eax, mut ecx, mut edx): (u32, u32, u32);
+    // 00ed9b1e
+    x[4] = movlpd(x[4], m(e, ACOS_AE90));
+    x[3] = movlpd(x[3], m(e, ACOS_AEA0));
+    x[5] = xorpd(x[5], x[5]);
+    x[2] = movlpd(x[2], m(e, ACOS_AE98));
+    x[1] = movlpd(x[1], x[0][0]);
+    x[0] = psrlq(x[0], 0x2c);
+    edx = x[0][0] as u32;
+    x[7] = movlpd(x[7], x[1][0]);
+    ecx = 0x2000;
+    x[5] = pinsrw(x[5], ecx, 2);
+    x[0] = movlpd(x[0], x[1][0]);
+    eax = 0x7_ffff;
+    eax &= edx;
+    eax = eax.wrapping_sub(0x3_fb00);
+    if eax < 0x3bb {
+        x[1] = mulsd(x[1], x[1][0]);
+        edx &= 0xffff;
+        x[3] = subsd(x[3], x[1][0]);
+        x[3] = sqrtsd(x[3], x[3][0]);
+        x[2] = andpd(x[2], x[7]);
+        edx &= 0xffff_fffc;
+        edx = edx.wrapping_sub(0xfb00);
+        x[1] = movlpd(
+            x[1],
+            m(e, ACOS_TABLE_DOUBLES.wrapping_add(edx.wrapping_mul(2))),
+        );
+        x[2] = orpd(x[2], x[5]);
+        x[4] = m128(e, ACOS_TABLE_PAIRS.wrapping_add(edx.wrapping_mul(4)));
+        x[6] = movlpd(x[6], x[7][0]);
+        x[7] = addsd(x[7], x[2][0]);
+        x[0] = subsd(x[0], x[2][0]);
+        x[7] = mulsd(x[7], x[0][0]);
+        x[6] = mulsd(x[6], x[1][0]);
+        x[3] = mulsd(x[3], x[2][0]);
+        x[1] = movlpd(x[1], x[6][0]);
+        x[6] = addsd(x[6], x[3][0]);
+        x[7] = divsd(x[7], x[6][0]);
+        x[0] = movlpd(x[0], m(e, ACOS_AE48));
+        x[5] = movlpd(x[5], m(e, ACOS_AE38));
+        x[1] = subsd(x[1], x[3][0]);
+        x[2] = psrlq(x[2], 0x3f);
+        x[3] = movlpd(x[3], x[1][0]);
+        x[2] = psllq(x[2], 0x3f);
+        x[1] = mulsd(x[1], x[1][0]);
+        x[2] = pshufd(x[2], 0x44);
+        x[6] = movlpd(x[6], m(e, ACOS_AE40));
+        x[3] = mulsd(x[3], x[1][0]);
+        x[0] = mulsd(x[0], x[1][0]);
+        x[4] = xorpd(x[4], x[2]);
+        x[5] = mulsd(x[5], x[3][0]);
+        x[4] = subpd(x[4], m128(e, ACOS_ADD0));
+        x[3] = mulsd(x[3], x[1][0]);
+        x[0] = addsd(x[0], x[6][0]);
+        x[0] = mulsd(x[0], x[3][0]);
+        x[5] = subsd(x[5], x[4][0]);
+        x[4] = pshufd(x[4], 0xee);
+        x[0] = addsd(x[0], x[5][0]);
+        x[0] = subsd(x[0], x[7][0]);
+        x[0] = subsd(x[0], x[4][0]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed9c46
+    eax = eax.wrapping_sub(0x3bb);
+    if eax < 0x41 {
+        x[7] = psrlq(x[7], 0x26);
+        x[7] = psllq(x[7], 0x26);
+        eax = pmovmskb(x[0]);
+        x[4] = andnpd(x[4], x[0]);
+        x[1] = subsd(x[1], x[7][0]);
+        x[6] = movlpd(x[6], x[7][0]);
+        x[7] = mulsd(x[7], x[7][0]);
+        x[0] = addsd(x[0], x[6][0]);
+        x[5] = orpd(x[5], x[4]);
+        x[3] = subsd(x[3], x[7][0]);
+        x[0] = mulsd(x[0], x[1][0]);
+        x[4] = movlpd(x[4], x[3][0]);
+        x[3] = subsd(x[3], x[0][0]);
+        x[3] = sqrtsd(x[3], x[3][0]);
+        eax &= 0x80;
+        eax >>= 7;
+        eax = eax.wrapping_neg();
+        x[7] = movlpd(x[7], x[3][0]);
+        x[2] = andpd(x[2], x[3]);
+        x[3] = psllq(x[3], 2);
+        edx = pextrw(x[3], 3);
+        x[2] = orpd(x[2], x[5]);
+        x[3] = movd(eax);
+        x[3] = pshufd(x[3], 0);
+        edx = edx.wrapping_sub(0xfec0);
+        edx = edx.wrapping_add(edx);
+        x[7] = mulsd(
+            x[7],
+            m(e, ACOS_TABLE_DOUBLES.wrapping_add(edx.wrapping_mul(4))),
+        );
+        x[6] = mulsd(x[6], x[2][0]);
+        x[1] = mulsd(x[1], x[2][0]);
+        x[2] = mulsd(x[2], x[2][0]);
+        x[6] = subsd(x[6], x[7][0]);
+        x[3] = andpd(x[3], m128(e, ACOS_ADE0));
+        x[6] = addsd(x[6], x[1][0]);
+        x[4] = subsd(x[4], x[2][0]);
+        x[7] = addsd(x[7], x[7][0]);
+        x[5] = movlpd(x[5], m(e, ACOS_AE38));
+        x[4] = subsd(x[4], x[0][0]);
+        x[7] = addsd(x[7], x[6][0]);
+        x[0] = movlpd(x[0], m(e, ACOS_AE48));
+        x[4] = divsd(x[4], x[7][0]);
+        x[2] = movlpd(x[2], m(e, ACOS_AE40));
+        x[3] = addpd(
+            x[3],
+            m128(e, ACOS_TABLE_PAIRS.wrapping_add(edx.wrapping_mul(8))),
+        );
+        x[1] = movlpd(x[1], x[6][0]);
+        x[6] = mulsd(x[6], x[6][0]);
+        x[0] = mulsd(x[0], x[6][0]);
+        x[1] = mulsd(x[1], x[6][0]);
+        x[5] = mulsd(x[5], x[1][0]);
+        x[1] = mulsd(x[1], x[6][0]);
+        x[0] = addsd(x[0], x[2][0]);
+        x[6] = xorpd(x[6], x[6]);
+        x[0] = mulsd(x[0], x[1][0]);
+        x[5] = addsd(x[5], x[3][0]);
+        x[0] = addsd(x[0], x[5][0]);
+        eax &= 0x8000;
+        x[6] = pinsrw(x[6], eax, 3);
+        x[5] = movlpd(x[5], x[4][0]);
+        x[3] = pshufd(x[3], 0xee);
+        x[4] = addsd(x[4], x[3][0]);
+        x[3] = subsd(x[3], x[4][0]);
+        x[5] = addsd(x[5], x[3][0]);
+        x[0] = addsd(x[0], x[5][0]);
+        x[0] = addsd(x[0], x[4][0]);
+        x[0] = xorpd(x[0], x[6]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed9d81
+    eax = eax.wrapping_add(0x3bbb);
+    if eax < 0x3800 {
+        x[0] = unpcklpd(x[0], x[0]);
+        x[6] = m128(e, ACOS_AE50);
+        x[1] = unpcklpd(x[1], x[0]);
+        x[2] = m128(e, ACOS_AE60);
+        x[4] = m128(e, ACOS_AE70);
+        x[0] = mulpd(x[0], x[0]);
+        x[5] = m128(e, ACOS_ADD0);
+        x[1] = mulpd(x[1], x[0]);
+        x[6] = mulpd(x[6], x[0]);
+        x[0] = mulpd(x[0], x[0]);
+        x[3] = movlpd(x[3], x[1][0]);
+        x[1] = mulsd(x[1], x[1][0]);
+        x[6] = addpd(x[6], x[2]);
+        x[4] = mulpd(x[4], x[0]);
+        x[1] = mulsd(x[1], x[3][0]);
+        x[6] = addpd(x[6], x[4]);
+        x[0] = pshufd(x[5], 0xee);
+        x[1] = mulpd(x[1], x[6]);
+        x[6] = pshufd(x[5], 0xee);
+        x[0] = subsd(x[0], x[7][0]);
+        x[2] = pshufd(x[1], 0xee);
+        x[5] = subsd(x[5], x[1][0]);
+        x[6] = subsd(x[6], x[0][0]);
+        x[5] = subsd(x[5], x[2][0]);
+        x[7] = subsd(x[7], x[6][0]);
+        x[5] = subsd(x[5], x[7][0]);
+        x[0] = addsd(x[0], x[5][0]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed9e21
+    eax = eax.wrapping_sub(0x3bfc);
+    if eax < 4 {
+        x[6] = xorpd(x[6], x[6]);
+        x[7] = andpd(x[7], m128(e, ACOS_AE90));
+        x[4] = movlpd(x[4], m(e, ACOS_AEA8));
+        x[1] = m128(e, ACOS_AE50);
+        x[7] = mulsd(x[7], x[4][0]);
+        x[2] = m128(e, ACOS_AE60);
+        x[4] = subsd(x[4], x[7][0]);
+        x[3] = m128(e, ACOS_AE70);
+        x[7] = pshufd(x[4], 0x44);
+        x[4] = sqrtsd(x[4], x[4][0]);
+        x[1] = mulpd(x[1], x[7]);
+        x[5] = pshufd(x[7], 0x44);
+        eax = pextrw(x[0], 3);
+        x[7] = mulpd(x[7], x[7]);
+        x[2] = addpd(x[2], x[1]);
+        x[1] = movlpd(x[1], m(e, ACOS_AE10));
+        x[3] = mulpd(x[3], x[7]);
+        x[0] = cmpltsd(x[0], x[6][0]);
+        x[7] = mulsd(x[7], x[5][0]);
+        x[2] = addpd(x[2], x[3]);
+        x[0] = pshufd(x[0], 0x44);
+        x[2] = mulsd(x[2], x[7][0]);
+        x[0] = andpd(x[0], m128(e, ACOS_ADE0));
+        x[2] = mulpd(x[2], x[5]);
+        x[1] = andpd(x[1], x[4]);
+        x[3] = pshufd(x[4], 0x44);
+        x[4] = subsd(x[4], x[1][0]);
+        x[3] = addsd(x[3], x[3][0]);
+        x[1] = mulsd(x[1], x[1][0]);
+        x[3] = subsd(x[3], x[4][0]);
+        x[5] = subsd(x[5], x[1][0]);
+        x[4] = mulsd(x[4], x[3][0]);
+        x[3] = pshufd(x[3], 0xee);
+        x[5] = subsd(x[5], x[4][0]);
+        x[5] = divsd(x[5], x[3][0]);
+        x[3] = addpd(x[3], x[3]);
+        x[2] = mulpd(x[2], x[3]);
+        x[4] = pshufd(x[2], 0xee);
+        x[2] = addsd(x[2], x[0][0]);
+        eax &= 0x8000;
+        x[6] = pinsrw(x[6], eax, 3);
+        x[0] = pshufd(x[0], 0xee);
+        x[2] = addsd(x[2], x[4][0]);
+        x[2] = addsd(x[2], x[5][0]);
+        x[2] = addsd(x[2], x[3][0]);
+        x[0] = addsd(x[0], x[2][0]);
+        x[0] = xorpd(x[0], x[6]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed9f23
+    eax = eax.wrapping_add(0x3_fefc);
+    if eax < 0x3_ff00 {
+        // 00eda01d: a tiny argument, the two lanes of 010fadd0 added.
+        x[2] = movlpd(x[2], m(e, ACOS_ADD0));
+        x[0] = movlpd(x[0], m(e, ACOS_ADD0 + 8));
+        x[0] = addsd(x[0], x[2][0]);
+        return x87_load64(x[0][0]);
+    }
+    ecx = x[7][0] as u32;
+    x[7] = psrlq(x[7], 0x20);
+    edx = x[7][0] as u32;
+    edx &= 0x7fff_ffff;
+    eax = 0x3ff0_0000u32.wrapping_sub(edx);
+    eax |= ecx;
+    if eax == 0 {
+        // 00ed9fdd: |x| = 1.
+        edx = pextrw(x[7], 1);
+        edx >>= 0xf;
+        edx = edx.wrapping_neg();
+        x[7] = movd(edx);
+        x[7] = pshufd(x[7], 0);
+        x[2] = movlpd(x[2], m(e, ACOS_ADF0));
+        x[0] = movlpd(x[0], m(e, ACOS_ADF0 + 8));
+        x[2] = andpd(x[2], x[7]);
+        x[0] = andpd(x[0], x[7]);
+        x[0] = addsd(x[0], x[2][0]);
+        return x87_load64(x[0][0]);
+    }
+    let code = sse2_nan_or_domain(e, &mut x, argument, 0x3f0, 0x3a);
+    sse2_error_one(e, argument, x[0][0], code)
+}
+
+/// The shared tail of `acos`'s and `asin`'s SSE2 bodies for `|x| > 1` (`00ed9f58`,
+/// `00ed7b8d`): `SUB EDX, 1; SBB ECX, 0x7ff00000` on the argument's words (its magnitude above
+/// infinity: a NaN) picks `nan_code` with `XMM0 + 0` (`ADDSD` with a zeroed `XMM6`: the NaN
+/// quiet); otherwise `XMM0` becomes `0 * infinity` (the default NaN) and the code `domain_code`.
+fn sse2_nan_or_domain(
+    e: &Engine,
+    x: &mut [Xmm; 8],
+    argument: u32,
+    nan_code: u32,
+    domain_code: u32,
+) -> u32 {
+    x[2] = movlpd(x[2], e.mem.u64(argument));
+    let edx = x[2][0] as u32;
+    x[2] = psrlq(x[2], 0x20);
+    let ecx = x[2][0] as u32 & 0x7fff_ffff;
+    let borrow = u32::from(edx == 0);
+    let ecx = ecx.wrapping_sub(0x7ff0_0000).wrapping_sub(borrow);
+    if (ecx as i32) >= 0 {
+        x[6] = xorpd(x[6], x[6]);
+        x[0] = addsd(x[0], x[6][0]);
+        return nan_code;
+    }
+    x[1] = xorpd(x[1], x[1]);
+    x[0] = xorpd(x[0], x[0]);
+    x[1] = pinsrw(x[1], 0x7ff0, 3);
+    x[0] = mulsd(x[0], x[1][0]);
+    domain_code
+}
+
+/// `asin`'s SSE2 constants and tables, named by their addresses (`010f4XXX`): `010f4bd0` (the
+/// magnitude mask, also `ANDNPD`'s), `010f4be0`, `010f4bd8`, `010f4b70`, `010f4b60` (masks and
+/// constants), the coefficients `010f4b78`, `010f4b80`, `010f4b88`, the pairs `010f4b40` (pi/2's
+/// parts), `010f4b90`, `010f4ba0`, `010f4bb0`, `010f4bc0`, and the tables `010f4340` (doubles)
+/// and `010f3440` (pairs).
+const ASIN_4BD0: u32 = 0x010f_4bd0;
+const ASIN_4BE0: u32 = 0x010f_4be0;
+const ASIN_4BD8: u32 = 0x010f_4bd8;
+const ASIN_4B70: u32 = 0x010f_4b70;
+const ASIN_4B60: u32 = 0x010f_4b60;
+const ASIN_4B78: u32 = 0x010f_4b78;
+const ASIN_4B80: u32 = 0x010f_4b80;
+const ASIN_4B88: u32 = 0x010f_4b88;
+const ASIN_4B40: u32 = 0x010f_4b40;
+const ASIN_4B90: u32 = 0x010f_4b90;
+const ASIN_4BA0: u32 = 0x010f_4ba0;
+const ASIN_4BB0: u32 = 0x010f_4bb0;
+const ASIN_4BC0: u32 = 0x010f_4bc0;
+const ASIN_TABLE_DOUBLES: u32 = 0x010f_4340;
+const ASIN_TABLE_PAIRS: u32 = 0x010f_3440;
+
+// Translated from 00ed7720 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `asin`'s SSE2 body (no label; Ghidra gives it no name; `_CIasin` in
+/// `crt.rs` jumps here), `ST0` in: as `acos`'s (`fn_00ed9b00`), with the core `00ed773e`.
+pub fn fn_00ed7720(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        asin_sse2(e, slot.addr(), movq(stored.to_bits()))
+    })
+}
+
+// Translated from 00ed7738 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `asin`'s SSE2 body (no label), cdecl: `MOVLPD XMM0, [ESP+4]` and the core
+/// `00ed773e` that follows.
+pub fn fn_00ed7738(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        asin_sse2(e, slot.addr(), movlpd([0; 2], x.to_bits()))
+    })
+}
+
+// Translated from 00ed773e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `asin`'s SSE2 core (no label), `XMM0` the argument (registered with the double above the
+/// return address). The same structure as `acos`'s core on its own constants (`010f4b40` ..
+/// `010f4be0`) and tables (`010f4340`, `010f3440`): a table path up to `0x3bb` steps past
+/// exponent 0x3fb, a reduction through `sqrt(1 - x^2)` for the next 0x43 (the sign put back with
+/// `ORPD`), a polynomial for small arguments, one in the complement for the last two steps
+/// below 1; a tiny or denormal argument comes back as it is (`ORPD` with `0 + x`, `MULSD` raising
+/// underflow); `|x| = 1` gives pi/2 (`010f4b40`'s lanes added) with the argument's sign
+/// (`ANDNPD` with `010f4bd0`); a NaN goes to the error support with code 0x3f1, any other
+/// argument above 1 with `0 * infinity` and code 0x3d.
+pub fn fn_00ed773e(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        asin_sse2(e, slot.addr(), movq(x.to_bits()))
+    })
+}
+
+#[allow(unused_assignments)] // the exe's register writes, kept where a path overwrites them
+fn asin_sse2(e: &mut Engine, argument: u32, xmm0: Xmm) -> f64 {
+    let m = |e: &Engine, a: u32| e.mem.u64(a);
+    let mut x: [Xmm; 8] = [[0; 2]; 8];
+    x[0] = xmm0;
+    let (mut eax, mut ecx, mut edx): (u32, u32, u32);
+    // 00ed773e
+    x[4] = movlpd(x[4], m(e, ASIN_4BD0));
+    x[3] = movlpd(x[3], m(e, ASIN_4BE0));
+    x[5] = xorpd(x[5], x[5]);
+    x[2] = movlpd(x[2], m(e, ASIN_4BD8));
+    x[1] = movlpd(x[1], x[0][0]);
+    x[0] = psrlq(x[0], 0x2c);
+    edx = x[0][0] as u32;
+    x[7] = movlpd(x[7], x[1][0]);
+    ecx = 0x2000;
+    x[5] = pinsrw(x[5], ecx, 2);
+    x[0] = movlpd(x[0], x[1][0]);
+    eax = 0x7_ffff;
+    eax &= edx;
+    eax = eax.wrapping_sub(0x3_fb00);
+    if eax < 0x3bb {
+        x[1] = mulsd(x[1], x[1][0]);
+        edx &= 0xffff;
+        x[3] = subsd(x[3], x[1][0]);
+        x[3] = sqrtsd(x[3], x[3][0]);
+        x[2] = andpd(x[2], x[7]);
+        edx &= 0xffff_fffc;
+        edx = edx.wrapping_sub(0xfb00);
+        x[1] = movlpd(
+            x[1],
+            m(e, ASIN_TABLE_DOUBLES.wrapping_add(edx.wrapping_mul(2))),
+        );
+        x[2] = orpd(x[2], x[5]);
+        x[4] = m128(e, ASIN_TABLE_PAIRS.wrapping_add(edx.wrapping_mul(4)));
+        x[6] = movlpd(x[6], x[7][0]);
+        x[7] = addsd(x[7], x[2][0]);
+        x[0] = subsd(x[0], x[2][0]);
+        x[0] = mulsd(x[0], x[7][0]);
+        x[6] = mulsd(x[6], x[1][0]);
+        x[3] = mulsd(x[3], x[2][0]);
+        x[1] = movlpd(x[1], x[6][0]);
+        x[6] = addsd(x[6], x[3][0]);
+        x[0] = divsd(x[0], x[6][0]);
+        x[7] = movlpd(x[7], m(e, ASIN_4B88));
+        x[5] = movlpd(x[5], m(e, ASIN_4B78));
+        x[1] = subsd(x[1], x[3][0]);
+        x[2] = psrlq(x[2], 0x3f);
+        x[3] = movlpd(x[3], x[1][0]);
+        x[2] = psllq(x[2], 0x3f);
+        x[1] = mulsd(x[1], x[1][0]);
+        x[2] = pshufd(x[2], 0x44);
+        x[6] = movlpd(x[6], m(e, ASIN_4B80));
+        x[3] = mulsd(x[3], x[1][0]);
+        x[7] = mulsd(x[7], x[1][0]);
+        x[4] = xorpd(x[4], x[2]);
+        x[5] = mulsd(x[5], x[3][0]);
+        x[3] = mulsd(x[3], x[1][0]);
+        x[6] = addsd(x[6], x[7][0]);
+        x[6] = mulsd(x[6], x[3][0]);
+        x[5] = addsd(x[5], x[4][0]);
+        x[4] = pshufd(x[4], 0xee);
+        x[6] = addsd(x[6], x[5][0]);
+        x[0] = addsd(x[0], x[6][0]);
+        x[0] = addsd(x[0], x[4][0]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed785e
+    eax = eax.wrapping_sub(0x3bb);
+    if eax < 0x43 {
+        x[1] = mulsd(x[1], x[1][0]);
+        x[3] = subsd(x[3], x[1][0]);
+        x[3] = sqrtsd(x[3], x[3][0]);
+        eax = pmovmskb(x[7]);
+        x[0] = psllq(x[0], 1);
+        x[7] = andpd(x[7], m128(e, ASIN_4B70));
+        x[0] = psrlq(x[0], 1);
+        x[1] = movlpd(x[1], x[0][0]);
+        x[4] = movlpd(x[4], m(e, ASIN_4BE0));
+        x[6] = movlpd(x[6], x[7][0]);
+        x[1] = subsd(x[1], x[7][0]);
+        x[7] = mulsd(x[7], x[7][0]);
+        x[0] = addsd(x[0], x[6][0]);
+        x[4] = subsd(x[4], x[7][0]);
+        x[0] = mulsd(x[0], x[1][0]);
+        x[7] = movlpd(x[7], x[3][0]);
+        x[2] = andpd(x[2], x[3]);
+        x[3] = psllq(x[3], 2);
+        edx = pextrw(x[3], 3);
+        x[2] = orpd(x[2], x[5]);
+        edx = edx.wrapping_sub(0xfec0);
+        edx = edx.wrapping_add(edx);
+        x[7] = mulsd(
+            x[7],
+            m(e, ASIN_TABLE_DOUBLES.wrapping_add(edx.wrapping_mul(4))),
+        );
+        x[6] = mulsd(x[6], x[2][0]);
+        x[3] = m128(e, ASIN_4B40);
+        x[1] = mulsd(x[1], x[2][0]);
+        x[2] = mulsd(x[2], x[2][0]);
+        x[6] = subsd(x[6], x[7][0]);
+        x[6] = addsd(x[6], x[1][0]);
+        x[4] = subsd(x[4], x[2][0]);
+        x[7] = addsd(x[7], x[7][0]);
+        x[5] = movlpd(x[5], m(e, ASIN_4B78));
+        x[4] = subsd(x[4], x[0][0]);
+        x[7] = addsd(x[7], x[6][0]);
+        x[0] = movlpd(x[0], m(e, ASIN_4B88));
+        x[4] = divsd(x[4], x[7][0]);
+        x[2] = movlpd(x[2], m(e, ASIN_4B80));
+        x[3] = subpd(
+            x[3],
+            m128(e, ASIN_TABLE_PAIRS.wrapping_add(edx.wrapping_mul(8))),
+        );
+        x[1] = movlpd(x[1], x[6][0]);
+        x[6] = mulsd(x[6], x[6][0]);
+        eax &= 0x80;
+        eax <<= 8;
+        x[0] = mulsd(x[0], x[6][0]);
+        x[1] = mulsd(x[1], x[6][0]);
+        x[5] = mulsd(x[5], x[1][0]);
+        x[1] = mulsd(x[1], x[6][0]);
+        x[0] = addsd(x[0], x[2][0]);
+        x[6] = xorpd(x[6], x[6]);
+        x[0] = mulsd(x[0], x[1][0]);
+        x[5] = addsd(x[5], x[3][0]);
+        x[6] = pinsrw(x[6], eax, 3);
+        x[0] = addsd(x[0], x[5][0]);
+        x[3] = pshufd(x[3], 0xee);
+        x[0] = subsd(x[0], x[4][0]);
+        x[0] = addsd(x[0], x[3][0]);
+        x[0] = orpd(x[0], x[6]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed7985
+    eax = eax.wrapping_add(0x3bbb);
+    if eax < 0x3800 {
+        x[7] = unpcklpd(x[7], x[7]);
+        x[6] = m128(e, ASIN_4B90);
+        x[1] = unpcklpd(x[1], x[7]);
+        x[2] = m128(e, ASIN_4BA0);
+        x[4] = m128(e, ASIN_4BB0);
+        x[7] = mulpd(x[7], x[7]);
+        x[1] = mulpd(x[1], x[7]);
+        x[6] = mulpd(x[6], x[7]);
+        x[7] = mulpd(x[7], x[7]);
+        x[3] = movlpd(x[3], x[1][0]);
+        x[1] = mulsd(x[1], x[1][0]);
+        x[6] = addpd(x[6], x[2]);
+        x[4] = mulpd(x[4], x[7]);
+        x[1] = mulsd(x[1], x[3][0]);
+        x[6] = addpd(x[6], x[4]);
+        x[1] = mulpd(x[1], x[6]);
+        x[2] = pshufd(x[1], 0xee);
+        x[1] = addsd(x[1], x[2][0]);
+        x[0] = addsd(x[0], x[1][0]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed79fb
+    eax = eax.wrapping_sub(0x3bfe);
+    if eax < 2 {
+        x[1] = mulsd(x[1], x[1][0]);
+        x[3] = subsd(x[3], x[1][0]);
+        x[3] = sqrtsd(x[3], x[3][0]);
+        eax = pextrw(x[7], 3);
+        x[7] = andpd(x[7], m128(e, ASIN_4B60));
+        x[5] = pshufd(x[3], 0x44);
+        x[3] = andpd(x[3], m128(e, ASIN_4B60));
+        x[1] = movlpd(x[1], x[7][0]);
+        x[4] = movlpd(x[4], m(e, ASIN_4BE0));
+        x[6] = movlpd(x[6], x[7][0]);
+        x[0] = subsd(x[0], x[7][0]);
+        x[7] = mulsd(x[7], x[7][0]);
+        x[1] = addsd(x[1], x[1][0]);
+        x[1] = mulsd(x[1], x[0][0]);
+        x[4] = subsd(x[4], x[7][0]);
+        x[6] = movlpd(x[6], x[3][0]);
+        x[3] = mulsd(x[3], x[3][0]);
+        x[0] = mulsd(x[0], x[0][0]);
+        x[4] = subsd(x[4], x[1][0]);
+        x[6] = subsd(x[6], x[5][0]);
+        x[5] = addsd(x[5], x[5][0]);
+        x[4] = subsd(x[4], x[3][0]);
+        x[2] = m128(e, ASIN_4B90);
+        x[3] = pshufd(x[5], 0xee);
+        x[4] = subsd(x[4], x[0][0]);
+        x[5] = addsd(x[5], x[6][0]);
+        x[7] = pshufd(x[3], 0xee);
+        x[3] = addsd(x[3], x[3][0]);
+        x[5] = mulsd(x[5], x[6][0]);
+        x[4] = addsd(x[4], x[5][0]);
+        x[6] = pshufd(x[7], 0xee);
+        x[4] = divsd(x[4], x[3][0]);
+        x[1] = m128(e, ASIN_4BC0);
+        x[5] = m128(e, ASIN_4BA0);
+        x[0] = m128(e, ASIN_4BB0);
+        x[7] = mulpd(x[7], x[7]);
+        x[3] = movlpd(x[3], x[6][0]);
+        x[2] = mulpd(x[2], x[7]);
+        x[6] = mulpd(x[6], x[7]);
+        eax &= 0x8000;
+        x[1] = mulsd(x[1], x[7][0]);
+        x[7] = mulpd(x[7], x[7]);
+        x[5] = addpd(x[5], x[2]);
+        x[2] = x[6];
+        x[6] = mulsd(x[6], x[6][0]);
+        x[7] = mulpd(x[7], x[0]);
+        x[0] = m128(e, ASIN_4B40);
+        x[2] = mulsd(x[2], x[6][0]);
+        x[7] = addpd(x[7], x[5]);
+        x[5] = pshufd(x[1], 0xee);
+        x[6] = mulsd(x[6], x[2][0]);
+        x[7] = mulpd(x[7], x[2]);
+        x[1] = addsd(x[1], x[5][0]);
+        x[5] = xorpd(x[5], x[5]);
+        x[2] = pshufd(x[7], 0xee);
+        x[1] = mulsd(x[1], x[6][0]);
+        x[6] = pshufd(x[0], 0xee);
+        x[7] = addsd(x[7], x[2][0]);
+        x[2] = movlpd(x[2], x[3][0]);
+        x[5] = pinsrw(x[5], eax, 3);
+        x[3] = subsd(x[3], x[6][0]);
+        x[0] = addsd(x[0], x[1][0]);
+        x[6] = addsd(x[6], x[3][0]);
+        x[7] = addsd(x[7], x[4][0]);
+        x[2] = subsd(x[2], x[6][0]);
+        x[0] = subsd(x[0], x[7][0]);
+        x[0] = subsd(x[0], x[2][0]);
+        x[0] = subsd(x[0], x[3][0]);
+        x[0] = orpd(x[0], x[5]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed7b58
+    eax = eax.wrapping_add(0x3_fefe);
+    if eax < 0x3_ff00 {
+        // 00ed7c5f: a tiny argument.
+        x[0] = movlpd(x[0], m(e, argument));
+        x[6] = xorpd(x[6], x[6]);
+        x[7] = movlpd(x[7], x[0][0]);
+        edx = pextrw(x[0], 3);
+        edx &= 0x7ff0;
+        edx = edx.wrapping_sub(0x10);
+        if edx >= 0x7fe0 {
+            // A zero or denormal: ORPD with 0 + x; MULSD XMM7, XMM0 raises underflow.
+            x[6] = addsd(x[6], x[0][0]);
+            x[0] = orpd(x[0], x[6]);
+            x[7] = mulsd(x[7], x[0][0]);
+        }
+        return x87_load64(x[0][0]);
+    }
+    ecx = x[0][0] as u32;
+    x[0] = psrlq(x[0], 0x20);
+    edx = x[0][0] as u32;
+    edx &= 0x7fff_ffff;
+    eax = 0x3ff0_0000u32.wrapping_sub(edx);
+    eax |= ecx;
+    if eax == 0 {
+        // 00ed7c12: |x| = 1: pi/2 with the argument's sign.
+        x[1] = movlpd(x[1], m(e, ASIN_4BD0));
+        x[2] = movlpd(x[2], m(e, ASIN_4B40));
+        x[0] = movlpd(x[0], m(e, ASIN_4B40 + 8));
+        x[0] = addsd(x[0], x[2][0]);
+        x[1] = andnpd(x[1], x[7]);
+        x[0] = orpd(x[0], x[1]);
+        return x87_load64(x[0][0]);
+    }
+    // 00ed7b8d: MOVLPD XMM2, [ESP+4]; SUB EDX, 1; SBB ECX, 0x7ff00000: above infinity is a NaN.
+    x[2] = movlpd(x[2], m(e, argument));
+    let low = x[2][0] as u32;
+    let high = (x[2][0] >> 32) as u32 & 0x7fff_ffff;
+    let borrow = u32::from(low == 0);
+    let nan = (high.wrapping_sub(0x7ff0_0000).wrapping_sub(borrow) as i32) >= 0;
+    let code = if nan {
+        // 00ed7c47: MOVLPD XMM0, [ESP+4]; ADDSD with a zeroed XMM6.
+        x[0] = movlpd(x[0], m(e, argument));
+        x[6] = xorpd(x[6], x[6]);
+        x[0] = addsd(x[0], x[6][0]);
+        0x3f1
+    } else {
+        x[1] = xorpd(x[1], x[1]);
+        x[0] = xorpd(x[0], x[0]);
+        x[1] = pinsrw(x[1], 0x7ff0, 3);
+        x[0] = mulsd(x[0], x[1][0]);
+        0x3d
+    };
+    sse2_error_one(e, argument, x[0][0], code)
+}
+
+/// `atan`'s SSE2 constants (`010f3XXX`): the magnitude mask `010f32a0`, the thresholds
+/// `010f33b0`, `010f33b8`, `010f33c0`, `010f33c8`, `010f33d0` and `010f33a8`, the polynomial pairs
+/// `010f3340` .. `010f3370` (four) and `010f32c0` .. `010f3330` (eight), `010f33a0` (the addend of
+/// the table index), `010f3380` (the index base, a `PSUBD` operand), `010f3398` and `010f3390`
+/// (the reduction's constants), `010f3388` (zero), `010f33d8` (the tiny argument's operand, a
+/// double the x87 squares), `010f3290` (the infinity mask) and the pairs `010f32b0` (+-pi/2 by
+/// the sign); the tables `010ff040` (three doubles a row: the result's high part, its low part,
+/// and the reduction point).
+const ATAN_32A0: u32 = 0x010f_32a0;
+const ATAN_33B0: u32 = 0x010f_33b0;
+const ATAN_33B8: u32 = 0x010f_33b8;
+const ATAN_33C0: u32 = 0x010f_33c0;
+const ATAN_33C8: u32 = 0x010f_33c8;
+const ATAN_33D0: u32 = 0x010f_33d0;
+const ATAN_33A8: u32 = 0x010f_33a8;
+const ATAN_33A0: u32 = 0x010f_33a0;
+const ATAN_3380: u32 = 0x010f_3380;
+const ATAN_3398: u32 = 0x010f_3398;
+const ATAN_3390: u32 = 0x010f_3390;
+const ATAN_3388: u32 = 0x010f_3388;
+const ATAN_33D8: u32 = 0x010f_33d8;
+const ATAN_3290: u32 = 0x010f_3290;
+const ATAN_32B0: u32 = 0x010f_32b0;
+const ATAN_TABLE: u32 = 0x010f_f040;
+/// The two polynomials' pairs, the highest first: `010f3370` .. `010f3340` and `010f3330` ..
+/// `010f32c0`.
+const ATAN_SHORT: [u32; 4] = [0x010f_3370, 0x010f_3360, 0x010f_3350, 0x010f_3340];
+const ATAN_LONG: [u32; 8] = [
+    0x010f_3330,
+    0x010f_3320,
+    0x010f_3310,
+    0x010f_3300,
+    0x010f_32f0,
+    0x010f_32e0,
+    0x010f_32d0,
+    0x010f_32c0,
+];
+
+// Translated from 00ed5d80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `atan`'s SSE2 body (no label; Ghidra gives it no name), `ST0` in: a
+/// 16-byte aligned frame, `ST0` stored (`FSTP`, a signalling NaN quiet), `MOVQ XMM7` of it, and
+/// the core `00ed5d9e` called with the stored double above its return address.
+pub fn fn_00ed5d80(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        atan_sse2(e, slot.addr(), movq(stored.to_bits())).store64()
+    })
+}
+
+// Translated from 00ed5d98 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `atan`'s SSE2 body (no label), cdecl: `MOVQ XMM7, [ESP+4]` and the core
+/// `00ed5d9e` that follows.
+pub fn fn_00ed5d98(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        atan_sse2(e, slot.addr(), movq(x.to_bits())).store64()
+    })
+}
+
+// Translated from 00ed5d9e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan`'s SSE2 core (no label), `XMM7` the argument (registered with the double above the
+/// return address). The magnitude (`ANDPD` with `010f32a0`) is compared (`COMISD`) with the
+/// thresholds: a NaN (unordered) goes to `___libm_error_support` with code 0x3eb and the
+/// argument's slot for all three pointers, whose value is the result; at or above `010f33c8`
+/// the result is `010f33d8` plus +-pi/2 by the sign (`FLD`/`FADD` on the x87; an infinity masked
+/// by `010f3290` compares unordered only for a NaN); below `010f33b8` and at or above `010f33c0`
+/// the short polynomial `x - x * p(x^2)`; between `010f33b8` and `010f33b0` the long one; from
+/// `010f33b0` a reduction: below `010f33a8` the table row picked from the magnitude's top bits
+/// (`(|x| + 010f33a0) >> 44 - 010f3380`), `(|x| - c) / (|x| * c + 010f3398)`, else `010f3390 /
+/// |x|` with the last row (index 0x300), then the short polynomial on that, the row's parts
+/// added and the sign put back (`ORPD`). Below `010f33c0`: zero (`010f3388`) comes back as it is
+/// (`FLD` of the argument); otherwise the x87 computes `010f33d8 * 010f33d8 + x`, the product
+/// stored as a double first when the magnitude is below `010f33d0`. The x87 results are
+/// extended (`ST0`).
+pub fn fn_00ed5d9e(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        atan_sse2(e, slot.addr(), movq(x.to_bits())).store64()
+    })
+}
+
+/// The short polynomial of `atan`'s core on `XMM2` (`|x|` or the reduced value, both lanes):
+/// `x^2` and `x^4` by `MULPD`, the four pairs by Horner, the lanes added (`SHUFPD`, `ADDSD`):
+/// the correction in `XMM5`'s low lane.
+fn atan_polynomial(e: &Engine, x: &mut [Xmm; 8], pairs: &[u32]) {
+    x[1] = x[2];
+    x[1] = mulpd(x[1], x[2]);
+    x[3] = x[1];
+    x[3] = mulpd(x[3], x[1]);
+    x[5] = m128(e, pairs[0]);
+    for &pair in &pairs[1..] {
+        x[5] = mulpd(x[5], x[3]);
+        x[5] = addpd(x[5], m128(e, pair));
+    }
+    x[5] = mulsd(x[5], x[1][0]);
+    x[3] = x[5];
+    x[3] = shufpd(x[3], x[3], 1);
+    x[5] = addsd(x[5], x[3][0]);
+}
+
+fn atan_sse2(e: &mut Engine, argument: u32, xmm7: Xmm) -> X87Ext {
+    let m = |e: &Engine, a: u32| e.mem.u64(a);
+    let mut x: [Xmm; 8] = [[0; 2]; 8];
+    x[7] = xmm7;
+    // 00ed5d9e: UNPCKLPD XMM7, XMM7; MOVAPD XMM2, XMM7; ANDPD XMM2, [010f32a0].
+    x[7] = unpcklpd(x[7], x[7]);
+    x[2] = x[7];
+    x[2] = andpd(x[2], m128(e, ATAN_32A0));
+    let c = comisd(x[2][0], m(e, ATAN_33C8));
+    if c.pf {
+        return atan_nan(e, argument);
+    }
+    if !c.cf {
+        // 00ed6017: the infinity test.
+        x[0] = movq(x[2][0]);
+        x[3] = movq(m(e, ATAN_3290));
+        x[0] = andpd(x[0], x[3]);
+        if comisd(x[0][0], x[3][0]).pf {
+            return atan_nan(e, argument);
+        }
+        // MOV EAX, [ESP+8]; SHR EAX, 0x1f; FLD [010f33d8]; FADD [EAX*8 + 010f32b0].
+        let sign = e.mem.u32(argument + 4) >> 31;
+        let base = load_double(e, ATAN_33D8);
+        return x87_fadd(base, double_operand(e, ATAN_32B0 + sign * 8));
+    }
+    if !comisd(x[2][0], m(e, ATAN_33B8)).cf {
+        // 00ed5e3a
+        if comisd(x[2][0], m(e, ATAN_33B0)).cf {
+            atan_polynomial(e, &mut x, &ATAN_LONG);
+            x[5] = mulsd(x[5], x[7][0]);
+            x[7] = subsd(x[7], x[5][0]);
+            return X87Ext::load64(f64::from_bits(x[7][0]));
+        }
+        // 00ed5ed8: the reduction; XMM6 keeps the sign.
+        x[6] = movq(x[7][0]);
+        x[6] = xorpd(x[6], x[2]);
+        let eax = if comisd(x[2][0], m(e, ATAN_33A8)).cf {
+            x[0] = movq(m(e, ATAN_33A0));
+            x[5] = movq(m(e, ATAN_3380));
+            x[3] = movq(x[2][0]);
+            x[3] = addsd(x[3], x[0][0]);
+            x[3] = psrlq(x[3], 0x2c);
+            x[3] = psubd(x[3], x[5]);
+            let eax = (x[3][0] as u32).wrapping_mul(3);
+            x[5] = movq(m(e, ATAN_TABLE.wrapping_add(eax.wrapping_mul(8)) + 0x10));
+            x[3] = movq(x[2][0]);
+            x[2] = subsd(x[2], x[5][0]);
+            x[3] = mulsd(x[3], x[5][0]);
+            x[3] = addsd(x[3], m(e, ATAN_3398));
+            x[2] = divsd(x[2], x[3][0]);
+            x[2] = unpcklpd(x[2], x[2]);
+            eax
+        } else {
+            // 00ed5f39
+            x[0] = movq(x[2][0]);
+            x[2] = movq(m(e, ATAN_3390));
+            x[2] = divsd(x[2], x[0][0]);
+            x[2] = unpcklpd(x[2], x[2]);
+            0x300
+        };
+        // 00ed5f52
+        let row = ATAN_TABLE.wrapping_add(eax.wrapping_mul(8));
+        x[0] = movq(m(e, row));
+        x[4] = movq(m(e, row + 8));
+        atan_polynomial(e, &mut x, &ATAN_SHORT);
+        x[5] = mulsd(x[5], x[2][0]);
+        x[5] = subsd(x[5], x[4][0]);
+        x[5] = subsd(x[5], x[2][0]);
+        x[0] = subsd(x[0], x[5][0]);
+        x[0] = orpd(x[0], x[6]);
+        return X87Ext::load64(f64::from_bits(x[0][0]));
+    }
+    if !comisd(x[2][0], m(e, ATAN_33C0)).cf {
+        // 00ed5dda
+        atan_polynomial(e, &mut x, &ATAN_SHORT);
+        x[5] = mulsd(x[5], x[7][0]);
+        x[7] = subsd(x[7], x[5][0]);
+        return X87Ext::load64(f64::from_bits(x[7][0]));
+    }
+    // 00ed5fd0
+    if comisd(x[2][0], m(e, ATAN_3388)).zf {
+        return load_double(e, argument);
+    }
+    let square = x87_fmul(load_double(e, ATAN_33D8), double_operand(e, ATAN_33D8));
+    let argument_operand = double_operand(e, argument);
+    if comisd(x[2][0], m(e, ATAN_33D0)).cf {
+        // 00ed5fe9: the product stored as a double and loaded again.
+        let stored = X87Ext::load64(square.store64());
+        return x87_fadd(stored, argument_operand);
+    }
+    x87_fadd(square, argument_operand)
+}
+
+/// `atan`'s NaN exit (`00ed6042`): `___libm_error_support` with code 0x3eb and the argument's
+/// slot for all three pointers, then that slot (`FLD`).
+fn atan_nan(e: &mut Engine, argument: u32) -> X87Ext {
+    e.call(
+        LIBM_ERROR_SUPPORT,
+        &args![argument, argument, argument, 0x3ebu32],
+    );
+    load_double(e, argument)
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ed_454f, fn_00ed454f() -> u32),
@@ -3103,6 +4346,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_281e, fn_00ed281e(f64, u32) -> f64),
         entry!(0x00ed_2869, fn_00ed2869(u32, u32, f64, u32, u32, f64, f64) -> f64),
         entry!(0x00ed_2720, fn_00ed2720(u32, u32, u32, f64, u32, u32, f64, f64) -> f64),
+        entry!(0x00ec_a190, acos(f64) -> f64),
+        entry!(0x00ec_a1d0, ci_acos(f64) -> f64),
+        entry!(0x00ec_a228, fn_00eca228(bool, u32, f64, u32, u32) -> f64),
+        entry!(0x00ec_9610, asin(f64) -> f64),
+        entry!(0x00ec_96a8, fn_00ec96a8(bool, u32, f64, u32, u32) -> f64),
+        entry!(0x00ec_9010, atan(f64) -> f64),
+        entry!(0x00ec_9050, ci_atan(f64) -> f64),
+        entry!(0x00ec_90a8, fn_00ec90a8(bool, u32, f64, u32, u32) -> f64),
+        entry!(0x00ed_9b00, fn_00ed9b00(f64) -> f64),
+        entry!(0x00ed_9b18, fn_00ed9b18(f64) -> f64),
+        entry!(0x00ed_9b1e, fn_00ed9b1e(f64) -> f64),
+        entry!(0x00ed_7720, fn_00ed7720(f64) -> f64),
+        entry!(0x00ed_7738, fn_00ed7738(f64) -> f64),
+        entry!(0x00ed_773e, fn_00ed773e(f64) -> f64),
+        entry!(0x00ed_5d80, fn_00ed5d80(f64) -> f64),
+        entry!(0x00ed_5d98, fn_00ed5d98(f64) -> f64),
+        entry!(0x00ed_5d9e, fn_00ed5d9e(f64) -> f64),
     ]
 }
 
@@ -6275,6 +7535,634 @@ mod tests_bodies {
             let got = pow_of(&mut e, x, y);
             let code = libm.borrow().last().map_or(0, |w| w[3]);
             assert_eq!((got, code), (want, error), "pow({x:016x}, {y:016x})");
+        }
+    }
+
+    // ---- acos, asin, atan ---------------------------------------------------------------------
+
+    /// A recorded one-argument vector: the argument, the result, the error report (as
+    /// [`Vector`]'s).
+    type Vector1 = (u64, u64, u32);
+
+    /// The constants the inverse bodies' x87 paths read (`trig.rs`'s `00ed27ac` adds 1.0 from
+    /// `010f2a90`), at the exe's values.
+    fn inverse_engine(sse2: bool) -> (Engine, Seen, Seen) {
+        let (mut e, except, libm) = engine(sse2);
+        put(&mut e, 0x010f_2a90, 1.0f64.to_bits());
+        put_extended(&mut e, HALF_PI_EXTENDED, 0x3fff, 0xc90f_daa2_2168_c235);
+        e.map(ATAN_CONTROL_WORD, 2);
+        e.mem.set_u16(ATAN_CONTROL_WORD, 0x027f);
+        (e, except, libm)
+    }
+
+    /// The x87 bodies' result paths as the exe runs them, under the body's control word.
+    fn inverse_sequence(which: u32, x: f64, body: u16) -> u64 {
+        crate::x87::set_control_word(body);
+        let v = X87Ext::load64(x);
+        let one = X87Ext::load64(1.0);
+        let root = || x87_fsqrt(x87_fmul(x87_fadd(one, v), x87_fsub(one, v)));
+        let r = match which {
+            0 => x87_fpatan(root(), v),
+            1 => x87_fpatan(v, root()),
+            _ => x87_fpatan(v, one),
+        };
+        let bits = r.store64().to_bits();
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        bits
+    }
+
+    #[test]
+    fn inverse_x87_bodies_run_their_fpatan_sequences_bit_for_bit() {
+        let (mut e, _, _) = inverse_engine(false);
+        let mut spread = Spread(0x0ac05);
+        for word in [0x027fu16, 0x007f] {
+            for _ in 0..100 {
+                let x = spread.next() * 2.0 - 1.0;
+                let wide = (spread.next() - 0.5) * 1e4;
+                for (which, entry, register, arg) in [
+                    (0u32, 0x00ec_a190u32, 0x00ec_a1d0u32, x),
+                    (1, 0x00ec_9610, 0x00ec_9650, x),
+                    (2, 0x00ec_9010, 0x00ec_9050, wide),
+                ] {
+                    // acos and asin run at the caller's precision, atan under 010f2a98's word.
+                    let body = if which == 2 {
+                        0x027f
+                    } else {
+                        (word & 0x300) | 0x7f
+                    };
+                    let want = inverse_sequence(which, arg, body);
+                    for addr in [entry, register] {
+                        set_x87_control_word(&mut e, word);
+                        let got = e.call(addr, &args![arg]).f64().to_bits();
+                        assert_eq!(x87_control_word(&mut e), word);
+                        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+                        assert_eq!(got, want, "{addr:08x}({arg:e}) under {word:04x}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_x87_special_values_and_errors() {
+        let (mut e, except, _) = inverse_engine(false);
+        let at = |e: &mut Engine, addr: u32, x: f64| e.call(addr, &args![x]).f64().to_bits();
+        // acos(1) = 0, acos(-1) = pi (FLDPI rounded), asin(+-1) = +-pi/2, atan(+-inf) = +-pi/2.
+        assert_eq!(at(&mut e, 0x00ec_a190, 1.0), 0);
+        assert_eq!(
+            at(&mut e, 0x00ec_a190, -1.0),
+            std::f64::consts::PI.to_bits()
+        );
+        let half_pi = std::f64::consts::FRAC_PI_2.to_bits();
+        assert_eq!(at(&mut e, 0x00ec_9610, 1.0), half_pi);
+        assert_eq!(at(&mut e, 0x00ec_9610, -1.0), half_pi | (1 << 63));
+        assert_eq!(at(&mut e, 0x00ec_9010, f64::INFINITY), half_pi);
+        assert_eq!(
+            at(&mut e, 0x00ec_9050, f64::NEG_INFINITY),
+            half_pi | (1 << 63)
+        );
+        assert!(except.borrow().is_empty());
+        // Domain errors: the indefinite NaN, type 1, the function's operation.
+        for (addr, x, operation) in [
+            (0x00ec_a190u32, 1.5f64, ACOS_OPERATION),
+            (0x00ec_9610, -2.0, ASIN_OPERATION),
+            (0x00ec_a1d0, f64::INFINITY, ACOS_OPERATION),
+        ] {
+            assert_eq!(at(&mut e, addr, x), 0xfff8_0000_0000_0000);
+            let w = except.borrow().last().unwrap().clone();
+            assert_eq!((w[0], w[3]), (operation, 1), "{addr:08x}({x})");
+        }
+        // A NaN: its type from 00ed27ac (a signalling one on the stack is type 1 and quieted).
+        assert_eq!(
+            at(&mut e, 0x00ec_9010, f64::from_bits(0x7ff4_0000_0000_0000)),
+            0x7ffc_0000_0000_0000
+        );
+        let w = except.borrow().last().unwrap().clone();
+        assert_eq!((w[0], w[3]), (ATAN_OPERATION, 1));
+        assert_eq!(
+            at(&mut e, 0x00ec_9010, f64::from_bits(0xfff8_0000_0000_0042)),
+            0xfff8_0000_0000_0042
+        );
+        assert_eq!(except.borrow().last().unwrap()[3], 7);
+        // The math-error switch: no report.
+        e.set_global(ERROR_SWITCH, 1u32);
+        except.borrow_mut().clear();
+        assert_eq!(at(&mut e, 0x00ec_9610, 3.0), 0xfff8_0000_0000_0000);
+        assert!(except.borrow().is_empty());
+    }
+
+    /// Recorded from the exe: `acos`, `asin` and `atan` (`00eca190`, `00ec9610`, `00ec9010`) on
+    /// their x87 paths under 0x027f.
+    const ACOS_X87_RECORDED: &[Vector1] = &[
+        (0x40300000_00000000, 0xfff80000_00000000, 0x1_000d),
+        (0x800fffff_ffffffff, 0x3ff921fb_54442d18, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000d),
+        (0x3f79c38f_3a73600c, 0x3ff90837_b9e76b58, 0),
+        (0xbfec3430_4e883d00, 0x40053248_60b571ca, 0),
+        (0x554ac3bd_4d8d552b, 0xfff80000_00000000, 0x1_000d),
+        (0xc06a5058_4e27fb1e, 0xfff80000_00000000, 0x1_000d),
+        (0x3e744577_aaf9f102, 0x3ff921fb_3ffeb56d, 0),
+        (0xc02e0000_00000000, 0xfff80000_00000000, 0x1_000d),
+        (0x4096fc11_f153cdca, 0xfff80000_00000000, 0x1_000d),
+        (0xc0330000_00000000, 0xfff80000_00000000, 0x1_000d),
+        (0x32784719_8f63f56f, 0x3ff921fb_54442d18, 0),
+        (0x40fca1a5_3e90d1d9, 0xfff80000_00000000, 0x1_000d),
+        (0xbfdda656_afc51300, 0x40006b7d_ee828482, 0),
+        (0x8676739f_bf6f2f0c, 0x3ff921fb_54442d18, 0),
+        (0xffba8b6e_e8950ca4, 0xfff80000_00000000, 0x1_000d),
+        (0x3fe750f3_f958da80, 0x3fe824a6_7c14b346, 0),
+        (0x40350000_00000000, 0xfff80000_00000000, 0x1_000d),
+        (0xc0000000_00000000, 0xfff80000_00000000, 0x1_000d),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000d),
+        (0x32c5f369_1f91e0ac, 0x3ff921fb_54442d18, 0),
+        (0x3ff01e4b_af1036ff, 0xfff80000_00000000, 0x1_000d),
+        (0xbfbf303b_6c85d000, 0x3ffb163d_302ba56b, 0),
+        (0xc10bfcf6_5aed19f8, 0xfff80000_00000000, 0x1_000d),
+        (0x41113c61_089a2d7b, 0xfff80000_00000000, 0x1_000d),
+        (0x3fe5620c_c7b6f700, 0x3fead8f5_202b8f2f, 0),
+        (0xa24b3e27_cad53f50, 0x3ff921fb_54442d18, 0),
+        (0x25db985e_e59db937, 0x3ff921fb_54442d18, 0),
+        (0x3fd2c2e2_ba943e00, 0x3ff45f5c_b05a8a0f, 0),
+        (0x40e2240e_f253e43c, 0xfff80000_00000000, 0x1_000d),
+        (0xc0b006b9_448d76db, 0xfff80000_00000000, 0x1_000d),
+        (0x3fefffff_fffffffe, 0x3e56a09e_667f3bcc, 0),
+        (0x033da741_a1a6c832, 0x3ff921fb_54442d18, 0),
+        (0x981994a2_cd55157a, 0x3ff921fb_54442d18, 0),
+        (0x3fefffff_fffffe92, 0x3e932191_811b0a53, 0),
+        (0xbfefffdc_8c57d5c7, 0x40091612_ce1c7623, 0),
+        (0xc24a0267_9f3300d9, 0xfff80000_00000000, 0x1_000d),
+        (0x3fefffff_3a375827, 0x3f4c208b_6b138626, 0),
+        (0xbfe222ab_49728740, 0x400162fb_03ed8ab6, 0),
+        (0xbfd34c56_166d4400, 0x3ffe0897_8f4ab9f7, 0),
+        (0xbfd7af1d_d415aa00, 0x3fff32ae_7f620e40, 0),
+        (0x10528df5_9e6ffb99, 0x3ff921fb_54442d18, 0),
+        (0x3fe2ae07_a74f7ac0, 0x3fee51a0_6bffc7bc, 0),
+        (0x3f57085e_295b8000, 0x3ff91c39_3c9a043f, 0),
+        (0xbfd02239_bc261880, 0x3ffd35cc_aece2a1e, 0),
+        (0x3fe5ccad_7c9196c0, 0x3fea487b_69d821c7, 0),
+        (0xbfefffff_ffebc7fa, 0x400921f2_560a20ed, 0),
+        (0xbfcab083_62fa3f00, 0x3ffc7e5b_e2e31f82, 0),
+        (0x428639c5_e7652593, 0xfff80000_00000000, 0x1_000d),
+        (0x4007de20_12fb488b, 0xfff80000_00000000, 0x1_000d),
+    ];
+    const ASIN_X87_RECORDED: &[Vector1] = &[
+        (0x40300000_00000000, 0xfff80000_00000000, 0x1_000e),
+        (0x800fffff_ffffffff, 0x800fffff_ffffffff, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000e),
+        (0x3f79c38f_3a73600c, 0x3f79c39a_5cc1c049, 0),
+        (0xbfec3430_4e883d00, 0xbff14295_6d26b67b, 0),
+        (0x554ac3bd_4d8d552b, 0xfff80000_00000000, 0x1_000e),
+        (0xc06a5058_4e27fb1e, 0xfff80000_00000000, 0x1_000e),
+        (0x3e744577_aaf9f102, 0x3e744577_aaf9f108, 0),
+        (0xc02e0000_00000000, 0xfff80000_00000000, 0x1_000e),
+        (0x4096fc11_f153cdca, 0xfff80000_00000000, 0x1_000e),
+        (0xc0330000_00000000, 0xfff80000_00000000, 0x1_000e),
+        (0x32784719_8f63f56f, 0x32784719_8f63f56f, 0),
+        (0x40fca1a5_3e90d1d9, 0xfff80000_00000000, 0x1_000e),
+        (0xbfdda656_afc51300, 0xbfded402_23036fad, 0),
+        (0x8676739f_bf6f2f0c, 0x8676739f_bf6f2f0c, 0),
+        (0xffba8b6e_e8950ca4, 0xfff80000_00000000, 0x1_000e),
+        (0x3fe750f3_f958da80, 0x3fea1f50_2c73a6eb, 0),
+        (0x40350000_00000000, 0xfff80000_00000000, 0x1_000e),
+        (0xc0000000_00000000, 0xfff80000_00000000, 0x1_000e),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000e),
+        (0x32c5f369_1f91e0ac, 0x32c5f369_1f91e0ac, 0),
+        (0x3ff01e4b_af1036ff, 0xfff80000_00000000, 0x1_000e),
+        (0xbfbf303b_6c85d000, 0xbfbf441d_be778531, 0),
+        (0xc10bfcf6_5aed19f8, 0xfff80000_00000000, 0x1_000e),
+        (0x41113c61_089a2d7b, 0xfff80000_00000000, 0x1_000e),
+        (0x3fe5620c_c7b6f700, 0x3fe76b01_885ccb02, 0),
+        (0xa24b3e27_cad53f50, 0xa24b3e27_cad53f50, 0),
+        (0x25db985e_e59db937, 0x25db985e_e59db937, 0),
+        (0x3fd2c2e2_ba943e00, 0x3fd30a7a_8fa68c26, 0),
+        (0x40e2240e_f253e43c, 0xfff80000_00000000, 0x1_000e),
+        (0xc0b006b9_448d76db, 0xfff80000_00000000, 0x1_000e),
+        (0x3fefffff_fffffffe, 0x3ff921fb_4e9c057f, 0),
+        (0x033da741_a1a6c832, 0x033da741_a1a6c832, 0),
+        (0x981994a2_cd55157a, 0x981994a2_cd55157a, 0),
+        (0x3fefffff_fffffe92, 0x3ff921fb_07bde714, 0),
+        (0xbfefffdc_8c57d5c7, 0xbff90a2a_47f4bf2d, 0),
+        (0xc24a0267_9f3300d9, 0xfff80000_00000000, 0x1_000e),
+        (0x3fefffff_3a375827, 0x3ff91e77_42d6caa8, 0),
+        (0xbfe222ab_49728740, 0xbfe347f5_672dd0a7, 0),
+        (0xbfd34c56_166d4400, 0xbfd39a70_ec1a337a, 0),
+        (0xbfd7af1d_d415aa00, 0xbfd842cc_ac7784a1, 0),
+        (0x10528df5_9e6ffb99, 0x10528df5_9e6ffb99, 0),
+        (0x3fe2ae07_a74f7ac0, 0x3fe3f256_3c889274, 0),
+        (0x3f57085e_295b8000, 0x3f57085e_a8a363b6, 0),
+        (0xbfd02239_bc261880, 0xbfd04f45_6a27f416, 0),
+        (0x3fe5ccad_7c9196c0, 0x3fe7fb7b_3eb03869, 0),
+        (0xbfefffff_ffebc7fa, 0xbff921e9_57d014c1, 0),
+        (0xbfcab083_62fa3f00, 0xbfcae304_74f7934b, 0),
+        (0x428639c5_e7652593, 0xfff80000_00000000, 0x1_000e),
+        (0x4007de20_12fb488b, 0xfff80000_00000000, 0x1_000e),
+    ];
+    const ATAN_X87_RECORDED: &[Vector1] = &[
+        (0x40300000_00000000, 0x3ff82250_768ac529, 0),
+        (0x800fffff_ffffffff, 0x800fffff_ffffffff, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000f),
+        (0x3f79c38f_3a73600c, 0x3f79c378_f6133f4a, 0),
+        (0xbfec3430_4e883d00, 0xbfe71e1e_d2d3f982, 0),
+        (0x554ac3bd_4d8d552b, 0x3ff921fb_54442d18, 0),
+        (0xc06a5058_4e27fb1e, 0xbff90e86_435684f1, 0),
+        (0x3e744577_aaf9f102, 0x3e744577_aaf9f0f7, 0),
+        (0xc02e0000_00000000, 0xbff81151_8cde39a6, 0),
+        (0x4096fc11_f153cdca, 0x3ff91f32_81742e6f, 0),
+        (0xc0330000_00000000, 0xbff84a99_fe25186b, 0),
+        (0x32784719_8f63f56f, 0x32784719_8f63f56f, 0),
+        (0x40fca1a5_3e90d1d9, 0x3ff921f2_6350239f, 0),
+        (0xbfdda656_afc51300, 0xbfdbc40a_d7f39779, 0),
+        (0x8676739f_bf6f2f0c, 0x8676739f_bf6f2f0c, 0),
+        (0xffba8b6e_e8950ca4, 0xbff921fb_54442d18, 0),
+        (0x3fe750f3_f958da80, 0x3fe42660_940cb182, 0),
+        (0x40350000_00000000, 0x3ff85f14_d43d81be, 0),
+        (0xc0000000_00000000, 0xbff1b6e1_92ebbe44, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_000f),
+        (0x32c5f369_1f91e0ac, 0x32c5f369_1f91e0ac, 0),
+        (0x3ff01e4b_af1036ff, 0x3fe9402a_66d36c72, 0),
+        (0xbfbf303b_6c85d000, 0xbfbf0914_0ab9ab2e, 0),
+        (0xc10bfcf6_5aed19f8, 0xbff921f6_c17c045d, 0),
+        (0x41113c61_089a2d7b, 0x3ff921f7_9db094f3, 0),
+        (0x3fe5620c_c7b6f700, 0x3fe2d9b6_fe122138, 0),
+        (0xa24b3e27_cad53f50, 0xa24b3e27_cad53f50, 0),
+        (0x25db985e_e59db937, 0x25db985e_e59db937, 0),
+        (0x3fd2c2e2_ba943e00, 0x3fd23ffe_78bfcd53, 0),
+        (0x40e2240e_f253e43c, 0x3ff921df_1b06fac1, 0),
+        (0xc0b006b9_448d76db, 0xbff920fb_bfaba887, 0),
+        (0x3fefffff_fffffffe, 0x3fe921fb_54442d17, 0),
+        (0x033da741_a1a6c832, 0x033da741_a1a6c832, 0),
+        (0x981994a2_cd55157a, 0x981994a2_cd55157a, 0),
+        (0x3fefffff_fffffe92, 0x3fe921fb_54442c61, 0),
+        (0xbfefffdc_8c57d5c7, 0xbfe921e9_9a664650, 0),
+        (0xc24a0267_9f3300d9, 0xbff921fb_5443de5b, 0),
+        (0x3fefffff_3a375827, 0x3fe921fa_f15fd7fa, 0),
+        (0xbfe222ab_49728740, 0xbfe07fc8_722dbe38, 0),
+        (0xbfd34c56_166d4400, 0xbfd2be47_7848994d, 0),
+        (0xbfd7af1d_d415aa00, 0xbfd6af12_810443ba, 0),
+        (0x10528df5_9e6ffb99, 0x10528df5_9e6ffb99, 0),
+        (0x3fe2ae07_a74f7ac0, 0x3fe0e87e_aa4d6937, 0),
+        (0x3f57085e_295b8000, 0x3f57085d_2acbdb32, 0),
+        (0xbfd02239_bc261880, 0xbfcf9bda_86f5541d, 0),
+        (0x3fe5ccad_7c9196c0, 0x3fe322fc_5a8d01e5, 0),
+        (0xbfefffff_ffebc7fa, 0xbfe921fb_543a1115, 0),
+        (0xbfcab083_62fa3f00, 0xbfca4fff_d06fa6ce, 0),
+        (0x428639c5_e7652593, 0x3ff921fb_54442756, 0),
+        (0x4007de20_12fb488b, 0x3ff3f548_631b4816, 0),
+    ];
+
+    #[test]
+    fn inverse_x87_matches_the_recorded_results() {
+        let (mut e, except, _) = inverse_engine(false);
+        for (addr, vectors) in [
+            (0x00ec_a190u32, ACOS_X87_RECORDED),
+            (0x00ec_9610, ASIN_X87_RECORDED),
+            (0x00ec_9010, ATAN_X87_RECORDED),
+        ] {
+            for &(x, want, error) in vectors {
+                except.borrow_mut().clear();
+                let got = e.call(addr, &args![x]).f64().to_bits();
+                assert_eq!(
+                    (got, except_seen(&except)),
+                    (want, error),
+                    "{addr:08x}({x:016x})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_entries_pick_their_bodies_from_the_flag_and_the_masks() {
+        let (mut e, _, _) = inverse_engine(true);
+        let seen: Seen = Rc::default();
+        for (body, answer) in [
+            (ACOS_SSE2, 1.0f64),
+            (ACOS_SSE2_REGISTER, 2.0),
+            (ASIN_SSE2, 3.0),
+            (ATAN_SSE2, 4.0),
+            (ATAN_SSE2_REGISTER, 5.0),
+        ] {
+            let record = seen.clone();
+            e.register_double(body, move |_, a| {
+                record.borrow_mut().push(a.to_vec());
+                answer.into_ret()
+            });
+        }
+        let at = |e: &mut Engine, addr: u32| e.call(addr, &args![0.25f64]).f64();
+        assert_eq!(at(&mut e, 0x00ec_a190), 1.0);
+        assert_eq!(at(&mut e, 0x00ec_a1d0), 2.0);
+        assert_eq!(at(&mut e, 0x00ec_9610), 3.0);
+        assert_eq!(at(&mut e, 0x00ec_9010), 4.0);
+        assert_eq!(at(&mut e, 0x00ec_9050), 5.0);
+        assert!(seen.borrow().iter().all(|w| w == &args![0.25f64]));
+        // An unmasked x87 exception: the x87 bodies.
+        set_x87_control_word(&mut e, 0x027e);
+        let x87 = at(&mut e, 0x00ec_9010);
+        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+        assert_eq!(x87.to_bits(), inverse_sequence(2, 0.25, 0x027f));
+        // The register forms of the SSE2 bodies store the register (a signalling NaN quiet).
+        e.register(LIBM_ERROR_SUPPORT, |_, _| Ret::default());
+        put(&mut e, ATAN_32A0, 0x7fff_ffff_ffff_ffff);
+        put(&mut e, ATAN_32A0 + 8, 0x7fff_ffff_ffff_ffff);
+        put(&mut e, ATAN_33C8, 0x434d_0296_7c31_cdb5);
+        assert_eq!(
+            fn_00ed5d80(&mut e, f64::from_bits(0x7ff0_0000_0000_0001)).to_bits(),
+            0x7ff8_0000_0000_0001
+        );
+    }
+
+    #[test]
+    fn inverse_sse2_special_values_without_the_tables() {
+        let (mut e, _, libm) = engine(true);
+        for (at, bits) in [
+            (ACOS_AE90, 0x7fff_ffff_ffff_ffffu64),
+            (ACOS_AE90 + 8, 0x7fff_ffff_ffff_ffff),
+            (ACOS_AEA0, 1.0f64.to_bits()),
+            (ACOS_AE98, 0xffff_c000_0000_0000),
+            (ACOS_ADD0, 0x3c91_a626_3314_5c07),
+            (ACOS_ADD0 + 8, 0x3ff9_21fb_5444_2d18),
+            (ACOS_ADF0, 0x3ca1_a626_3314_5c07),
+            (ACOS_ADF0 + 8, 0x4009_21fb_5444_2d18),
+            (ASIN_4BD0, 0x7fff_ffff_ffff_ffff),
+            (ASIN_4BE0, 1.0f64.to_bits()),
+            (ASIN_4BD8, 0xffff_c000_0000_0000),
+            (ASIN_4B40, 0x3c91_a626_3314_5c07),
+            (ASIN_4B40 + 8, 0x3ff9_21fb_5444_2d18),
+            (ATAN_32A0, 0x7fff_ffff_ffff_ffff),
+            (ATAN_32A0 + 8, 0x7fff_ffff_ffff_ffff),
+            (ATAN_33C8, 0x434d_0296_7c31_cdb5),
+            (ATAN_33B8, 0x3fa0_0000_0000_0000),
+            (ATAN_33C0, 0x3e40_0000_0000_0000),
+            (ATAN_3388, 0),
+            (ATAN_33D0, 0x0010_0000_0000_0000),
+            (ATAN_33D8, 0x0200_0000_0000_0000),
+            (ATAN_3290, 0x7ff0_0000_0000_0000),
+            (ATAN_3290 + 8, 0x7ff0_0000_0000_0000),
+            (ATAN_32B0, 0x3ff9_21fb_5444_2d18),
+            (ATAN_32B0 + 8, 0xbff9_21fb_5444_2d18),
+        ] {
+            put(&mut e, at, bits);
+        }
+        let half_pi = 0x3ff9_21fb_5444_2d18u64;
+        // Recorded from the exe (entry, argument, result, error code).
+        let cases: [(u32, u64, u64, u32); 19] = [
+            (0x00ec_a190, 0x3ff0_0000_0000_0000, 0, 0),
+            (0x00ec_a190, 0xbff0_0000_0000_0000, 0x4009_21fb_5444_2d18, 0),
+            (
+                0x00ec_a190,
+                0x4000_0000_0000_0000,
+                0xfff8_0000_0000_0000,
+                0x3a,
+            ),
+            (
+                0x00ec_a190,
+                0x7ff4_0000_0000_0000,
+                0x7ffc_0000_0000_0000,
+                0x3f0,
+            ),
+            (0x00ec_a190, 0x0000_0000_0000_0001, half_pi, 0),
+            (0x00ec_a190, 0x3c00_0000_0000_0000, half_pi, 0),
+            (0x00ec_9610, 0x3ff0_0000_0000_0000, half_pi, 0),
+            (0x00ec_9610, 0xbff0_0000_0000_0000, 0xbff9_21fb_5444_2d18, 0),
+            (0x00ec_9610, 0x8000_0000_0000_0001, 0x8000_0000_0000_0001, 0),
+            (
+                0x00ec_9610,
+                0xc000_0000_0000_0000,
+                0xfff8_0000_0000_0000,
+                0x3d,
+            ),
+            (
+                0x00ec_9610,
+                0xfff8_0000_0000_0005,
+                0xfff8_0000_0000_0005,
+                0x3f1,
+            ),
+            (0x00ec_9610, 0x3c00_0000_0000_0000, 0x3c00_0000_0000_0000, 0),
+            (0x00ec_9010, 0x7ff0_0000_0000_0000, half_pi, 0),
+            (0x00ec_9010, 0xfff0_0000_0000_0000, 0xbff9_21fb_5444_2d18, 0),
+            (
+                0x00ec_9010,
+                0x7ff4_0000_0000_0000,
+                0x7ffc_0000_0000_0000,
+                0x3eb,
+            ),
+            (0x00ec_9010, 0x8000_0000_0000_0000, 0x8000_0000_0000_0000, 0),
+            (0x00ec_9010, 0x0000_0000_0000_0003, 0x0000_0000_0000_0003, 0),
+            (0x00ec_9010, 0x3000_0000_0000_0000, 0x3000_0000_0000_0000, 0),
+            (0x00ec_9010, 0x4400_0000_0000_0000, half_pi, 0),
+        ];
+        for (addr, x, want, error) in cases {
+            libm.borrow_mut().clear();
+            let got = e.call(addr, &args![x]).f64().to_bits();
+            let code = libm.borrow().last().map_or(0, |w| w[3]);
+            assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
+        }
+    }
+
+    /// Recorded from the exe: the three on their SSE2 paths.
+    const ACOS_SSE2_RECORDED: &[Vector1] = &[
+        (0xbff13cba_2cdf1b80, 0xfff80000_00000000, 0x3a),
+        (0x7ff80000_00000000, 0x7ff80000_00000000, 0x3f0),
+        (0x43e5229e_fd6f30b2, 0xfff80000_00000000, 0x3a),
+        (0xc104c745_4965dada, 0xfff80000_00000000, 0x3a),
+        (0xc735a718_d6e4d08e, 0xfff80000_00000000, 0x3a),
+        (0xbfec3430_4e883d00, 0x40053248_60b571c9, 0),
+        (0xe8c387fd_0083ca96, 0xfff80000_00000000, 0x3a),
+        (0xecc44e6f_1a5c7148, 0xfff80000_00000000, 0x3a),
+        (0x4190fc4f_944a10e8, 0xfff80000_00000000, 0x3a),
+        (0x411bba08_990fd63c, 0xfff80000_00000000, 0x3a),
+        (0x40240000_00000000, 0xfff80000_00000000, 0x3a),
+        (0x4096fc11_f153cdca, 0xfff80000_00000000, 0x3a),
+        (0xc11d2acd_db0e343c, 0xfff80000_00000000, 0x3a),
+        (0xc03d0000_00000000, 0xfff80000_00000000, 0x3a),
+        (0x3fb4703f_b9d9fc00, 0x3ff7da9e_27aa88c9, 0),
+        (0xc113f0a9_12c25992, 0xfff80000_00000000, 0x3a),
+        (0x44273073_7ac059aa, 0xfff80000_00000000, 0x3a),
+        (0x8676739f_bf6f2f0c, 0x3ff921fb_54442d18, 0),
+        (0xbfa29687_eca9c000, 0x3ff9b6b7_f1bd6b78, 0),
+        (0x40b78b93_adddfb90, 0xfff80000_00000000, 0x3a),
+        (0xbf89c85a_ca443977, 0x3ff9558c_631e26da, 0),
+        (0x410007db_90eeda3d, 0xfff80000_00000000, 0x3a),
+        (0x40f573a4_e3afbe8c, 0xfff80000_00000000, 0x3a),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x3f0),
+        (0x49429584_e0f80cb3, 0xfff80000_00000000, 0x3a),
+        (0x411a6a8c_9b03764b, 0xfff80000_00000000, 0x3a),
+        (0xc0f0cf01_bfdeffca, 0xfff80000_00000000, 0x3a),
+        (0x40000000_00000000, 0xfff80000_00000000, 0x3a),
+        (0xbff6bf6d_ef6353c0, 0xfff80000_00000000, 0x3a),
+        (0x41113c61_089a2d7b, 0xfff80000_00000000, 0x3a),
+        (0xbfc96088_85915800, 0x3ffc5376_f5543f87, 0),
+        (0x41fc20eb_94f519a5, 0xfff80000_00000000, 0x3a),
+        (0xbfeb3bdf_728bd979, 0x4004b5d9_f5b97d6e, 0),
+        (0xc378f3bc_4cd9b30a, 0xfff80000_00000000, 0x3a),
+        (0x3feb6f19_7ee8b180, 0x3fe14dff_40639979, 0),
+        (0x40e2240e_f253e43c, 0xfff80000_00000000, 0x3a),
+        (0x4119bf57_5649010f, 0xfff80000_00000000, 0x3a),
+        (0xbfe2cd5a_e0da7140, 0x4001973c_96e62853, 0),
+        (0x3fef7eb6_607d85c0, 0x3fc6c55d_548b7496, 0),
+        (0x3fefffff_fffe07c1, 0x3ed67496_b4ce399b, 0),
+        (0xbfc672a7_8b49d700, 0x3ffbf40c_32d89abf, 0),
+        (0x3fefffff_fffffe92, 0x3e932191_811b0a53, 0),
+        (0xbfefffd8_adf64f71, 0x40091570_c685d32a, 0),
+        (0xbfefffff_bfbdc986, 0x400920fa_cff93cc4, 0),
+        (0xbfd8970b_20b6d180, 0x3fff7149_8b028ff3, 0),
+        (0xbff00000_00000000, 0x400921fb_54442d18, 0),
+        (0x3f1b51e0_afa36ea4, 0x3ff9218e_0cc16b39, 0),
+        (0xbfd34c56_166d4400, 0x3ffe0897_8f4ab9f7, 0),
+        (0x3feffc0c_b0cb795e, 0x3f9fcd68_114366c6, 0),
+        (0x3fefffff_fdb095b9, 0x3f1851ab_d9bfc949, 0),
+        (0x42326de7_3977435e, 0xfff80000_00000000, 0x3a),
+        (0x83400b48_c13f6b4e, 0x3ff921fb_54442d18, 0),
+        (0xc21b2f93_452584c1, 0xfff80000_00000000, 0x3a),
+        (0xbfd02239_bc261880, 0x3ffd35cc_aece2a1e, 0),
+        (0x9472cff3_b197b003, 0x3ff921fb_54442d18, 0),
+        (0x3fefffef_b7efe494, 0x3f7023e0_852514ff, 0),
+        (0x3fefffff_fffffff7, 0x3e680000_00000001, 0),
+        (0xbfe036a6_85010800, 0x4000d121_ff001687, 0),
+        (0xbfe4ea27_0d248240, 0x400243cc_b70ed656, 0),
+        (0x4007de20_12fb488b, 0xfff80000_00000000, 0x3a),
+    ];
+    const ASIN_SSE2_RECORDED: &[Vector1] = &[
+        (0xbff13cba_2cdf1b80, 0xfff80000_00000000, 0x3d),
+        (0x7ff80000_00000000, 0x7ff80000_00000000, 0x3f1),
+        (0x43e5229e_fd6f30b2, 0xfff80000_00000000, 0x3d),
+        (0xc104c745_4965dada, 0xfff80000_00000000, 0x3d),
+        (0xc735a718_d6e4d08e, 0xfff80000_00000000, 0x3d),
+        (0xbfec3430_4e883d00, 0xbff14295_6d26b67b, 0),
+        (0xe8c387fd_0083ca96, 0xfff80000_00000000, 0x3d),
+        (0xecc44e6f_1a5c7148, 0xfff80000_00000000, 0x3d),
+        (0x4190fc4f_944a10e8, 0xfff80000_00000000, 0x3d),
+        (0x411bba08_990fd63c, 0xfff80000_00000000, 0x3d),
+        (0x40240000_00000000, 0xfff80000_00000000, 0x3d),
+        (0x4096fc11_f153cdca, 0xfff80000_00000000, 0x3d),
+        (0xc11d2acd_db0e343c, 0xfff80000_00000000, 0x3d),
+        (0xc03d0000_00000000, 0xfff80000_00000000, 0x3d),
+        (0x3fb4703f_b9d9fc00, 0x3fb475d2_c99a44f7, 0),
+        (0xc113f0a9_12c25992, 0xfff80000_00000000, 0x3d),
+        (0x44273073_7ac059aa, 0xfff80000_00000000, 0x3d),
+        (0x8676739f_bf6f2f0c, 0x8676739f_bf6f2f0c, 0),
+        (0xbfa29687_eca9c000, 0xbfa29793_af27cc01, 0),
+        (0x40b78b93_adddfb90, 0xfff80000_00000000, 0x3d),
+        (0xbf89c85a_ca443977, 0xbf89c887_6cfce0eb, 0),
+        (0x410007db_90eeda3d, 0xfff80000_00000000, 0x3d),
+        (0x40f573a4_e3afbe8c, 0xfff80000_00000000, 0x3d),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x3f1),
+        (0x49429584_e0f80cb3, 0xfff80000_00000000, 0x3d),
+        (0x411a6a8c_9b03764b, 0xfff80000_00000000, 0x3d),
+        (0xc0f0cf01_bfdeffca, 0xfff80000_00000000, 0x3d),
+        (0x40000000_00000000, 0xfff80000_00000000, 0x3d),
+        (0xbff6bf6d_ef6353c0, 0xfff80000_00000000, 0x3d),
+        (0x41113c61_089a2d7b, 0xfff80000_00000000, 0x3d),
+        (0xbfc96088_85915800, 0xbfc98bdd_0880937a, 0),
+        (0x41fc20eb_94f519a5, 0xfff80000_00000000, 0x3d),
+        (0xbfeb3bdf_728bd979, 0xbff049b8_972ecdc3, 0),
+        (0xc378f3bc_4cd9b30a, 0xfff80000_00000000, 0x3d),
+        (0x3feb6f19_7ee8b180, 0x3ff07afb_b412605c, 0),
+        (0x40e2240e_f253e43c, 0xfff80000_00000000, 0x3d),
+        (0x4119bf57_5649010f, 0xfff80000_00000000, 0x3d),
+        (0xbfe2cd5a_e0da7140, 0xbfe418fb_b310471a, 0),
+        (0x3fef7eb6_607d85c0, 0x3ff6494f_a9b2be85, 0),
+        (0x3fefffff_fffe07c1, 0x3ff921f5_b71e7fe5, 0),
+        (0xbfc672a7_8b49d700, 0xbfc69086_f4a36d36, 0),
+        (0x3fefffff_fffffe92, 0x3ff921fb_07bde714, 0),
+        (0xbfefffd8_adf64f71, 0xbff908e6_38c7793c, 0),
+        (0xbfefffff_bfbdc986, 0xbff91ffa_4bae4c70, 0),
+        (0xbfd8970b_20b6d180, 0xbfd93d38_daf98b6c, 0),
+        (0xbff00000_00000000, 0xbff921fb_54442d18, 0),
+        (0x3f1b51e0_afa36ea4, 0x3f1b51e0_b077d619, 0),
+        (0xbfd34c56_166d4400, 0xbfd39a70_ec1a337a, 0),
+        (0x3feffc0c_b0cb795e, 0x3ff8a2c5_b3ff1f7d, 0),
+        (0x3fefffff_fdb095b9, 0x3ff9219a_0d94c619, 0),
+        (0x42326de7_3977435e, 0xfff80000_00000000, 0x3d),
+        (0x83400b48_c13f6b4e, 0x83400b48_c13f6b4e, 0),
+        (0xc21b2f93_452584c1, 0xfff80000_00000000, 0x3d),
+        (0xbfd02239_bc261880, 0xbfd04f45_6a27f416, 0),
+        (0x9472cff3_b197b003, 0x9472cff3_b197b003, 0),
+        (0x3fefffef_b7efe494, 0x3ff911d7_73bf0803, 0),
+        (0x3fefffff_fffffff7, 0x3ff921fb_48442d18, 0),
+        (0xbfe036a6_85010800, 0xbfe10091_5377ffea, 0),
+        (0xbfe4ea27_0d248240, 0xbfe6cb3c_33b2ff26, 0),
+        (0x4007de20_12fb488b, 0xfff80000_00000000, 0x3d),
+    ];
+    const ATAN_SSE2_RECORDED: &[Vector1] = &[
+        (0xbff13cba_2cdf1b80, 0xbfea52c7_4a9b1284, 0),
+        (0x7ff80000_00000000, 0x7ff80000_00000000, 0x3eb),
+        (0x43e5229e_fd6f30b2, 0x3ff921fb_54442d18, 0),
+        (0xc104c745_4965dada, 0xbff921f5_2b3e7d06, 0),
+        (0xc735a718_d6e4d08e, 0xbff921fb_54442d18, 0),
+        (0xbfec3430_4e883d00, 0xbfe71e1e_d2d3f982, 0),
+        (0xe8c387fd_0083ca96, 0xbff921fb_54442d18, 0),
+        (0xecc44e6f_1a5c7148, 0xbff921fb_54442d18, 0),
+        (0x4190fc4f_944a10e8, 0x3ff921fb_507f9802, 0),
+        (0x411bba08_990fd63c, 0x3ff921f9_055b0969, 0),
+        (0x40240000_00000000, 0x3ff789bd_2c160054, 0),
+        (0x4096fc11_f153cdca, 0x3ff91f32_81742e6f, 0),
+        (0xc11d2acd_db0e343c, 0xbff921f9_228a1d6a, 0),
+        (0xc03d0000_00000000, 0xbff894cb_db6bedfc, 0),
+        (0x3fb4703f_b9d9fc00, 0x3fb4652c_a1c33e0c, 0),
+        (0xc113f0a9_12c25992, 0xbff921f8_1e9ac7a1, 0),
+        (0x44273073_7ac059aa, 0x3ff921fb_54442d18, 0),
+        (0x8676739f_bf6f2f0c, 0x8676739f_bf6f2f0c, 0),
+        (0xbfa29687_eca9c000, 0xbfa29471_25415a64, 0),
+        (0x40b78b93_adddfb90, 0x3ff9214d_5db61a83, 0),
+        (0xbf89c85a_ca443977, 0xbf89c801_88a0697e, 0),
+        (0x410007db_90eeda3d, 0x3ff921f3_58300891, 0),
+        (0x40f573a4_e3afbe8c, 0x3ff921ef_6538d5e5, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x3eb),
+        (0x49429584_e0f80cb3, 0x3ff921fb_54442d18, 0),
+        (0x411a6a8c_9b03764b, 0x3ff921f8_e80a811b, 0),
+        (0xc0f0cf01_bfdeffca, 0xbff921ec_1950879d, 0),
+        (0x40000000_00000000, 0x3ff1b6e1_92ebbe44, 0),
+        (0xbff6bf6d_ef6353c0, 0xbfeea66b_ebfcaf3b, 0),
+        (0x41113c61_089a2d7b, 0x3ff921f7_9db094f3, 0),
+        (0xbfc96088_85915800, 0xbfc90d5e_16c247bb, 0),
+        (0x41fc20eb_94f519a5, 0x3ff921fb_543b1339, 0),
+        (0xbfeb3bdf_728bd979, 0xbfe6903f_6e3e85c4, 0),
+        (0xc378f3bc_4cd9b30a, 0xbff921fb_54442d18, 0),
+        (0x3feb6f19_7ee8b180, 0x3fe6addd_6cec7538, 0),
+        (0x40e2240e_f253e43c, 0x3ff921df_1b06fac1, 0),
+        (0x4119bf57_5649010f, 0x3ff921f8_d7ee4d7a, 0),
+        (0xbfe2cd5a_e0da7140, 0xbfe0ffd1_d3586432, 0),
+        (0x3fef7eb6_607d85c0, 0x3fe8e0d3_3e180575, 0),
+        (0x3fefffff_fffe07c1, 0x3fe921fb_544330f9, 0),
+        (0xbfc672a7_8b49d700, 0xbfc638cd_b6cddd9b, 0),
+        (0x3fefffff_fffffe92, 0x3fe921fb_54442c61, 0),
+        (0xbfefffd8_adf64f71, 0xbfe921e7_ab334099, 0),
+        (0xbfefffff_bfbdc986, 0xbfe921fb_342311bb, 0),
+        (0xbfd8970b_20b6d180, 0xbfd77a1e_09783ed9, 0),
+        (0xbff00000_00000000, 0xbfe921fb_54442d18, 0),
+        (0x3f1b51e0_afa36ea4, 0x3f1b51e0_adfa9fb9, 0),
+        (0xbfd34c56_166d4400, 0xbfd2be47_7848994d, 0),
+        (0x3feffc0c_b0cb795e, 0x3fe92001_8d726b98, 0),
+        (0x3fefffff_fdb095b9, 0x3fe921fb_531c77f5, 0),
+        (0x42326de7_3977435e, 0x3ff921fb_54434ed7, 0),
+        (0x83400b48_c13f6b4e, 0x83400b48_c13f6b4e, 0),
+        (0xc21b2f93_452584c1, 0xbff921fb_5441d26e, 0),
+        (0xbfd02239_bc261880, 0xbfcf9bda_86f5541d, 0),
+        (0x9472cff3_b197b003, 0x9472cff3_b197b003, 0),
+        (0x3fefffef_b7efe494, 0x3fe921f3_303a0d35, 0),
+        (0x3fefffff_fffffff7, 0x3fe921fb_54442d14, 0),
+        (0xbfe036a6_85010800, 0xbfde039c_1124b047, 0),
+        (0xbfe4ea27_0d248240, 0xbfe28644_3a293ad7, 0),
+        (0x4007de20_12fb488b, 0x3ff3f548_631b4816, 0),
+    ];
+
+    #[test]
+    #[ignore = "needs NV_EXE: the SSE2 tables are the exe's"]
+    fn inverse_sse2_matches_the_recorded_results_on_the_exes_tables() {
+        let Some((mut e, libm)) = exe_engine() else {
+            return;
+        };
+        for (addr, vectors) in [
+            (0x00ec_a190u32, ACOS_SSE2_RECORDED),
+            (0x00ec_9610, ASIN_SSE2_RECORDED),
+            (0x00ec_9010, ATAN_SSE2_RECORDED),
+        ] {
+            for &(x, want, error) in vectors {
+                libm.borrow_mut().clear();
+                let got = e.call(addr, &args![x]).f64().to_bits();
+                let code = libm.borrow().last().map_or(0, |w| w[3]);
+                assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
+            }
         }
     }
 }
