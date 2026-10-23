@@ -130,6 +130,22 @@ pub fn fn_00b45c00(e: &mut Engine, stream: u32, position: u32) -> i32 {
     0
 }
 
+/// The fixed-code tables `00b45bd0` points the inflate state at (`.rdata`): the length/literal
+/// table (9 bits) and the distance table (5 bits).
+const FIXED_LENGTHS: u32 = 0x010a_5a98;
+const FIXED_DISTANCES: u32 = 0x010a_6298;
+
+// Translated from 00b45bd0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: the inflate state): the fixed Huffman tables
+/// of a fixed-code block: `+0x44` the length table `010a5a98` with `+0x4c` 9 bits, `+0x48`
+/// the distance table `010a6298` with `+0x50` 5 bits.
+pub fn fn_00b45bd0(e: &mut Engine, state: u32) {
+    e.mem.set_u32(state.wrapping_add(0x44), FIXED_LENGTHS);
+    e.mem.set_u32(state.wrapping_add(0x4c), 9);
+    e.mem.set_u32(state.wrapping_add(0x48), FIXED_DISTANCES);
+    e.mem.set_u32(state.wrapping_add(0x50), 5);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -137,6 +153,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_9050, fn_00b49050(u32, u32)),
         entry!(0x00b4_5db0, fn_00b45db0(u32) -> i32),
         entry!(0x00b4_5c00, fn_00b45c00(u32, u32) -> i32),
+        entry!(0x00b4_5bd0, fn_00b45bd0(u32)),
     ]
 }
 
@@ -232,5 +249,20 @@ mod tests {
         let (mut e, stream, _) = engine();
         e.register(ALLOCATE, |_, _| Ret::default());
         assert_eq!(e.call(0x00b4_5c00, &args![stream, 0u32]).i32(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_00b45bd0 {
+    use super::*;
+
+    #[test]
+    fn the_fixed_tables_go_into_the_state() {
+        let mut e = Engine::new();
+        let state = e.mem.alloc(0x60);
+        e.call(0x00b4_5bd0, &args![state]);
+        assert_eq!(e.mem.u32(state + 0x44), 0x010a_5a98);
+        assert_eq!(e.mem.u32(state + 0x48), 0x010a_6298);
+        assert_eq!((e.mem.u32(state + 0x4c), e.mem.u32(state + 0x50)), (9, 5));
     }
 }
