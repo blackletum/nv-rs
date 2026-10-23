@@ -248,6 +248,56 @@ pub fn copy_file_a(e: &mut Engine, source: Ptr, target: Ptr, fail_if_exists: u32
     1
 }
 
+// Platform: replaces KERNEL32.DLL MoveFileA (import)
+/// `MoveFileA(existing, new)` for files, as measured on scratch files
+/// (`build43-scratch/measure/movefile-2026-10-23.txt`): no source gives false with
+/// `ERROR_FILE_NOT_FOUND`; a target in a folder that does not exist `ERROR_PATH_NOT_FOUND`; a
+/// target that exists `ERROR_ALREADY_EXISTS`, unless it is the source itself (the same name, in
+/// any case: true, nothing changes here, the run's file names being kept in lower case).
+/// Otherwise the source's bytes become the target (a file of this run, engine memory) and the
+/// source is gone for the game (a player's file recorded as deleted, never touched); true, the
+/// last error left as it was (the measured values after a success are the call's internal
+/// leftovers). Moving a directory is not provided.
+pub fn move_file_a(e: &mut Engine, existing: Ptr, new: Ptr) -> u32 {
+    let from = full_path(e, &e.mem.cstr(existing.addr()));
+    let to = full_path(e, &e.mem.cstr(new.addr()));
+    let Some(from_attributes) = attributes(e, &from) else {
+        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+        return 0;
+    };
+    if from_attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        panic!("MoveFileA of a directory is not provided");
+    }
+    let (kf, kt) = (key(&from), key(&to));
+    if kf == kt {
+        return 1;
+    }
+    let parent = to
+        .iter()
+        .rposition(|&b| b == b'\\')
+        .map(|i| to[..i].to_vec());
+    if let Some(parent) = parent {
+        let is_root = parent.len() == 2 && parent[1] == b':';
+        if !is_root
+            && !matches!(attributes(e, &parent), Some(a) if a & FILE_ATTRIBUTE_DIRECTORY != 0)
+        {
+            e.kernel.last_error = ERROR_PATH_NOT_FOUND;
+            return 0;
+        }
+    }
+    if attributes(e, &to).is_some() {
+        e.kernel.last_error = ERROR_ALREADY_EXISTS;
+        return 0;
+    }
+    let data = read_whole(e, &from).expect("the source file's bytes");
+    e.kernel.disk.deleted.remove(&kt);
+    e.kernel.disk.files.insert(kt, data);
+    e.kernel.disk.files.remove(&kf);
+    e.kernel.disk.player.remove(&kf);
+    e.kernel.disk.deleted.insert(kf);
+    1
+}
+
 // Platform: replaces SHELL32.DLL SHGetFolderPathA (import)
 /// `SHGetFolderPathA(owner, folder, token, flags, path)`: the player's folder for that CSIDL as
 /// the player's table recorded it (`d3d9::folder_path`), copied into `path`, with its result. A
@@ -938,6 +988,53 @@ mod tests {
         assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
         assert_eq!(delete_file_a(&mut e, Ptr::new(dir)), 0);
         assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
+    }
+
+    #[test]
+    fn move_file_follows_the_measured_answers() {
+        let (mut e, name) = engine();
+        let dir = e.mem.alloc(0x40);
+        e.mem.set_cstr(dir, br"Q:\nv-rs-move-dir");
+        create_directory_a(&mut e, Ptr::new(dir), 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_NEW,
+            0,
+            0,
+        );
+        let buffer = e.mem.alloc(4);
+        e.mem.write(buffer, b"ab");
+        write_file(&mut e, h, Ptr::new(buffer), 2, Ptr::new(0), 0);
+        let path = |e: &mut Engine, p: &[u8]| {
+            let at = e.mem.alloc(0x40);
+            e.mem.set_cstr(at, p);
+            Ptr::new(at)
+        };
+        let moved = path(&mut e, br"Q:\nv-rs-move-dir\moved.txt");
+        let nowhere = path(&mut e, br"Q:\nv-rs-no-dir\moved.txt");
+        assert_eq!(move_file_a(&mut e, Ptr::new(name), nowhere), 0);
+        assert_eq!(e.kernel.last_error, ERROR_PATH_NOT_FOUND);
+        assert_eq!(move_file_a(&mut e, Ptr::new(name), moved), 1);
+        assert_eq!(
+            read_whole(&e, br"q:\nv-rs-move-dir\MOVED.txt"),
+            Some(b"ab".to_vec())
+        );
+        assert_eq!(move_file_a(&mut e, Ptr::new(name), moved), 0);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        let upper = path(&mut e, br"Q:\NV-RS-MOVE-DIR\MOVED.TXT");
+        assert_eq!(
+            move_file_a(&mut e, moved, upper),
+            1,
+            "the same file in another case"
+        );
+        let other = path(&mut e, br"Q:\nv-rs-move-dir\other.txt");
+        copy_file_a(&mut e, moved, other, 0);
+        assert_eq!(move_file_a(&mut e, moved, other), 0);
+        assert_eq!(e.kernel.last_error, ERROR_ALREADY_EXISTS);
     }
 
     #[test]

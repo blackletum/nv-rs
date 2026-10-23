@@ -2054,6 +2054,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, files::copy_file_a(Ptr, Ptr, u32) -> u32).1,
         ),
         (
+            k,
+            "MoveFileA",
+            entry!(0, files::move_file_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
             "SHELL32.dll",
             "SHGetFolderPathA",
             entry!(0, files::sh_get_folder_path_a(u32, u32, u32, u32, Ptr) -> u32).1,
