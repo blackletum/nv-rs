@@ -19,6 +19,12 @@
 //! single-precision lanes only; the double-precision SSE2 instructions of `floor`'s body
 //! (`CMPLTPD`, `SUBSD`) are written out where they run, each on operands that are never NaN
 //! there, so the IEEE result is the instruction's (see each one).
+//!
+//! The switch itself: the C initializer `00ed454f` (`__cinit`'s `_initterm_e` table, run by
+//! address in `crate::static_init`) sets `__use_sse2_mathfcns` (`01270a64`) from
+//! `__get_sse2_info` (`00ed1927`) and its operating-system probe `00ed18d7`. What the processor
+//! answers (the `ID` flag test and `CPUID` leaves 0 and 1) comes from the platform at the
+//! addresses [`EFLAGS_ID_TEST`], [`CPUID_LEAF_0`] and [`CPUID_LEAF_1`].
 
 use super::*;
 
@@ -781,8 +787,148 @@ pub fn libm_error_support(e: &mut Engine, argument1: Ptr, argument2: Ptr, result
     })
 }
 
+/// `__get_sse2_info` (`00ed1927`, Ghidra's label) and the probe it calls, `00ed18d7` (Ghidra
+/// gives it no name), called by address as the exe calls them.
+const GET_SSE2_INFO: u32 = 0x00ed_1927;
+const OS_SSE_PROBE: u32 = 0x00ed_18d7;
+/// The machine's answers `__get_sse2_info` reads, each supplied by the platform (the machine
+/// table) at the exe address of the instruction that asks the processor; the engine has no
+/// processor of its own to ask, so a run without them stops there.
+///
+/// - `00ed193c` (`PUSHFD; POP EAX; MOV ECX,EAX; XOR EAX,0x200000; PUSH EAX; POPFD; PUSHFD; POP
+///   EDX; SUB EDX,ECX`), no arguments: answers in `EAX` the `EDX - ECX` that sequence leaves,
+///   the EFLAGS word read back after loading the entry word with bit 21 (`ID`) flipped, minus
+///   the entry word. Zero when the `ID` bit cannot be changed (a processor without `CPUID`);
+///   a processor with `CPUID` answers `0x0020_0000` (`ID` clear at entry) or `0xffe0_0000`
+///   (`ID` set at entry).
+/// - `00ed1951` (`CPUID` with `EAX = 0`) and `00ed1964` (`CPUID` with `EAX = 1`), cdecl: the
+///   leaf and a pointer to four words the answer is written to, `EAX`, `EBX`, `ECX`, `EDX` in
+///   that order (no answer in `EAX`). Of these only leaf 1's `EDX` bit 26 (SSE2) decides
+///   anything; the other registers are stored in the frame and never read again.
+pub const EFLAGS_ID_TEST: u32 = 0x00ed_193c;
+pub const CPUID_LEAF_0: u32 = 0x00ed_1951;
+pub const CPUID_LEAF_1: u32 = 0x00ed_1964;
+/// `CPUID` leaf 1, `EDX` bit 26: SSE2.
+const CPUID_1_EDX_SSE2: u32 = 0x0400_0000;
+/// `EXCEPTION_ACCESS_VIOLATION` and `EXCEPTION_ILLEGAL_INSTRUCTION`, the codes the probe's
+/// `__except` filter handles.
+const STATUS_ACCESS_VIOLATION: u32 = 0xc000_0005;
+const STATUS_ILLEGAL_INSTRUCTION: u32 = 0xc000_001d;
+
+// Translated from 00ed454f (disassembled, FalloutNV.exe 1.4.0.525)
+/// The C initializer that sets `__use_sse2_mathfcns` (`01270a64`; Ghidra has no function here:
+/// the entry of `__cinit`'s `_initterm_e` table at `010113dc`), no arguments: clears the flag
+/// (`AND dword ptr [01270a64], 0`), stores `__get_sse2_info()`'s answer (`00ed1927`) there and
+/// answers 0 (`XOR EAX, EAX`), so `_initterm_e` goes on.
+pub fn fn_00ed454f(e: &mut Engine) -> u32 {
+    // AND dword ptr [01270a64], 0: the flag is 0 whatever it held.
+    e.set_global(super::USE_SSE2_MATHFCNS, 0u32);
+    let available = e.call(GET_SSE2_INFO, &args![]).u32();
+    e.set_global(super::USE_SSE2_MATHFCNS, available);
+    0
+}
+
+// Translated from 00ed1927 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__get_sse2_info` (Ghidra's label), cdecl, no arguments: 1 when the processor has SSE2 and
+/// the operating system runs SSE instructions, else 0. The frame's words (`EBP-0x18..EBP-4`)
+/// start as zero for the three it clears (`EBP-4`, leaf 1's `EDX`; `EBP-0xc`, leaf 0's `EAX`;
+/// `EBP-8`, leaf 1's `EAX`). When the `ID` test ([`EFLAGS_ID_TEST`]) shows a change it puts the
+/// entry flags back (`PUSH ECX; POPFD`), runs `CPUID` leaf 0 ([`CPUID_LEAF_0`]: `EAX` to
+/// `EBP-0xc`, `EBX` to `EBP-0x18`, `EDX` to `EBP-0x14`, `ECX` to `EBP-0x10`) and leaf 1
+/// ([`CPUID_LEAF_1`]: `EDX` to `EBP-4`, `EAX` to `EBP-8`); without a change it runs neither.
+/// Then: `EBP-4` bit 26 clear gives 0; set, the answer is 1 when the probe `00ed18d7` answers
+/// nonzero, else 0.
+pub fn fn_00ed1927(e: &mut Engine) -> u32 {
+    // SUB ESP, 0x18: the frame at EBP-0x18; the CPUID answer's four words after it (the
+    // registers, not the exe's memory).
+    e.with_stack(0x28, |e, block| {
+        let frame = block.addr();
+        let regs = frame + 0x18;
+        // XOR EAX, EAX; MOV [EBP-4], EAX; MOV [EBP-0xc], EAX; MOV [EBP-8], EAX.
+        e.mem.set_u32(frame + 0x14, 0);
+        e.mem.set_u32(frame + 0xc, 0);
+        e.mem.set_u32(frame + 0x10, 0);
+        // 00ed193c..00ed194b: the ID flag test; JZ 00ed196c when nothing changed.
+        let changed = e.call(EFLAGS_ID_TEST, &args![]).u32();
+        if changed != 0 {
+            // PUSH ECX; POPFD: the entry flags back. XOR EAX, EAX; CPUID.
+            e.call(CPUID_LEAF_0, &args![0u32, regs]);
+            let (eax, ebx, ecx, edx) = (
+                e.mem.u32(regs),
+                e.mem.u32(regs + 4),
+                e.mem.u32(regs + 8),
+                e.mem.u32(regs + 0xc),
+            );
+            e.mem.set_u32(frame + 0xc, eax);
+            e.mem.set_u32(frame, ebx);
+            e.mem.set_u32(frame + 4, edx);
+            e.mem.set_u32(frame + 8, ecx);
+            // MOV EAX, 1; CPUID.
+            e.call(CPUID_LEAF_1, &args![1u32, regs]);
+            let (eax, edx) = (e.mem.u32(regs), e.mem.u32(regs + 0xc));
+            e.mem.set_u32(frame + 0x14, edx);
+            e.mem.set_u32(frame + 0x10, eax);
+        }
+        // TEST dword ptr [EBP-4], 0x4000000; JZ 00ed1984.
+        if e.mem.u32(frame + 0x14) & CPUID_1_EDX_SSE2 == 0 {
+            return 0;
+        }
+        // CALL 00ed18d7; TEST EAX, EAX; JZ 00ed1984; else XOR EAX, EAX; INC EAX.
+        let probe = e.call(OS_SSE_PROBE, &args![]).u32();
+        u32::from(probe != 0)
+    })
+}
+
+/// The exception code `MOVAPD XMM0, XMM1` raises in the engine: none. The engine runs every
+/// SSE instruction (`crate::sse`, `MXCSR` [`super::MXCSR`]) and keeps no `XMM` registers, so
+/// the probe's instruction has nothing to change and nothing to raise.
+fn movapd_exception() -> Option<u32> {
+    None
+}
+
+// Translated from 00ed18d7 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ed18d7 - the SEH frame (__SEH_prolog4/__SEH_epilog4, 00ed1714/00ed1759) is not translated; its __except filter (00ed18f4) and handler (00ed1910) are, run on the exception the probe's instruction raises (none in the engine).
+/// The operating-system SSE probe `__get_sse2_info` calls (Ghidra gives it no
+/// name), cdecl, no arguments: under `__try` (try level 0) it runs `MOVAPD XMM0,
+/// XMM1`, keeps 1 in its result (`EBP-0x1c`) and leaves the try (level `-2`), answering 1. An
+/// exception there goes to the filter `00ed18f4` ([`os_sse_probe_filter`]): handled (an access
+/// violation or an illegal instruction), the handler `00ed1910` sets the result to 0 and
+/// answers it; any other code continues the search for a handler past this function, which the
+/// engine does not have, so the run stops. In the engine the instruction raises nothing
+/// ([`movapd_exception`]), so those two paths are not taken.
+pub fn fn_00ed18d7(_e: &mut Engine) -> u32 {
+    // AND [EBP-4], 0 (try level 0); MOVAPD XMM0, XMM1.
+    match movapd_exception() {
+        // MOV [EBP-0x1c], 1; JMP 00ed1917: try level -2, MOV EAX, [EBP-0x1c].
+        None => 1,
+        Some(code) => {
+            if os_sse_probe_filter(code) != 0 {
+                // 00ed1910: MOV ESP, [EBP-0x18]; AND [EBP-0x1c], 0; then 00ed1917.
+                0
+            } else {
+                panic!(
+                    "00ed18d7: exception {code:08x} in the SSE probe continues the search for \
+                     a handler past it (EXCEPTION_CONTINUE_SEARCH), which the engine does not have"
+                )
+            }
+        }
+    }
+}
+
+/// The `__except` filter of the probe (`00ed18f4`, part of `00ed18d7`): reads the exception
+/// code (`[[EBP-0x14]]` is the `EXCEPTION_RECORD`, its first word the code) and answers 1
+/// (`EXCEPTION_EXECUTE_HANDLER`) for `0xc0000005` and `0xc000001d`, else 0
+/// (`EXCEPTION_CONTINUE_SEARCH`).
+fn os_sse_probe_filter(code: u32) -> u32 {
+    // CMP EAX, 0xc0000005; JZ 00ed190c; CMP EAX, 0xc000001d; JZ 00ed190c; XOR EAX, EAX.
+    u32::from(code == STATUS_ACCESS_VIOLATION || code == STATUS_ILLEGAL_INSTRUCTION)
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ed_454f, fn_00ed454f() -> u32),
+        entry!(0x00ed_1927, fn_00ed1927() -> u32),
+        entry!(0x00ed_18d7, fn_00ed18d7() -> u32),
         entry!(0x00ec_6940, floor(f64) -> f64),
         entry!(0x00ed_4563, floor_x87(f64) -> f64),
         entry!(0x00ed_5981, sptype(u32, u32) -> i32),
@@ -1564,5 +1710,111 @@ mod tests {
         }));
         assert!(stopped.is_err());
         bare.call(SET_STATFP, &args![0x24u32]);
+    }
+
+    /// A `CPUID` leaf's answer: `EAX`, `EBX`, `ECX`, `EDX`.
+    type Cpuid = [u32; 4];
+
+    /// Example processor answers (not a measured machine's): leaf 0 with the highest leaf 0xd
+    /// and the vendor words, leaf 1 with SSE2 (bit 26), and leaf 1 with SSE but not SSE2.
+    const LEAF_0: Cpuid = [0xd, 0x756e_6547, 0x6c65_746e, 0x4965_6e69];
+    const LEAF_1_SSE2: Cpuid = [0x0001_0676, 0x0001_0800, 0x0008_e3bd, 0xbfeb_fbff];
+    const LEAF_1_NO_SSE2: Cpuid = [0x0000_0683, 0, 0, 0x0383_f9ff];
+
+    /// An engine whose platform answers the ID flag test with `id_change` and `CPUID` leaves 0
+    /// and 1 with `leaf_1` (each checking its leaf), `__use_sse2_mathfcns` mapped and holding a
+    /// stale word, and the call log on.
+    fn processor(id_change: u32, leaf_1: Cpuid) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(EFLAGS_ID_TEST, move |_, a| {
+            assert!(a.is_empty());
+            id_change.into_ret()
+        });
+        for (at, leaf, regs) in [(CPUID_LEAF_0, 0u32, LEAF_0), (CPUID_LEAF_1, 1, leaf_1)] {
+            e.register_double(at, move |e, a| {
+                assert_eq!(a.len(), 2);
+                assert_eq!(a[0], leaf);
+                for (i, word) in regs.iter().enumerate() {
+                    e.mem.set_u32(a[1] + 4 * i as u32, *word);
+                }
+                Ret::default()
+            });
+        }
+        e.map(SSE2_FLAG, 4);
+        e.set_global(SSE2_FLAG, 0xdead_beefu32);
+        e.call_log = Some(Vec::new());
+        e
+    }
+
+    #[test]
+    fn the_sse2_switch_is_set_when_cpuid_has_sse2_and_the_probe_passes() {
+        let mut e = processor(0x0020_0000, LEAF_1_SSE2);
+        assert_eq!(e.call(0x00ed_454f, &args![]), Ret::default());
+        assert_eq!(e.global::<u32>(SSE2_FLAG), 1);
+        let leaf_0 = calls(&e, CPUID_LEAF_0);
+        let leaf_1 = calls(&e, CPUID_LEAF_1);
+        assert_eq!(leaf_0.len(), 1);
+        assert_eq!(leaf_0[0][0], 0);
+        assert_eq!(leaf_1.len(), 1);
+        assert_eq!(leaf_1[0][0], 1);
+        // Both answers go to the same four words.
+        assert_eq!(leaf_0[0][1], leaf_1[0][1]);
+        assert_eq!(calls(&e, GET_SSE2_INFO), vec![Vec::<u32>::new()]);
+        assert_eq!(calls(&e, OS_SSE_PROBE), vec![Vec::<u32>::new()]);
+        // The ID flag set at entry reads back as a negative difference: still a change.
+        let mut e = processor(0xffe0_0000, LEAF_1_SSE2);
+        assert_eq!(e.call(0x00ed_454f, &args![]).u32(), 0);
+        assert_eq!(e.global::<u32>(SSE2_FLAG), 1);
+    }
+
+    #[test]
+    fn the_sse2_switch_stays_clear_without_sse2_cpuid_or_the_os_probe() {
+        // CPUID leaf 1 without bit 26: 0, and the probe is not called.
+        let mut e = processor(0x0020_0000, LEAF_1_NO_SSE2);
+        assert_eq!(e.call(0x00ed_454f, &args![]).u32(), 0);
+        assert_eq!(e.global::<u32>(SSE2_FLAG), 0);
+        assert_eq!(calls(&e, CPUID_LEAF_1).len(), 1);
+        assert!(calls(&e, OS_SSE_PROBE).is_empty());
+        // The ID flag does not change: no CPUID at all, the cleared words give 0.
+        let mut e = processor(0, LEAF_1_SSE2);
+        assert_eq!(e.call(0x00ed_454f, &args![]).u32(), 0);
+        assert_eq!(e.global::<u32>(SSE2_FLAG), 0);
+        assert!(calls(&e, CPUID_LEAF_0).is_empty());
+        assert!(calls(&e, CPUID_LEAF_1).is_empty());
+        assert!(calls(&e, OS_SSE_PROBE).is_empty());
+        // SSE2 in CPUID but the probe answers 0: 0; any nonzero probe answer gives 1.
+        for (probe, flag) in [(0u32, 0u32), (2, 1)] {
+            let mut e = processor(0x0020_0000, LEAF_1_SSE2);
+            e.register_double(OS_SSE_PROBE, move |_, _| probe.into_ret());
+            assert_eq!(e.call(GET_SSE2_INFO, &args![]).u32(), flag);
+            assert_eq!(e.call(0x00ed_454f, &args![]).u32(), 0);
+            assert_eq!(e.global::<u32>(SSE2_FLAG), flag);
+        }
+    }
+
+    #[test]
+    fn the_os_sse_probe_passes_and_its_filter_handles_two_codes() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(OS_SSE_PROBE, &args![]).u32(), 1);
+        assert_eq!(os_sse_probe_filter(0xc000_0005), 1);
+        assert_eq!(os_sse_probe_filter(0xc000_001d), 1);
+        assert_eq!(os_sse_probe_filter(0xc000_0096), 0);
+        assert_eq!(os_sse_probe_filter(0), 0);
+    }
+
+    #[test]
+    fn the_c_initializer_walk_runs_the_sse2_switch() {
+        let mut e = processor(0x0020_0000, LEAF_1_SSE2);
+        // Both tables mapped (the C++ one ends just before the C one), empty but for `__cinit`'s
+        // C initializer slot `010113dc`.
+        let end = crate::static_init::C_TABLE.1;
+        let cpp_start = crate::static_init::CPP_TABLE.0;
+        e.map(cpp_start, end - cpp_start);
+        e.mem.set_u32(0x0101_13dc, 0x00ed_454f);
+        let report = crate::static_init::run(&mut e, &[]);
+        assert_eq!(report.translated, 1);
+        assert!(report.stopped.is_empty() && report.open.is_empty());
+        assert_eq!(report.c_failed, None);
+        assert_eq!(e.global::<u32>(SSE2_FLAG), 1);
     }
 }
