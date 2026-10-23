@@ -191,6 +191,14 @@ fn main() {
         return;
     }
     let count: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4000);
+    if what == "serve" {
+        unsafe {
+            let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
+            assert!(!module.is_null(), "d3dx9_38.dll did not load");
+            texture::serve(module);
+        }
+        return;
+    }
     let out = std::io::stdout();
     let mut o = out.lock();
     unsafe {

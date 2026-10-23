@@ -126,6 +126,8 @@ pub struct DdsImage {
     pub height: u32,
     pub mip_levels: u32,
     pub format: u32,
+    /// The side of the format's blocks in pixels (4 for DXT, 1 otherwise).
+    pub block: u32,
     /// Each level's bytes: (offset in the file, length), largest first.
     pub levels: Vec<(usize, usize)>,
 }
@@ -198,6 +200,7 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         height,
         mip_levels,
         format,
+        block,
         levels,
     })
 }
@@ -230,9 +233,178 @@ pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, 
     }
 }
 
+/// Gives the layer the machine-local texture cache folder (`scripts/d3dx-texture-capture`).
+pub fn set_texture_cache(e: &mut Engine, dir: std::path::PathBuf) {
+    e.kernel.graphics.d3dx_texture_cache = Some(dir);
+}
+
+/// How to fill the texture cache, for the stop when an entry is missing.
+pub const TEXTURE_CACHE_HINT: &str = "run `scripts/d3dx-texture-capture` on this machine (it reads \
+     the game's textures and the player's d3dx9_38.dll and writes the cache NV_D3DX_CACHE names, \
+     default %LOCALAPPDATA%/nv-rs/d3dx-cache)";
+
+/// FNV-1a, 64 bits.
+fn fnv(seed: u64, b: &[u8]) -> u64 {
+    b.iter().fold(seed, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// The texture cache's key of one call (the same as the capture tool's `key`): the call's
+/// name, the data's length and the FNV-1a hash of the name then the data.
+pub fn texture_key(call: &str, data: &[u8]) -> String {
+    let h = fnv(fnv(0xcbf2_9ce4_8422_2325, call.as_bytes()), data);
+    format!("{call}-{:x}-{h:016x}", data.len())
+}
+
+/// One surface of a cache entry: format, width, height, and the bytes D3DX made (`None` when
+/// it left the file's level as stored).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedSurface {
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// A cache entry (`NVTX0001`): the call's HRESULT, its level and face counts and surfaces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedTexture {
+    pub hr: u32,
+    pub levels: u32,
+    pub faces: u32,
+    pub surfaces: Vec<CachedSurface>,
+}
+
+/// Reads a cache entry; `None` when it is not one.
+pub fn parse_cached_texture(b: &[u8]) -> Option<CachedTexture> {
+    if b.get(..8)? != b"NVTX0001" {
+        return None;
+    }
+    let mut at = 8usize;
+    fn take(b: &[u8], at: &mut usize) -> Option<u32> {
+        let w = u32::from_le_bytes(b.get(*at..*at + 4)?.try_into().ok()?);
+        *at += 4;
+        Some(w)
+    }
+    let word = |at: &mut usize| take(b, at);
+    let (_kind, hr, levels, faces) = (word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?);
+    let mut surfaces = Vec::new();
+    for _ in 0..levels * faces {
+        let (format, width, height, kept, len) =
+            (word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?);
+        let bytes = if kept != 0 {
+            let start = at;
+            at += len as usize;
+            Some(b.get(start..at)?.to_vec())
+        } else {
+            None
+        };
+        surfaces.push(CachedSurface { format, width, height, bytes });
+    }
+    Some(CachedTexture { hr, levels, faces, surfaces })
+}
+
+/// The copy rule (measured 2026-10-23 on 983 of the game's textures): D3DX leaves a level as
+/// the file stores it when the file has that level, the texture keeps the file's format and
+/// size, and the level is at least one block on each side; it makes every other level itself
+/// (sub-block DXT levels, the rest of the chain when the file stores fewer levels, converted
+/// formats).
+pub fn copies_level(image: &DdsImage, surface: &CachedSurface, level: u32) -> bool {
+    let (w, h) = ((image.width >> level).max(1), (image.height >> level).max(1));
+    level < image.mip_levels
+        && surface.format == image.format
+        && (surface.width, surface.height) == (w, h)
+        && w >= image.block
+        && h >= image.block
+}
+
+/// `IDirect3DDevice9::CreateTexture`, `IDirect3DTexture9::LockRect`/`UnlockRect` (vtable
+/// offsets) and `D3DPOOL_MANAGED`.
+const DEVICE_CREATE_TEXTURE: u32 = 4 * 23;
+const TEXTURE_LOCK_RECT: u32 = 4 * 19;
+const TEXTURE_UNLOCK_RECT: u32 = 4 * 20;
+const D3DPOOL_MANAGED: u32 = 1;
+
+// Platform: replaces d3dx9_38.dll D3DXCreateTextureFromFileInMemory (import)
+/// `D3DXCreateTextureFromFileInMemory(device, data, size, out)` (stdcall): the texture D3DX
+/// makes with its defaults (size, levels and format from the file, `D3DPOOL_MANAGED`). The
+/// levels D3DX leaves as stored ([`copies_level`]) are copied from the file; the others come
+/// from the machine-local texture cache, which also gives the call's answer and the texture's
+/// level count and formats; the copy rule must agree with the cache on every level. The texture
+/// is made through the device's own `CreateTexture` and filled through `LockRect`. Not provided
+/// (the run stops): a file the cache does not have (its bytes are saved beside the cache as
+/// `missing-<key>.dds` so the capture can be run for it), cube and volume entries, a rule
+/// the cache contradicts.
+pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr) -> u32 {
+    let bytes = e.mem.bytes(data.addr(), size);
+    let call = "CreateTextureFromFileInMemory";
+    let key = texture_key(call, &bytes);
+    let Some(dir) = e.kernel.graphics.d3dx_texture_cache.clone() else {
+        panic!("D3DX{call}: no texture cache is set: {TEXTURE_CACHE_HINT}");
+    };
+    let cached = std::fs::read(dir.join(format!("{key}.tex"))).ok();
+    let Some(entry) = cached.as_deref().and_then(parse_cached_texture) else {
+        let saved = dir.join(format!("missing-{key}.dds"));
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&saved, &bytes);
+        panic!("D3DX{call}: {key} is not in the texture cache (input saved to {}): {TEXTURE_CACHE_HINT}", saved.display());
+    };
+    if entry.hr != 0 {
+        return entry.hr;
+    }
+    assert_eq!(entry.faces, 1, "D3DX{call}: a {}-face entry is not provided", entry.faces);
+    let image = read_dds(&bytes).expect("a file the DLL took");
+    for (level, s) in entry.surfaces.iter().enumerate() {
+        let rule = copies_level(&image, s, level as u32);
+        assert_eq!(
+            rule,
+            s.bytes.is_none(),
+            "D3DX{call} {key}: level {level}: the copy rule says {rule}, the cache the opposite (not provided)"
+        );
+    }
+    let top = &entry.surfaces[0];
+    let made = e.with_stack(4, |e, slot| {
+        let hr = e
+            .vcall(
+                device.addr(),
+                DEVICE_CREATE_TEXTURE,
+                &[top.width, top.height, entry.levels, 0, top.format, D3DPOOL_MANAGED, slot.addr(), 0],
+            )
+            .u32();
+        (hr, e.mem.u32(slot.addr()))
+    });
+    if made.0 != 0 {
+        panic!("D3DX{call}: the device's CreateTexture answered {:#x} (not provided)", made.0);
+    }
+    let texture = made.1;
+    for (level, s) in entry.surfaces.iter().enumerate() {
+        let level_bytes: &[u8] = match &s.bytes {
+            Some(b) => b,
+            None => {
+                let (at, len) = image.levels[level];
+                &bytes[at..at + len]
+            }
+        };
+        let (pitch, bits) = e.with_stack(8, |e, locked| {
+            let hr = e.vcall(texture, TEXTURE_LOCK_RECT, &[level as u32, locked.addr(), 0, 0]).u32();
+            assert_eq!(hr, 0, "LockRect of a managed level");
+            (e.mem.u32(locked.addr()), e.mem.u32(locked.addr() + 4))
+        });
+        let block = if s.format == image.format { image.block } else { 1 };
+        let rows = s.height.div_ceil(block).max(1) as usize;
+        let row = level_bytes.len() / rows;
+        for r in 0..rows {
+            e.mem.write(bits + r as u32 * pitch, &level_bytes[r * row..(r + 1) * row]);
+        }
+        e.vcall(texture, TEXTURE_UNLOCK_RECT, &[level as u32]);
+    }
+    e.mem.set_u32(out.addr(), texture);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Ret;
 
     /// The measured calls kept as test data (`data/d3dx/matrix_multiply.tsv`, from
     /// `scripts/d3dx-measure`): alias, control word, M1, M2, the DLL's result, returned.
@@ -387,5 +559,97 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 1000, "{checked}");
+    }
+
+    /// A cache entry (TEST DATA) for `dxt1(8, 4, 4, 40)`: 8x4 and 4x2... levels: the first
+    /// copied, the three sub-block ones (4x2, 2x1, 1x1) kept with made-up bytes.
+    fn entry_for_8x4() -> Vec<u8> {
+        let mut e = b"NVTX0001".to_vec();
+        for w in [1u32, 0, 4, 1] {
+            e.extend_from_slice(&w.to_le_bytes());
+        }
+        let dxt1 = u32::from_le_bytes(*b"DXT1");
+        let surface = |e: &mut Vec<u8>, w: u32, h: u32, bytes: Option<&[u8]>| {
+            let kept = bytes.map_or(0u32, |_| 1);
+            let len = bytes.map_or(16, |b| b.len() as u32);
+            for x in [dxt1, w, h, kept, len] {
+                e.extend_from_slice(&x.to_le_bytes());
+            }
+            if let Some(b) = bytes {
+                e.extend_from_slice(b);
+            }
+        };
+        surface(&mut e, 8, 4, None);
+        surface(&mut e, 4, 2, Some(&[0xa1; 8]));
+        surface(&mut e, 2, 1, Some(&[0xa2; 8]));
+        surface(&mut e, 1, 1, Some(&[0xa3; 8]));
+        e
+    }
+
+    #[test]
+    fn cache_entries_parse_and_the_copy_rule_agrees_with_them() {
+        let entry = parse_cached_texture(&entry_for_8x4()).unwrap();
+        assert_eq!((entry.hr, entry.levels, entry.faces), (0, 4, 1));
+        let image = read_dds(&dxt1(8, 4, 4, 40)).unwrap();
+        let rule: Vec<bool> = (0..4).map(|l| copies_level(&image, &entry.surfaces[l], l as u32)).collect();
+        assert_eq!(rule, [true, false, false, false]);
+        assert_eq!(texture_key("Call", b"ab"), texture_key("Call", b"ab"));
+        assert_ne!(texture_key("Call", b"ab"), texture_key("Call", b"ba"));
+    }
+
+    #[test]
+    fn a_texture_is_made_through_the_device_from_the_file_and_the_cache() {
+        let mut e = Engine::new();
+        // The device and texture doubles: CreateTexture records its words, LockRect hands out
+        // each level's memory with a pitch of the packed row.
+        const CREATE: u32 = 0x7f00_0100;
+        const LOCK: u32 = 0x7f00_0200;
+        const UNLOCK: u32 = 0x7f00_0204;
+        let device_vtable = e.mem.alloc(4 * 30);
+        e.mem.set_u32(device_vtable + DEVICE_CREATE_TEXTURE, CREATE);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, device_vtable);
+        let texture_vtable = e.mem.alloc(4 * 30);
+        e.mem.set_u32(texture_vtable + TEXTURE_LOCK_RECT, LOCK);
+        e.mem.set_u32(texture_vtable + TEXTURE_UNLOCK_RECT, UNLOCK);
+        let texture = e.mem.alloc(4);
+        e.mem.set_u32(texture, texture_vtable);
+        let levels = e.mem.alloc(4 * 16);
+        e.register_double(CREATE, move |e, a| {
+            assert_eq!(&a[1..7], &[8, 4, 4, 0, u32::from_le_bytes(*b"DXT1"), 1]);
+            e.mem.set_u32(a[7], texture);
+            Ret::default()
+        });
+        e.register_double(LOCK, move |e, a| {
+            let (pitch, bits) = [(16, levels), (8, levels + 16), (8, levels + 24), (8, levels + 32)][a[1] as usize];
+            e.mem.set_u32(a[2], pitch);
+            e.mem.set_u32(a[2] + 4, bits);
+            Ret::default()
+        });
+        e.register(UNLOCK, |_, _| Ret::default());
+        let dir = std::env::temp_dir().join(format!("nv-rs-d3dx-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file = dxt1(8, 4, 4, 40);
+        file[128..144].copy_from_slice(&[0x11; 16]);
+        let key = texture_key("CreateTextureFromFileInMemory", &file);
+        std::fs::write(dir.join(format!("{key}.tex")), entry_for_8x4()).unwrap();
+        set_texture_cache(&mut e, dir.clone());
+        let data = e.mem.alloc(file.len() as u32);
+        e.mem.write(data, &file);
+        let out = e.mem.alloc(4);
+        let hr = create_texture_from_file_in_memory(&mut e, Ptr::new(device), Ptr::new(data), file.len() as u32, Ptr::new(out));
+        assert_eq!(hr, 0);
+        assert_eq!(e.mem.u32(out), texture);
+        assert_eq!(e.mem.bytes(levels, 16), vec![0x11; 16], "the stored level, copied");
+        assert_eq!(e.mem.bytes(levels + 16, 8), vec![0xa1; 8], "the made ones, from the cache");
+        assert_eq!(e.mem.bytes(levels + 32, 8), vec![0xa3; 8]);
+        // A file the cache does not have stops the run with its bytes saved.
+        e.mem.set_u8(data + 128, 0x12);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            create_texture_from_file_in_memory(&mut e, Ptr::new(device), Ptr::new(data), file.len() as u32, Ptr::new(out))
+        }));
+        assert!(stop.is_err());
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().any(|d| d.file_name().to_string_lossy().starts_with("missing-")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

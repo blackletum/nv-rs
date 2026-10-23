@@ -2,7 +2,10 @@
 //!
 //! The engine crate holds FalloutNV.exe 1.4.0.525 translated function by
 //! function on a model of the game's memory (docs/ENGINE_CRATE.md). This
-//! crate starts it for the running game: it finds the player's own
+//! crate starts it for the running game: it finds the p    if let Some(dir) = texture_cache_path() {
+        engine::units::platform::d3dx::set_texture_cache(e, dir);
+    }
+layer's own
 //! FalloutNV.exe in the installation that holds `Data`, refuses any build
 //! but 1.4.0.525 (the one every translated address belongs to), maps the
 //! executable's data sections (read-only use of the file: nothing is
@@ -138,12 +141,24 @@ pub fn adapter_table_path() -> Option<PathBuf> {
         })
 }
 
+/// Where the player's D3DX texture cache is: `NV_D3DX_CACHE`, else
+/// `%LOCALAPPDATA%\nv-rs\d3dx-cache` (made on this machine by `scripts/d3dx-texture-capture`
+/// from the player's own textures; it stays local).
+pub fn texture_cache_path() -> Option<PathBuf> {
+    std::env::var_os("NV_D3DX_CACHE").map(PathBuf::from).or_else(|| {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("nv-rs").join("d3dx-cache"))
+    })
+}
+
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the
 /// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
 fn load_adapter_table(e: &mut Engine) {
     if let Some(text) = adapter_table_path().and_then(|p| std::fs::read_to_string(p).ok()) {
         engine::units::platform::d3d9::load_adapter_table(e, &text);
+    }
+    if let Some(dir) = texture_cache_path() {
+        engine::units::platform::d3dx::set_texture_cache(e, dir);
     }
 }
 

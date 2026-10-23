@@ -235,6 +235,8 @@ pub struct Graphics {
     pub(crate) device_objects: super::d3d9device::Objects,
     /// The NvAPI answers and the functions handed out (`super::nvapi`).
     pub(crate) nvapi: super::nvapi::State,
+    /// The machine-local D3DX texture cache folder (`super::d3dx`).
+    pub(crate) d3dx_texture_cache: Option<std::path::PathBuf>,
 }
 
 /// Gives the layer the player's adapter table (`scripts/d3d9-capture`'s output).
