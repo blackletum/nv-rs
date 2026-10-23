@@ -1175,27 +1175,140 @@ mod tests {
 
     type Calls = Vec<Vec<u32>>;
 
-    /// The exe's power-of-ten tables (`.data`, read in Ghidra) from `011c2cb0` to `011c2f6c`:
-    /// the 28 positive entries, 10^4096, four bytes the walk never reads, the 28 negative ones
-    /// and 10^-4096 (the five groups' entries the 80-bit range reaches).
-    const TABLES: [&str; 15] = [
-        "000000000000000000a00240000000000000000000c80540000000000000000000fa08400000000000000000409c0c40",
-        "000000000000000050c30f40000000000000000024f412400000000000000080969816400000000000000020bcbe1940",
-        "000000000004bfc91b8e3440000000a1edccce1bc2d34e4020f09eb5702ba8adc59d6940d05dfd25e51a8e4f19eb8340",
-        "7196d795430e058d29af9e40f9bfa044ed81128f8182b940bf3cd5a6cfff491f78c2d3406fc6e08ce980c947ba93a841",
-        "bc856b5527398df770e07c42bcdd8edef99dfbeb7eaa5143a1e676e3ccf2292f84812644281017aaf8ae10e3c5c4fa44",
-        "eba7d4f3f7ebe14a7a95cf4565ccc7910ea6aea019e3a3460d65170c7581867576c9484d5842e4a793393b35b8b2ed53",
-        "4da7e55d3dc55d3b8b9e925aff5da6f0a120c054a58c3761d1fd8b5a8bd8255d89f9db67aa95f8f327bfa2c85ddd806e",
-        "4cc99b97208a025260c4257500000000cdcccdccccccccccccccfb3f713d0ad7a3703d0ad7a3f83f5a643bdf4f8d976e",
-        "1283f53fc3d32c6519e25817b7d1f13fd00f2384471b47acc5a7ee3f40a6b6696caf05bd3786eb3f333dbc427ae5d594",
-        "bfd6e73fc2fdfdce61841177ccabe43f2f4c5be14dc4be9495e6c93f92c4533b7544cd14be9aaf3fde67ba943945ad1e",
-        "b1cf943f2423c6e2bcba3b31618b7a3f615559c17eb1537c12bb5f3fd7ee2f8d06be928515fb443f243fa5e939a527ea",
-        "7fa82a3f7daca1e4bc647c46d0dd553e637b06cc23547783ff91813d91fa3a197a63254331c0ac3c2189d138824797b8",
-        "00fdd73bdc8858081bb1e8e386a6033bc684454207b6997537db2e3a33711cd223db32ee49905a39a687bec057daa582",
-        "a6a2b532e268b211a7529f4459b7102c2549e42d36344f53aece6b258f5904a4c0dec27dfbe8c61e9ee7885a57913cbf",
-        "508322184e4b6562fd838faf06947d11e42dde9fced2c804dda6d80a",    ];
-    /// The texts at `01100894` (`"1#QNAN"`, `"1#INF"`, `"1#IND"`, `"1#SNAN"`, read in Ghidra).
-    const TEXTS: &[u8; 32] = b"1#QNAN\0\x001#INF\0\0\x001#IND\0\0\x001#SNAN\0\0";
+    /// A big unsigned number in 32-bit limbs, least significant first.
+    type Big = Vec<u32>;
+
+    fn times_small(a: &mut Big, m: u32) {
+        let mut carry = 0u64;
+        for limb in a.iter_mut() {
+            let v = u64::from(*limb) * u64::from(m) + carry;
+            *limb = v as u32;
+            carry = v >> 32;
+        }
+        if carry != 0 {
+            a.push(carry as u32);
+        }
+    }
+
+    fn bit_length(a: &Big) -> usize {
+        let top = a.iter().rposition(|&l| l != 0).unwrap();
+        32 * top + (32 - a[top].leading_zeros() as usize)
+    }
+
+    fn bit(a: &Big, i: usize) -> bool {
+        a.get(i / 32).is_some_and(|l| l >> (i % 32) & 1 != 0)
+    }
+
+    /// `a >= b` for numbers of the same limb count.
+    fn at_least(a: &Big, b: &Big) -> bool {
+        for (x, y) in a.iter().rev().zip(b.iter().rev()) {
+            if x != y {
+                return x > y;
+            }
+        }
+        true
+    }
+
+    fn subtract(a: &mut Big, b: &Big) {
+        let mut borrow = 0i64;
+        for (x, y) in a.iter_mut().zip(b.iter()) {
+            let v = i64::from(*x) - i64::from(*y) - borrow;
+            *x = v as u32;
+            borrow = i64::from(v < 0);
+        }
+    }
+
+    fn double(a: &mut Big) {
+        let mut carry = 0u32;
+        for limb in a.iter_mut() {
+            let next = *limb >> 31;
+            *limb = *limb << 1 | carry;
+            carry = next;
+        }
+    }
+
+    /// The first 81 bits of 10^k from its leading one and the binary exponent `e` with
+    /// 10^k = 0.b0b1.. * 2^e.
+    fn power_bits(k: i32) -> ([bool; 81], i32) {
+        let mut ten: Big = vec![1];
+        for _ in 0..k.unsigned_abs() {
+            times_small(&mut ten, 10);
+        }
+        let mut out = [false; 81];
+        if k >= 0 {
+            let length = bit_length(&ten);
+            for (i, b) in out.iter_mut().enumerate() {
+                *b = i < length && bit(&ten, length - 1 - i);
+            }
+            return (out, length as i32);
+        }
+        // 1 / 10^-k by long division, one binary place at a time.
+        ten.push(0);
+        let mut rest: Big = vec![0; ten.len()];
+        rest[0] = 1;
+        let mut place = 0i32;
+        let mut first = None;
+        let mut taken = 0;
+        while taken < out.len() {
+            double(&mut rest);
+            place += 1;
+            let one = at_least(&rest, &ten);
+            if one {
+                subtract(&mut rest, &ten);
+                first.get_or_insert(place);
+            }
+            if first.is_some() {
+                out[taken] = one;
+                taken += 1;
+            }
+        }
+        (out, 1 - first.unwrap())
+    }
+
+    /// One table entry: the top 64 bits rounded to nearest (bytes 2-9), the next 16 bits rounded
+    /// to nearest on their own (bytes 0-1), the exponent biased by 0x3ffe (bytes 10-11).
+    fn entry(k: i32) -> [u8; 12] {
+        let (bits, exponent) = power_bits(k);
+        let take =
+            |range: std::ops::Range<usize>| range.fold(0u64, |v, i| v << 1 | u64::from(bits[i]));
+        let high = take(0..64).wrapping_add(u64::from(bits[64]));
+        let low = (take(64..80) as u16).wrapping_add(u16::from(bits[80]));
+        let mut out = [0u8; 12];
+        out[0..2].copy_from_slice(&low.to_le_bytes());
+        out[2..10].copy_from_slice(&high.to_le_bytes());
+        out[10..12].copy_from_slice(&((exponent + 0x3ffe) as u16).to_le_bytes());
+        out
+    }
+
+    /// The power-of-ten tables `$I10_OUTPUT` reads at `011c2cb0` and `011c2e10`, computed from
+    /// the exact powers (the exe's entries, checked byte for byte against the exe by
+    /// [`computed_tables_are_the_exes`]): 10^(j * 8^g) for g 0..4 and j 1..7, then 10^4096 (the
+    /// five groups' entries the 80-bit range reaches), positive and negative. The top 64 bits are
+    /// rounded to nearest and the next 16 rounded on their own, so where the low word's top bit
+    /// is set the top 64 bits were rounded up, which the code's dword decrement takes back.
+    fn power_tables() -> (Vec<[u8; 12]>, Vec<[u8; 12]>) {
+        let mut powers = Vec::new();
+        for g in 0..4 {
+            for j in 1..=7 {
+                powers.push(j * 8i32.pow(g));
+            }
+        }
+        powers.push(4096);
+        (
+            powers.iter().map(|&k| entry(k)).collect(),
+            powers.iter().map(|&k| entry(-k)).collect(),
+        )
+    }
+
+    /// The texts the exponent of all ones gives (at their addresses in the exe) and the `%e`
+    /// exponent template.
+    const TEXTS: [(u32, &[u8]); 5] = [
+        (TEXT_QNAN, b"1#QNAN\0"),
+        (TEXT_INF, b"1#INF\0"),
+        (TEXT_IND, b"1#IND\0"),
+        (TEXT_SNAN, b"1#SNAN\0"),
+        (EXPONENT_TEMPLATE, b"e+000\0"),
+    ];
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len() / 2)
@@ -1238,19 +1351,24 @@ mod tests {
         Locale { info, mbc }
     }
 
-    /// An engine with the exe's tables and texts, the output-format byte clear, `_errno` doubled
-    /// to one slot, the invalid-parameter report and `__invoke_watson` doubled to do nothing,
-    /// and `_LocaleUpdate` doubled to fill the object with a locale whose point is `'.'` and
-    /// leave its "updated" byte clear (as the oracle runs did). The call log is off.
+    /// An engine with the computed power-of-ten tables ([`power_tables`]) and the texts at
+    /// their addresses, the output-format byte clear, `_errno` doubled to one slot, the
+    /// invalid-parameter report and `__invoke_watson` doubled to do nothing, and
+    /// `_LocaleUpdate` doubled to fill the object with a locale whose point is `'.'` and leave
+    /// its "updated" byte clear (as the oracle runs did). The call log is off.
     fn engine() -> (Engine, u32) {
         let mut e = Engine::new();
-        let tables: Vec<u8> = TABLES.iter().flat_map(|s| unhex(s)).collect();
-        e.map(POW10_POSITIVE, tables.len() as u32);
-        e.mem.write(POW10_POSITIVE, &tables);
-        e.map(TEXT_QNAN, 32);
-        e.mem.write(TEXT_QNAN, TEXTS);
-        e.map(EXPONENT_TEMPLATE, 6);
-        e.mem.write(EXPONENT_TEMPLATE, b"e+000\0");
+        let (positive, negative) = power_tables();
+        for (table, entries) in [(POW10_POSITIVE, positive), (POW10_NEGATIVE, negative)] {
+            e.map(table, 12 * entries.len() as u32);
+            for (i, entry) in entries.iter().enumerate() {
+                e.mem.write(table + 12 * i as u32, entry);
+            }
+        }
+        for (at, text) in TEXTS {
+            e.map(at, text.len() as u32);
+            e.mem.write(at, text);
+        }
         e.map(OUTPUT_FORMAT, 4);
         let slot = e.mem.alloc(4);
         e.register_double(ERRNO_ADDR, move |_, _| Ret {
@@ -1561,6 +1679,30 @@ mod tests {
     const CFTOF2_L_HASH: u64 = 0xfd48_579c_8d8b_3f4d;
 
     const GCVT_S: u32 = 0x00ec_dbf6;
+
+    /// With `NV_EXE` set to FalloutNV.exe 1.4.0.525: the computed tables and the texts are the
+    /// bytes the exe has at their addresses.
+    #[test]
+    fn computed_tables_are_the_exes() {
+        let Ok(path) = std::env::var("NV_EXE") else {
+            return;
+        };
+        let e = Engine::with_exe(std::path::Path::new(&path)).unwrap();
+        let (positive, negative) = power_tables();
+        for (table, entries) in [(POW10_POSITIVE, positive), (POW10_NEGATIVE, negative)] {
+            for (i, entry) in entries.iter().enumerate() {
+                let at = table + 12 * i as u32;
+                assert_eq!(e.mem.bytes(at, 12), entry.to_vec(), "{at:08x}");
+            }
+        }
+        for (at, text) in TEXTS {
+            assert_eq!(
+                e.mem.bytes(at, text.len() as u32),
+                text.to_vec(),
+                "{at:08x}"
+            );
+        }
+    }
 
     #[test]
     fn fltout2_gives_the_exes_digits_for_every_double() {
