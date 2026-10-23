@@ -1604,6 +1604,33 @@ fn suspend_thread(e: &mut Engine, handle: u32) -> u32 {
     change_suspend_count(e, handle, 1)
 }
 
+/// `STILL_ACTIVE`: what `GetExitCodeThread` answers for a thread that has not ended.
+const STILL_ACTIVE: u32 = 0x103;
+
+// Platform: replaces KERNEL32.DLL GetExitCodeThread (import)
+/// `GetExitCodeThread(handle, code out)`: a thread that ended (its start function returned or
+/// it called `ExitThread`) gives its code, any other thread (not started, running, waiting, or
+/// stopped by the run) `STILL_ACTIVE`, the current thread's pseudo handle too; TRUE. A handle
+/// that is no thread: FALSE with `ERROR_INVALID_HANDLE`.
+fn get_exit_code_thread(e: &mut Engine, handle: u32, code: Ptr) -> u32 {
+    let value = if handle == CURRENT_THREAD {
+        STILL_ACTIVE
+    } else if matches!(
+        e.kernel.objects.get(&handle),
+        Some(KernelObject::Thread { .. })
+    ) {
+        match crate::thread_host::by_handle(e, handle).map(|t| t.state.clone()) {
+            Some(crate::thread_host::RunState::Finished { code }) => code,
+            _ => STILL_ACTIVE,
+        }
+    } else {
+        e.kernel.last_error = ERROR_INVALID_HANDLE;
+        return 0;
+    };
+    e.mem.set_u32(code.addr(), value);
+    1
+}
+
 // Platform: replaces KERNEL32.DLL ExitThread (import)
 /// Ends the running game thread with `code` (its handle becomes signalled).
 fn exit_thread(e: &mut Engine, code: u32) {
@@ -2244,6 +2271,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "ExitThread", entry!(0, exit_thread(u32)).1),
         (
             k,
+            "GetExitCodeThread",
+            entry!(0, get_exit_code_thread(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
             "WaitForMultipleObjects",
             entry!(0, wait_for_multiple_objects(u32, Ptr, i32, u32) -> u32).1,
         ),
@@ -2452,6 +2484,7 @@ mod tests {
     const WAIT_FOR_MULTIPLE_OBJECTS: u32 = 0x00ab_f004;
     const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
     const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+    const GET_EXIT_CODE_THREAD: u32 = 0x00fd_f168;
     const RESET_EVENT: u32 = 0x00fd_f1cc;
 
     /// An engine with the kernel-object and virtual-memory stand-ins
@@ -2474,6 +2507,7 @@ mod tests {
             (RESET_EVENT, "ResetEvent"),
             (SLEEP, "Sleep"),
             (WAIT_FOR_MULTIPLE_OBJECTS, "WaitForMultipleObjects"),
+            (GET_EXIT_CODE_THREAD, "GetExitCodeThread"),
         ];
         let imports: Vec<crate::exe::Import> = slots
             .iter()
@@ -2926,6 +2960,29 @@ mod tests {
         // Its handle is signalled now (it ended).
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 0]), WAIT_OBJECT_0);
         assert!(e.call_stack.is_empty() || e.call_stack.iter().all(|&a| a != 0x00ab_0200));
+    }
+
+    #[test]
+    fn get_exit_code_thread_is_still_active_until_the_thread_ends() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0400, |_, _| 9u32.into_ret());
+        let t = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00ab_0400, 0, CREATE_SUSPENDED, 0],
+        );
+        let out = e.mem.alloc(4);
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[t, out]), 1);
+        assert_eq!(e.mem.u32(out), STILL_ACTIVE);
+        call(&mut e, RESUME_THREAD, &[t]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[t, out]), 1);
+        assert_eq!(e.mem.u32(out), 9);
+        assert_eq!(call(&mut e, GET_EXIT_CODE_THREAD, &[0x1234, out]), 0);
+        assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
     }
 
     #[test]
