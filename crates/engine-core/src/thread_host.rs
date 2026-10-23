@@ -558,8 +558,9 @@ pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
             // SAFETY: see `Baton`.
             let e = unsafe { &mut *engine };
             load_fpu(e);
-            let out =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.call(start, &words).eax));
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(start, &words).eax
+            }));
             let reply = match out {
                 Ok(code) => Yield::Finished(code),
                 Err(payload) => {

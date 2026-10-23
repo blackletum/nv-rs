@@ -144,9 +144,12 @@ pub fn adapter_table_path() -> Option<PathBuf> {
 /// `%LOCALAPPDATA%\nv-rs\d3dx-cache` (made on this machine by `scripts/d3dx-texture-capture`
 /// from the player's own textures; it stays local).
 pub fn texture_cache_path() -> Option<PathBuf> {
-    std::env::var_os("NV_D3DX_CACHE").map(PathBuf::from).or_else(|| {
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("nv-rs").join("d3dx-cache"))
-    })
+    std::env::var_os("NV_D3DX_CACHE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(|d| PathBuf::from(d).join("nv-rs").join("d3dx-cache"))
+        })
 }
 
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the

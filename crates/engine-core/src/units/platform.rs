@@ -4,18 +4,18 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
-pub mod dinput;
 pub mod d3d9;
 pub mod d3d9device;
 pub mod d3d9resource;
 pub mod d3dx;
+pub mod dinput;
 pub mod dsound;
 pub mod files;
-pub mod time;
-pub mod zone;
 pub mod loader;
 pub mod nvapi;
+pub mod time;
 pub mod window;
+pub mod zone;
 
 /// The `MemoryManager` singleton (`011f6238`); [`get_memory_manager`]
 /// returns its address.
@@ -253,7 +253,10 @@ impl MemoryFile {
 /// [`is_memory_file`] names (the host's `game_file` does).
 pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
     if !e.is_translated(0x00b0_0650) {
-        e.register(0x00b0_0650, entry!(0, bsfile_read_f(Ptr, Ptr, u32) -> u32).1);
+        e.register(
+            0x00b0_0650,
+            entry!(0, bsfile_read_f(Ptr, Ptr, u32) -> u32).1,
+        );
     }
     if !e.is_translated(0x00b0_0590) {
         e.register(0x00b0_0590, entry!(0, bsfile_seek(Ptr, i32, i32)).1);
@@ -672,7 +675,13 @@ fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
 /// `default` when the file, the section or the key isn't there ([`profile_text`]). The value is
 /// read as [`profile_int`] does, which follows Windows' answers measured on the player's machine
 /// (2026-10-21, 38 values).
-fn get_private_profile_int_a(e: &mut Engine, section: Ptr, key: Ptr, default: u32, file: Ptr) -> u32 {
+fn get_private_profile_int_a(
+    e: &mut Engine,
+    section: Ptr,
+    key: Ptr,
+    default: u32,
+    file: Ptr,
+) -> u32 {
     let section = e.mem.cstr(section.addr());
     let key = e.mem.cstr(key.addr());
     let Some(value) = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key))
@@ -884,7 +893,11 @@ pub enum KernelObject {
     RegistryKey,
     /// A mutex ([`window::create_mutex_a`]): its name, the owning thread's id (0: none) and how
     /// many times the owner took it.
-    Mutex { name: Vec<u8>, owner: u32, count: u32 },
+    Mutex {
+        name: Vec<u8>,
+        owner: u32,
+        count: u32,
+    },
     /// A USER32 or GDI32 object this layer only hands out a handle for (an icon, a stock brush).
     UserObject(&'static str),
     /// An open file ([`files::create_file_a`]): its path and position.
@@ -1213,7 +1226,9 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         // A file handle is signalled while no I/O is pending (all of it is synchronous here).
         Some(KernelObject::File(_)) => true,
         // Waiting on a file search handle is not provided (not measured).
-        Some(KernelObject::FindFile) => panic!("waiting on file search {handle:#x} is not provided"),
+        Some(KernelObject::FindFile) => {
+            panic!("waiting on file search {handle:#x} is not provided")
+        }
         Some(KernelObject::Heap) => panic!("waiting on heap {handle:#x} is not provided"),
         None if handle == CURRENT_THREAD => false,
         None => return None,
@@ -3225,7 +3240,12 @@ mod tests_counted_semaphore {
     #[test]
     fn wait_and_release_go_through_the_handle_and_the_count() {
         let mut e = Engine::new();
-        for f in [SLOT_WAIT_FOR_SINGLE_OBJECT, SLOT_RELEASE_SEMAPHORE, COUNT_DOWN, COUNT_UP] {
+        for f in [
+            SLOT_WAIT_FOR_SINGLE_OBJECT,
+            SLOT_RELEASE_SEMAPHORE,
+            COUNT_DOWN,
+            COUNT_UP,
+        ] {
             e.register(f, |_, _| Ret::default());
         }
         let record = e.mem.alloc(0xc);

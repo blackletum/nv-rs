@@ -24,8 +24,8 @@
 use engine::abi::RetVal;
 use engine::units::bssystem::bsfile;
 use engine::units::platform::{self, is_memory_file, open_memory_file, supply_file_bytes};
-use engine::{Ptr, Ret};
 use engine::Engine;
+use engine::{Ptr, Ret};
 use esm::{LoadedPlugin, RecordEntry};
 
 /// `operator new` (`00401000`) and `TESFile::TESFile(directory, name, mode)`

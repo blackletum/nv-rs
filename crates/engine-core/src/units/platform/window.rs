@@ -85,9 +85,10 @@ pub fn create_mutex_a(e: &mut Engine, _security: u32, initial_owner: u32, name: 
         e.mem.cstr(name.addr())
     };
     let exists = !name.is_empty()
-        && e.kernel.objects.values().any(
-            |o| matches!(o, KernelObject::Mutex { name: n, .. } if *n == name),
-        );
+        && e.kernel
+            .objects
+            .values()
+            .any(|o| matches!(o, KernelObject::Mutex { name: n, .. } if *n == name));
     let owner = if initial_owner != 0 && !exists {
         crate::thread_host::current_id(e)
     } else {
@@ -119,7 +120,15 @@ pub fn exit_process(_e: &mut Engine, code: u32) {
 
 // Platform: replaces SHELL32.DLL ShellExecuteA (import)
 /// `ShellExecuteA`: starting another program (the launcher) is not provided.
-pub fn shell_execute_a(e: &mut Engine, _w: u32, _op: u32, file: Ptr, _p: u32, _d: u32, _s: u32) -> u32 {
+pub fn shell_execute_a(
+    e: &mut Engine,
+    _w: u32,
+    _op: u32,
+    file: Ptr,
+    _p: u32,
+    _d: u32,
+    _s: u32,
+) -> u32 {
     let file = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
     panic!("ShellExecuteA({file:?}) is not provided")
 }
@@ -180,8 +189,7 @@ pub fn find_window_a(e: &mut Engine, class: u32, title: Ptr) -> u32 {
     let title = (!title.is_null()).then(|| e.mem.cstr(title.addr()));
     let found = e.kernel.windows.windows.iter().find(|(_, w)| {
         let class_ok = class == 0
-            || e
-                .kernel
+            || e.kernel
                 .windows
                 .classes
                 .iter()
@@ -378,7 +386,10 @@ pub fn get_stock_object(e: &mut Engine, index: u32) -> u32 {
 pub fn register_class_a(e: &mut Engine, class: Ptr) -> u32 {
     let c = class.addr();
     let name_word = e.mem.u32(c + 36);
-    assert!(name_word >= 0x1_0000, "RegisterClassA by atom is not provided");
+    assert!(
+        name_word >= 0x1_0000,
+        "RegisterClassA by atom is not provided"
+    );
     let name = e.mem.cstr(name_word);
     if e.kernel
         .windows
@@ -415,7 +426,13 @@ fn border(e: &mut Engine, style: u32, menu: u32, ex_style: u32) -> [i32; 4] {
 // Platform: replaces USER32.DLL AdjustWindowRectEx (import)
 /// `AdjustWindowRectEx(rect, style, menu, ex style)`: the rectangle grown by the window border
 /// Windows adds for that style (captured, [`border`]); true.
-pub fn adjust_window_rect_ex(e: &mut Engine, rect: Ptr, style: u32, menu: u32, ex_style: u32) -> u32 {
+pub fn adjust_window_rect_ex(
+    e: &mut Engine,
+    rect: Ptr,
+    style: u32,
+    menu: u32,
+    ex_style: u32,
+) -> u32 {
     let b = border(e, style, menu, ex_style);
     for (i, d) in b.iter().enumerate() {
         let at = rect.addr() + 4 * i as u32;
@@ -577,7 +594,14 @@ pub fn set_window_pos(
 /// (removed with `PM_REMOVE`), true; with none, the frame ends: the game's main thread hands
 /// the engine back to the host until its next frame (`thread_host::end_main_frame`), then
 /// false. Filtering by window or message range is not provided.
-pub fn peek_message_a(e: &mut Engine, msg: Ptr, window: u32, first: u32, last: u32, remove: u32) -> u32 {
+pub fn peek_message_a(
+    e: &mut Engine,
+    msg: Ptr,
+    window: u32,
+    first: u32,
+    last: u32,
+    remove: u32,
+) -> u32 {
     assert!(
         window == 0 && first == 0 && last == 0,
         "PeekMessageA with a filter is not provided"
@@ -615,7 +639,12 @@ pub fn translate_message(e: &mut Engine, msg: Ptr) -> u32 {
 /// and answers its result.
 pub fn dispatch_message_a(e: &mut Engine, msg: Ptr) -> u32 {
     let m = msg.addr();
-    let (window, message, w, l) = (e.mem.u32(m), e.mem.u32(m + 4), e.mem.u32(m + 8), e.mem.u32(m + 12));
+    let (window, message, w, l) = (
+        e.mem.u32(m),
+        e.mem.u32(m + 4),
+        e.mem.u32(m + 8),
+        e.mem.u32(m + 12),
+    );
     let Some(class) = e.kernel.windows.windows.get(&window).map(|w| w.class) else {
         return 0;
     };
@@ -639,17 +668,23 @@ mod tests {
     }
 
     fn strings(args: Vec<Vec<u16>>) -> Vec<String> {
-        args.into_iter().map(|a| String::from_utf16_lossy(&a)).collect()
+        args.into_iter()
+            .map(|a| String::from_utf16_lossy(&a))
+            .collect()
     }
 
     #[test]
     fn the_command_line_splits_as_windows_does() {
         assert_eq!(
-            strings(split_command_line(&wide_of("\"C:\\Games\\FalloutNV.exe\" -nocloud"))),
+            strings(split_command_line(&wide_of(
+                "\"C:\\Games\\FalloutNV.exe\" -nocloud"
+            ))),
             ["C:\\Games\\FalloutNV.exe", "-nocloud"]
         );
         assert_eq!(
-            strings(split_command_line(&wide_of(r#"a.exe "b c" d\\"e" f\"g h"""i"#))),
+            strings(split_command_line(&wide_of(
+                r#"a.exe "b c" d\\"e" f\"g h"""i"#
+            ))),
             ["a.exe", "b c", "d\\e", "f\"g", "h\"i"]
         );
         assert_eq!(strings(split_command_line(&wide_of("a.exe"))), ["a.exe"]);

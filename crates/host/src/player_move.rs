@@ -394,9 +394,17 @@ impl PlayerMovement {
                 // A probe run can go on for a long time past a miss (or never come back): each
                 // new miss is written to stderr at once, so a run that hangs shows where.
                 if probe && !record.borrow().iter().any(|&(a, _)| a == addr) {
-                    let path: Vec<String> =
-                        e.call_stack.iter().rev().take(6).map(|a| format!("{a:08x}")).collect();
-                    eprintln!("probe ({stage}): {addr:08x} not provided, zero answered (in {})", path.join(" < "));
+                    let path: Vec<String> = e
+                        .call_stack
+                        .iter()
+                        .rev()
+                        .take(6)
+                        .map(|a| format!("{a:08x}"))
+                        .collect();
+                    eprintln!(
+                        "probe ({stage}): {addr:08x} not provided, zero answered (in {})",
+                        path.join(" < ")
+                    );
                 }
                 record.borrow_mut().push((addr, caller));
                 probe.then(Ret::default)

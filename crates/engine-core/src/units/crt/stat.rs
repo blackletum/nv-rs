@@ -205,17 +205,18 @@ pub fn ismbbtype_l(e: &mut Engine, locale: u32, c: u32, ctype_mask: u32, mbctype
         e.call(LOCALE_UPDATE, &[update, locale]);
         let byte = c & 0xff;
         let mbcinfo = e.mem.u32(update + 4);
-        let result = if e.mem.u8(mbcinfo.wrapping_add(0x1d).wrapping_add(byte)) & mbctype_mask as u8 != 0 {
-            1
-        } else {
-            let ctype = if ctype_mask == 0 {
-                0
+        let result =
+            if e.mem.u8(mbcinfo.wrapping_add(0x1d).wrapping_add(byte)) & mbctype_mask as u8 != 0 {
+                1
             } else {
-                let table = e.mem.u32(e.mem.u32(update).wrapping_add(0xc8));
-                u32::from(e.mem.u16(table.wrapping_add(byte * 2))) & ctype_mask
+                let ctype = if ctype_mask == 0 {
+                    0
+                } else {
+                    let table = e.mem.u32(e.mem.u32(update).wrapping_add(0xc8));
+                    u32::from(e.mem.u16(table.wrapping_add(byte * 2))) & ctype_mask
+                };
+                u32::from(ctype != 0)
             };
-            u32::from(ctype != 0)
-        };
         locale_update_release(e, update);
         result
     })
@@ -901,7 +902,11 @@ mod tests {
         let (mut e, _) = engine();
         // TEST DATA: 0x81 is the doubled locale's lead byte.
         let s = text(&mut e, b"ab\x81\x82c");
-        assert_eq!(e.call(MBSDEC, &args![s, s + 4]).u32(), s + 2, "before c: the pair");
+        assert_eq!(
+            e.call(MBSDEC, &args![s, s + 4]).u32(),
+            s + 2,
+            "before c: the pair"
+        );
         assert_eq!(e.call(MBSDEC, &args![s, s + 2]).u32(), s + 1);
         assert_eq!(e.call(MBSDEC, &args![s, s]).u32(), 0);
     }
@@ -1200,10 +1205,22 @@ mod tests_ismbb {
             Ret::default()
         });
         assert_eq!(e.call(ISMBBLEAD, &args![0x81u32]).u32(), 1);
-        assert_eq!(e.call(ISMBBLEAD, &args![0x4181u32]).u32(), 1, "the low byte counts");
+        assert_eq!(
+            e.call(ISMBBLEAD, &args![0x4181u32]).u32(),
+            1,
+            "the low byte counts"
+        );
         assert_eq!(e.call(ISMBBLEAD, &args![0x41u32]).u32(), 0);
-        assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x100u32, 4u32]).u32(), 1);
-        assert_eq!(e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x200u32, 4u32]).u32(), 0);
+        assert_eq!(
+            e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x100u32, 4u32])
+                .u32(),
+            1
+        );
+        assert_eq!(
+            e.call(ISMBBTYPE_L, &args![0u32, 0x41u32, 0x200u32, 4u32])
+                .u32(),
+            0
+        );
     }
 }
 

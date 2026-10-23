@@ -207,7 +207,14 @@ mod hook_tests {
         assert_eq!(e.call(0x00b0_2010, &args![0u32, out]).u8(), 1);
         assert_eq!(e.mem.u32(out), block);
         assert_eq!(e.mem.u32(block), GROUP_VTABLE_010A48D8);
-        assert_eq!((e.mem.u8(block + 4), e.mem.u32(block + 0xc), e.mem.u32(block + 0x10)), (1, 0x77, 1));
+        assert_eq!(
+            (
+                e.mem.u8(block + 4),
+                e.mem.u32(block + 0xc),
+                e.mem.u32(block + 0x10)
+            ),
+            (1, 0x77, 1)
+        );
         given.set(0);
         assert_eq!(e.call(0x00b0_2010, &args![0u32, out]).u8(), 0);
         assert_eq!(e.mem.u32(out), 0);

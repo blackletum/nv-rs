@@ -284,7 +284,13 @@ pub struct OpenFile {
 
 fn key(path: &[u8]) -> Vec<u8> {
     path.iter()
-        .map(|&b| if b == b'/' { b'\\' } else { b.to_ascii_lowercase() })
+        .map(|&b| {
+            if b == b'/' {
+                b'\\'
+            } else {
+                b.to_ascii_lowercase()
+            }
+        })
         .collect()
 }
 
@@ -358,9 +364,13 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     let trailing = path.ends_with(b"\\") || path.ends_with(b"/");
     let meta = match std::fs::metadata(&real) {
         Ok(meta) if trailing && meta.is_dir() => return fail(e, ERROR_FILE_NOT_FOUND),
-        Ok(_) if trailing => panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided"),
+        Ok(_) if trailing => {
+            panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
+        }
         Ok(meta) => meta,
-        Err(_) if trailing => panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided"),
+        Err(_) if trailing => {
+            panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
+        }
         Err(_) => {
             let parent_exists = real.parent().is_some_and(|p| p.is_dir());
             return fail(
@@ -482,7 +492,9 @@ pub fn create_file_a(
         }
     }
     // A file of the player's opened for writing is read into the run's copy first.
-    if !e.kernel.disk.files.contains_key(&path) && matches!(disposition, OPEN_EXISTING | OPEN_ALWAYS) {
+    if !e.kernel.disk.files.contains_key(&path)
+        && matches!(disposition, OPEN_EXISTING | OPEN_ALWAYS)
+    {
         if let Some(data) = read_whole(e, &name) {
             e.kernel.disk.files.insert(path.clone(), data);
         }
@@ -615,7 +627,10 @@ pub fn write_file(
     written: Ptr,
     overlapped: u32,
 ) -> i32 {
-    assert!(overlapped == 0, "WriteFile: overlapped writes are not provided");
+    assert!(
+        overlapped == 0,
+        "WriteFile: overlapped writes are not provided"
+    );
     if written.addr() != 0 {
         e.mem.set_u32(written.addr(), 0);
     }
@@ -662,7 +677,10 @@ pub fn read_file(
     read: Ptr,
     overlapped: u32,
 ) -> i32 {
-    assert!(overlapped == 0, "ReadFile: overlapped reads are not provided");
+    assert!(
+        overlapped == 0,
+        "ReadFile: overlapped reads are not provided"
+    );
     if read.addr() != 0 {
         e.mem.set_u32(read.addr(), 0);
     }
@@ -704,15 +722,42 @@ mod tests {
     #[test]
     fn create_always_makes_then_reports_an_existing_file() {
         let (mut e, name) = engine();
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0x80, 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0x80,
+            0,
+        );
         assert_ne!(h, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.last_error, 0);
         assert_eq!(get_file_type(&mut e, h), FILE_TYPE_DISK);
-        let h2 = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0x80, 0);
+        let h2 = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0x80,
+            0,
+        );
         assert_ne!(h2, h);
         assert_eq!(e.kernel.last_error, ERROR_ALREADY_EXISTS);
         assert_eq!(
-            create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0),
+            create_file_a(
+                &mut e,
+                Ptr::new(name),
+                GENERIC_WRITE,
+                0,
+                0,
+                CREATE_NEW,
+                0,
+                0
+            ),
             INVALID_HANDLE_VALUE
         );
         assert_eq!(e.kernel.last_error, ERROR_FILE_EXISTS);
@@ -726,15 +771,27 @@ mod tests {
         let buffer = e.mem.alloc(0x20);
         let count = e.mem.alloc(4);
         e.mem.write(buffer, b"abcdef");
-        assert_eq!(write_file(&mut e, h, Ptr::new(buffer), 6, Ptr::new(count), 0), 1);
+        assert_eq!(
+            write_file(&mut e, h, Ptr::new(buffer), 6, Ptr::new(count), 0),
+            1
+        );
         assert_eq!(e.mem.u32(count), 6);
         // From the end, -2: position 4.
-        assert_eq!(set_file_pointer(&mut e, h, (-2i32) as u32, Ptr::new(0), 2), 4);
-        assert_eq!(read_file(&mut e, h, Ptr::new(buffer + 0x10), 8, Ptr::new(count), 0), 1);
+        assert_eq!(
+            set_file_pointer(&mut e, h, (-2i32) as u32, Ptr::new(0), 2),
+            4
+        );
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer + 0x10), 8, Ptr::new(count), 0),
+            1
+        );
         assert_eq!(e.mem.u32(count), 2);
         assert_eq!(e.mem.bytes(buffer + 0x10, 2), b"ef".to_vec());
         // At the end: success, nothing read.
-        assert_eq!(read_file(&mut e, h, Ptr::new(buffer), 8, Ptr::new(count), 0), 1);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 8, Ptr::new(count), 0),
+            1
+        );
         assert_eq!(e.mem.u32(count), 0);
         // Before the start fails and keeps the position.
         assert_eq!(
@@ -755,11 +812,32 @@ mod tests {
     #[test]
     fn a_read_only_handle_refuses_writes() {
         let (mut e, name) = engine();
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_NEW,
+            0,
+            0,
+        );
         super::super::close_handle(&mut e, h);
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        );
         let buffer = e.mem.alloc(4);
-        assert_eq!(write_file(&mut e, h, Ptr::new(buffer), 1, Ptr::new(0), 0), 0);
+        assert_eq!(
+            write_file(&mut e, h, Ptr::new(buffer), 1, Ptr::new(0), 0),
+            0
+        );
         assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
     }
 
@@ -769,16 +847,52 @@ mod tests {
     fn opening_a_missing_file_fails_as_windows_does() {
         let (mut e, name) = engine();
         // `C:\Some` is not there: the path is missing.
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
-        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND));
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 0, 0, TRUNCATE_EXISTING, 0, 0);
-        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_INVALID_PARAMETER));
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        );
+        assert_eq!(
+            (h, e.kernel.last_error),
+            (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND)
+        );
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            0,
+            0,
+            TRUNCATE_EXISTING,
+            0,
+            0,
+        );
+        assert_eq!(
+            (h, e.kernel.last_error),
+            (INVALID_HANDLE_VALUE, ERROR_INVALID_PARAMETER)
+        );
         // In a directory that exists (the crate's own): the file is missing.
         let missing = e.mem.alloc(0x200);
         let text = concat!(env!("CARGO_MANIFEST_DIR"), "/NoSuch.txt");
         e.mem.set_cstr(missing, text.as_bytes());
-        let h = create_file_a(&mut e, Ptr::new(missing), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0);
-        assert_eq!((h, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND));
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(missing),
+            GENERIC_READ,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        );
+        assert_eq!(
+            (h, e.kernel.last_error),
+            (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND)
+        );
     }
 
     #[test]
@@ -786,12 +900,27 @@ mod tests {
         let (mut e, name) = engine();
         let dir = e.mem.alloc(0x40);
         e.mem.set_cstr(dir, br"Q:\nv-rs-test-dir");
-        assert_eq!(get_file_attributes_a(&mut e, Ptr::new(dir)), INVALID_FILE_ATTRIBUTES);
+        assert_eq!(
+            get_file_attributes_a(&mut e, Ptr::new(dir)),
+            INVALID_FILE_ATTRIBUTES
+        );
         assert_eq!(create_directory_a(&mut e, Ptr::new(dir), 0), 1);
-        assert_eq!(get_file_attributes_a(&mut e, Ptr::new(dir)), FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(
+            get_file_attributes_a(&mut e, Ptr::new(dir)),
+            FILE_ATTRIBUTE_DIRECTORY
+        );
         assert_eq!(create_directory_a(&mut e, Ptr::new(dir), 0), 0);
         assert_eq!(e.kernel.last_error, ERROR_ALREADY_EXISTS);
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            CREATE_NEW,
+            0,
+            0,
+        );
         let buffer = e.mem.alloc(4);
         e.mem.write(buffer, b"ab");
         write_file(&mut e, h, Ptr::new(buffer), 2, Ptr::new(0), 0);
@@ -837,7 +966,16 @@ mod tests_player_files {
         let bytes = std::fs::read(real).unwrap();
         let name = e.mem.alloc(0x200);
         e.mem.set_cstr(name, real.as_bytes());
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
         assert_ne!(h, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.last_error, ERROR_SUCCESS);
         assert!(e.kernel.disk.files.is_empty());
@@ -847,12 +985,18 @@ mod tests_player_files {
         assert_eq!(set_file_pointer(&mut e, h, 2, Ptr::new(0), 0), 2);
         let buffer = e.mem.alloc(0x10);
         let count = e.mem.alloc(4);
-        assert_eq!(read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0), 1);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0),
+            1
+        );
         assert_eq!(e.mem.u32(count), 5);
         assert_eq!(e.mem.bytes(buffer, 5), bytes[2..7].to_vec());
         // Past the end: success, nothing read.
         set_file_pointer(&mut e, h, 0, Ptr::new(0), 2);
-        assert_eq!(read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0), 1);
+        assert_eq!(
+            read_file(&mut e, h, Ptr::new(buffer), 5, Ptr::new(count), 0),
+            1
+        );
         assert_eq!(e.mem.u32(count), 0);
         // FindFirstFileA describes it, in the case the directory keeps (asked in upper case).
         let upper = e.mem.alloc(0x200);
@@ -873,14 +1017,35 @@ mod tests_player_files {
         assert_eq!(find_close(&mut e, find), 1);
         // A missing file, and a file in a missing directory.
         let missing = e.mem.alloc(0x200);
-        e.mem.set_cstr(missing, real.replace("Cargo.toml", "NoSuch.toml").as_bytes());
+        e.mem.set_cstr(
+            missing,
+            real.replace("Cargo.toml", "NoSuch.toml").as_bytes(),
+        );
         let none = find_first_file_a(&mut e, Ptr::new(missing), Ptr::new(data));
-        assert_eq!((none, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND));
-        e.mem.set_cstr(missing, real.replace("Cargo.toml", "NoDir/x.toml").as_bytes());
+        assert_eq!(
+            (none, e.kernel.last_error),
+            (INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND)
+        );
+        e.mem.set_cstr(
+            missing,
+            real.replace("Cargo.toml", "NoDir/x.toml").as_bytes(),
+        );
         let none = find_first_file_a(&mut e, Ptr::new(missing), Ptr::new(data));
-        assert_eq!((none, e.kernel.last_error), (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND));
+        assert_eq!(
+            (none, e.kernel.last_error),
+            (INVALID_HANDLE_VALUE, ERROR_PATH_NOT_FOUND)
+        );
         // A write open still copies it into the run.
-        let w = create_file_a(&mut e, Ptr::new(name), GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0x80, 0);
+        let w = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
         assert_ne!(w, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.disk.files.len(), 1);
     }

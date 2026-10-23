@@ -199,8 +199,12 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         panic!("D3DX: a DDS file with {mip_levels} levels for {width}x{height} is not provided");
     }
     let masks = [0, 1, 2, 3].map(|i| word(DDS_PF_MASKS + 4 * i));
-    let (format, block, bytes) =
-        dds_format(word(DDS_PF_FLAGS), word(DDS_PF_FOURCC), word(DDS_PF_BITS), masks);
+    let (format, block, bytes) = dds_format(
+        word(DDS_PF_FLAGS),
+        word(DDS_PF_FOURCC),
+        word(DDS_PF_BITS),
+        masks,
+    );
     let mut levels = Vec::new();
     let mut at = DDS_HEADER_SIZE;
     for _face in 0..faces {
@@ -232,7 +236,10 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
 /// refuses answers its error and writes
 /// nothing (measured). A null info is not provided.
 pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, info: Ptr) -> u32 {
-    assert!(!info.is_null(), "D3DXGetImageInfoFromFileInMemory without an info is not provided");
+    assert!(
+        !info.is_null(),
+        "D3DXGetImageInfoFromFileInMemory without an info is not provided"
+    );
     let bytes = e.mem.bytes(data.addr(), size);
     match read_dds(&bytes) {
         Ok(image) => {
@@ -242,7 +249,11 @@ pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, 
                 1,
                 image.mip_levels,
                 image.format,
-                if image.faces == 6 { D3DRTYPE_CUBETEXTURE } else { D3DRTYPE_TEXTURE },
+                if image.faces == 6 {
+                    D3DRTYPE_CUBETEXTURE
+                } else {
+                    D3DRTYPE_TEXTURE
+                },
                 D3DXIFF_DDS,
             ];
             for (i, w) in words.iter().enumerate() {
@@ -260,13 +271,16 @@ pub fn set_texture_cache(e: &mut Engine, dir: std::path::PathBuf) {
 }
 
 /// How to fill the texture cache, for the stop when an entry is missing.
-pub const TEXTURE_CACHE_HINT: &str = "run `scripts/d3dx-texture-capture` on this machine (it reads \
+pub const TEXTURE_CACHE_HINT: &str =
+    "run `scripts/d3dx-texture-capture` on this machine (it reads \
      the game's textures and the player's d3dx9_38.dll and writes the cache NV_D3DX_CACHE names, \
      default %LOCALAPPDATA%/nv-rs/d3dx-cache)";
 
 /// FNV-1a, 64 bits.
 fn fnv(seed: u64, b: &[u8]) -> u64 {
-    b.iter().fold(seed, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3))
+    b.iter().fold(seed, |h, &x| {
+        (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3)
+    })
 }
 
 /// The texture cache's key of one call (the same as the capture tool's `key`): the call's
@@ -307,11 +321,21 @@ pub fn parse_cached_texture(b: &[u8]) -> Option<CachedTexture> {
         Some(w)
     }
     let word = |at: &mut usize| take(b, at);
-    let (_kind, hr, levels, faces) = (word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?);
+    let (_kind, hr, levels, faces) = (
+        word(&mut at)?,
+        word(&mut at)?,
+        word(&mut at)?,
+        word(&mut at)?,
+    );
     let mut surfaces = Vec::new();
     for _ in 0..levels * faces {
-        let (format, width, height, kept, len) =
-            (word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?, word(&mut at)?);
+        let (format, width, height, kept, len) = (
+            word(&mut at)?,
+            word(&mut at)?,
+            word(&mut at)?,
+            word(&mut at)?,
+            word(&mut at)?,
+        );
         let bytes = if kept != 0 {
             let start = at;
             at += len as usize;
@@ -319,9 +343,19 @@ pub fn parse_cached_texture(b: &[u8]) -> Option<CachedTexture> {
         } else {
             None
         };
-        surfaces.push(CachedSurface { format, width, height, bytes });
+        surfaces.push(CachedSurface {
+            format,
+            width,
+            height,
+            bytes,
+        });
     }
-    Some(CachedTexture { hr, levels, faces, surfaces })
+    Some(CachedTexture {
+        hr,
+        levels,
+        faces,
+        surfaces,
+    })
 }
 
 /// The copy rule (measured 2026-10-23 on 983 of the game's textures): D3DX leaves a level as
@@ -330,7 +364,10 @@ pub fn parse_cached_texture(b: &[u8]) -> Option<CachedTexture> {
 /// (sub-block DXT levels, the rest of the chain when the file stores fewer levels, converted
 /// formats).
 pub fn copies_level(image: &DdsImage, surface: &CachedSurface, level: u32) -> bool {
-    let (w, h) = ((image.width >> level).max(1), (image.height >> level).max(1));
+    let (w, h) = (
+        (image.width >> level).max(1),
+        (image.height >> level).max(1),
+    );
     level < image.mip_levels
         && surface.format == image.format
         && (surface.width, surface.height) == (w, h)
@@ -355,7 +392,13 @@ const D3DPOOL_MANAGED: u32 = 1;
 /// (the run stops): a file the cache does not have (its bytes are saved beside the cache as
 /// `missing-<key>.dds` so the capture can be run for it), cube and volume entries, a rule
 /// the cache contradicts.
-pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr) -> u32 {
+pub fn create_texture_from_file_in_memory(
+    e: &mut Engine,
+    device: Ptr,
+    data: Ptr,
+    size: u32,
+    out: Ptr,
+) -> u32 {
     create_from_file(e, device, data, size, out, false)
 }
 
@@ -363,16 +406,33 @@ pub fn create_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr
 /// `D3DXCreateCubeTextureFromFileInMemory(device, data, size, out)` (stdcall): as
 /// [`create_texture_from_file_in_memory`] for a cube map, through the device's
 /// `CreateCubeTexture`, face by face (the DDS order: +X, -X, +Y, -Y, +Z, -Z).
-pub fn create_cube_texture_from_file_in_memory(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr) -> u32 {
+pub fn create_cube_texture_from_file_in_memory(
+    e: &mut Engine,
+    device: Ptr,
+    data: Ptr,
+    size: u32,
+    out: Ptr,
+) -> u32 {
     create_from_file(e, device, data, size, out, true)
 }
 
 /// `IDirect3DDevice9::CreateCubeTexture`, `IDirect3DCubeTexture9::LockRect`/`UnlockRect`.
 const DEVICE_CREATE_CUBE_TEXTURE: u32 = 4 * 25;
 
-fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr, cube: bool) -> u32 {
+fn create_from_file(
+    e: &mut Engine,
+    device: Ptr,
+    data: Ptr,
+    size: u32,
+    out: Ptr,
+    cube: bool,
+) -> u32 {
     let bytes = e.mem.bytes(data.addr(), size);
-    let call = if cube { "CreateCubeTextureFromFileInMemory" } else { "CreateTextureFromFileInMemory" };
+    let call = if cube {
+        "CreateCubeTextureFromFileInMemory"
+    } else {
+        "CreateTextureFromFileInMemory"
+    };
     let key = texture_key(call, &bytes);
     let Some(dir) = e.kernel.graphics.d3dx_texture_cache.clone() else {
         panic!("D3DX{call}: no texture cache is set: {TEXTURE_CACHE_HINT}");
@@ -388,9 +448,17 @@ fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr,
         return entry.hr;
     }
     let faces = if cube { 6 } else { 1 };
-    assert_eq!(entry.faces, faces, "D3DX{call}: a {}-face entry is not provided", entry.faces);
+    assert_eq!(
+        entry.faces, faces,
+        "D3DX{call}: a {}-face entry is not provided",
+        entry.faces
+    );
     let image = read_dds(&bytes).expect("a file the DLL took");
-    assert_eq!(image.faces, faces, "D3DX{call}: a file with {} faces is not provided", image.faces);
+    assert_eq!(
+        image.faces, faces,
+        "D3DX{call}: a file with {} faces is not provided",
+        image.faces
+    );
     // The file's level for (face, level), when it has one.
     let stored = |face: u32, level: u32| -> Option<(usize, usize)> {
         (level < image.mip_levels).then(|| image.levels[(face * image.mip_levels + level) as usize])
@@ -414,20 +482,40 @@ fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr,
             e.vcall(
                 device.addr(),
                 DEVICE_CREATE_CUBE_TEXTURE,
-                &[top.width, entry.levels, 0, top.format, D3DPOOL_MANAGED, slot.addr(), 0],
+                &[
+                    top.width,
+                    entry.levels,
+                    0,
+                    top.format,
+                    D3DPOOL_MANAGED,
+                    slot.addr(),
+                    0,
+                ],
             )
         } else {
             e.vcall(
                 device.addr(),
                 DEVICE_CREATE_TEXTURE,
-                &[top.width, top.height, entry.levels, 0, top.format, D3DPOOL_MANAGED, slot.addr(), 0],
+                &[
+                    top.width,
+                    top.height,
+                    entry.levels,
+                    0,
+                    top.format,
+                    D3DPOOL_MANAGED,
+                    slot.addr(),
+                    0,
+                ],
             )
         }
         .u32();
         (hr, e.mem.u32(slot.addr()))
     });
     if made.0 != 0 {
-        panic!("D3DX{call}: the device answered {:#x} (not provided)", made.0);
+        panic!(
+            "D3DX{call}: the device answered {:#x} (not provided)",
+            made.0
+        );
     }
     let texture = made.1;
     for (i, s) in entry.surfaces.iter().enumerate() {
@@ -441,7 +529,11 @@ fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr,
         };
         let (pitch, bits) = e.with_stack(8, |e, locked| {
             let hr = if cube {
-                e.vcall(texture, TEXTURE_LOCK_RECT, &[face, level, locked.addr(), 0, 0])
+                e.vcall(
+                    texture,
+                    TEXTURE_LOCK_RECT,
+                    &[face, level, locked.addr(), 0, 0],
+                )
             } else {
                 e.vcall(texture, TEXTURE_LOCK_RECT, &[level, locked.addr(), 0, 0])
             }
@@ -449,11 +541,18 @@ fn create_from_file(e: &mut Engine, device: Ptr, data: Ptr, size: u32, out: Ptr,
             assert_eq!(hr, 0, "LockRect of a managed level");
             (e.mem.u32(locked.addr()), e.mem.u32(locked.addr() + 4))
         });
-        let block = if s.format == image.format { image.block } else { 1 };
+        let block = if s.format == image.format {
+            image.block
+        } else {
+            1
+        };
         let rows = s.height.div_ceil(block).max(1) as usize;
         let row = level_bytes.len() / rows;
         for r in 0..rows {
-            e.mem.write(bits + r as u32 * pitch, &level_bytes[r * row..(r + 1) * row]);
+            e.mem.write(
+                bits + r as u32 * pitch,
+                &level_bytes[r * row..(r + 1) * row],
+            );
         }
         if cube {
             e.vcall(texture, TEXTURE_UNLOCK_RECT, &[face, level]);
@@ -475,7 +574,10 @@ mod tests {
     fn measured() -> Vec<(String, [u32; 16], [u32; 16], [u32; 16])> {
         let text = include_str!("../../../data/d3dx/matrix_multiply.tsv");
         let words = |t: &str| -> [u32; 16] {
-            let v: Vec<u32> = t.split(' ').map(|w| u32::from_str_radix(w, 16).unwrap()).collect();
+            let v: Vec<u32> = t
+                .split(' ')
+                .map(|w| u32::from_str_radix(w, 16).unwrap())
+                .collect();
             v.try_into().unwrap()
         };
         text.lines()
@@ -502,7 +604,11 @@ mod tests {
         for (alias, a, b, out) in measured() {
             let mut e = Engine::new();
             let m1 = e.mem.alloc(64);
-            let m2 = if alias.contains("m1=m2") { m1 } else { e.mem.alloc(64) };
+            let m2 = if alias.contains("m1=m2") {
+                m1
+            } else {
+                e.mem.alloc(64)
+            };
             let target = match alias.as_str() {
                 "out=m1" | "out=m1=m2" => m1,
                 "out=m2" => m2,
@@ -554,7 +660,10 @@ mod tests {
         assert_eq!(image.levels, vec![(128, 16), (144, 8), (152, 8), (160, 8)]);
         assert_eq!(read_dds(&dxt1(8, 4, 4, 39)), Err(D3DXERR_INVALIDDATA));
         assert_eq!(read_dds(&dxt1(8, 4, 0, 16)).unwrap().mip_levels, 1);
-        assert_eq!(read_dds(&dxt1(8, 4, 1, 16)[..127]), Err(D3DXERR_INVALIDDATA));
+        assert_eq!(
+            read_dds(&dxt1(8, 4, 1, 16)[..127]),
+            Err(D3DXERR_INVALIDDATA)
+        );
         let mut broken = dxt1(8, 4, 1, 16);
         broken[0] = b'X';
         assert_eq!(read_dds(&broken), Err(D3DXERR_INVALIDDATA));
@@ -567,12 +676,22 @@ mod tests {
         let data = e.mem.alloc(file.len() as u32);
         e.mem.write(data, &file);
         let info = e.mem.alloc(28);
-        let hr = get_image_info_from_file_in_memory(&mut e, Ptr::new(data), file.len() as u32, Ptr::new(info));
+        let hr = get_image_info_from_file_in_memory(
+            &mut e,
+            Ptr::new(data),
+            file.len() as u32,
+            Ptr::new(info),
+        );
         assert_eq!(hr, 0);
         let words: Vec<u32> = (0..7).map(|i| e.mem.u32(info + 4 * i)).collect();
         assert_eq!(words, [8, 4, 1, 4, u32::from_le_bytes(*b"DXT1"), 3, 4]);
         e.mem.write(info, &[0x55; 28]);
-        let hr = get_image_info_from_file_in_memory(&mut e, Ptr::new(data), file.len() as u32 - 1, Ptr::new(info));
+        let hr = get_image_info_from_file_in_memory(
+            &mut e,
+            Ptr::new(data),
+            file.len() as u32 - 1,
+            Ptr::new(info),
+        );
         assert_eq!(hr, D3DXERR_INVALIDDATA);
         assert_eq!(e.mem.u32(info), 0x5555_5555);
     }
@@ -583,20 +702,30 @@ mod tests {
     #[test]
     #[ignore]
     fn image_info_matches_the_measured_dll() {
-        let dir = std::path::PathBuf::from(std::env::var("NV_D3DX_IMAGE_INFO").expect("the measure dir"));
+        let dir =
+            std::path::PathBuf::from(std::env::var("NV_D3DX_IMAGE_INFO").expect("the measure dir"));
         // Every table: `d3dx-imageinfo-cube-*` for the cube maps in `dds-cube`, the others for `dds`.
         let tables: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|d| d.ok())
             .map(|d| d.path())
-            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("d3dx-imageinfo-"))
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("d3dx-imageinfo-")
+            })
             .collect();
         assert!(!tables.is_empty(), "a d3dx-imageinfo table");
         let mut checked = 0;
         let lines: Vec<(String, String)> = tables
             .iter()
             .flat_map(|t| {
-                let files = if t.to_string_lossy().contains("-cube-") { "dds-cube" } else { "dds" };
+                let files = if t.to_string_lossy().contains("-cube-") {
+                    "dds-cube"
+                } else {
+                    "dds"
+                };
                 std::fs::read_to_string(t)
                     .unwrap()
                     .lines()
@@ -630,8 +759,18 @@ mod tests {
             e.mem.write(at, &data);
             let info = e.mem.alloc(28);
             e.mem.write(info, &[0x55; 28]);
-            let ours = get_image_info_from_file_in_memory(&mut e, Ptr::new(at), data.len() as u32, Ptr::new(info));
-            let bytes: String = e.mem.bytes(info, 28).iter().map(|b| format!("{b:02x}")).collect();
+            let ours = get_image_info_from_file_in_memory(
+                &mut e,
+                Ptr::new(at),
+                data.len() as u32,
+                Ptr::new(info),
+            );
+            let bytes: String = e
+                .mem
+                .bytes(info, 28)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             assert_eq!((ours, bytes.as_str()), (hr, f[5]), "{} {}", f[1], f[2]);
             checked += 1;
         }
@@ -668,7 +807,9 @@ mod tests {
         let entry = parse_cached_texture(&entry_for_8x4()).unwrap();
         assert_eq!((entry.hr, entry.levels, entry.faces), (0, 4, 1));
         let image = read_dds(&dxt1(8, 4, 4, 40)).unwrap();
-        let rule: Vec<bool> = (0..4).map(|l| copies_level(&image, &entry.surfaces[l], l as u32)).collect();
+        let rule: Vec<bool> = (0..4)
+            .map(|l| copies_level(&image, &entry.surfaces[l], l as u32))
+            .collect();
         assert_eq!(rule, [true, false, false, false]);
         assert_eq!(texture_key("Call", b"ab"), texture_key("Call", b"ab"));
         assert_ne!(texture_key("Call", b"ab"), texture_key("Call", b"ba"));
@@ -698,7 +839,12 @@ mod tests {
             Ret::default()
         });
         e.register_double(LOCK, move |e, a| {
-            let (pitch, bits) = [(16, levels), (8, levels + 16), (8, levels + 24), (8, levels + 32)][a[1] as usize];
+            let (pitch, bits) = [
+                (16, levels),
+                (8, levels + 16),
+                (8, levels + 24),
+                (8, levels + 32),
+            ][a[1] as usize];
             e.mem.set_u32(a[2], pitch);
             e.mem.set_u32(a[2] + 4, bits);
             Ret::default()
@@ -714,19 +860,42 @@ mod tests {
         let data = e.mem.alloc(file.len() as u32);
         e.mem.write(data, &file);
         let out = e.mem.alloc(4);
-        let hr = create_texture_from_file_in_memory(&mut e, Ptr::new(device), Ptr::new(data), file.len() as u32, Ptr::new(out));
+        let hr = create_texture_from_file_in_memory(
+            &mut e,
+            Ptr::new(device),
+            Ptr::new(data),
+            file.len() as u32,
+            Ptr::new(out),
+        );
         assert_eq!(hr, 0);
         assert_eq!(e.mem.u32(out), texture);
-        assert_eq!(e.mem.bytes(levels, 16), vec![0x11; 16], "the stored level, copied");
-        assert_eq!(e.mem.bytes(levels + 16, 8), vec![0xa1; 8], "the made ones, from the cache");
+        assert_eq!(
+            e.mem.bytes(levels, 16),
+            vec![0x11; 16],
+            "the stored level, copied"
+        );
+        assert_eq!(
+            e.mem.bytes(levels + 16, 8),
+            vec![0xa1; 8],
+            "the made ones, from the cache"
+        );
         assert_eq!(e.mem.bytes(levels + 32, 8), vec![0xa3; 8]);
         // A file the cache does not have stops the run with its bytes saved.
         e.mem.set_u8(data + 128, 0x12);
         let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            create_texture_from_file_in_memory(&mut e, Ptr::new(device), Ptr::new(data), file.len() as u32, Ptr::new(out))
+            create_texture_from_file_in_memory(
+                &mut e,
+                Ptr::new(device),
+                Ptr::new(data),
+                file.len() as u32,
+                Ptr::new(out),
+            )
         }));
         assert!(stop.is_err());
-        assert!(std::fs::read_dir(&dir).unwrap().flatten().any(|d| d.file_name().to_string_lossy().starts_with("missing-")));
+        assert!(std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|d| d.file_name().to_string_lossy().starts_with("missing-")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

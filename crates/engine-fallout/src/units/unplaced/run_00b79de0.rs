@@ -860,7 +860,10 @@ mod b008_tests {
         e.call_log = Some(vec![]);
         assert!(e.call(0x00b7_a170, &args![0x5550u32]).bool());
         let log = calls(&mut e);
-        assert!(log.contains(&(SHADERS_RELEASE_00BE0870, vec![0x5550])), "the same this");
+        assert!(
+            log.contains(&(SHADERS_RELEASE_00BE0870, vec![0x5550])),
+            "the same this"
+        );
         assert!(log.contains(&(SHADER_DELETE_00E80190, vec![shader])));
         assert!(log.contains(&(INTERLOCKED_DECREMENT, vec![0x6664])));
         assert!(log.contains(&(INTERLOCKED_DECREMENT, vec![0x6674])));

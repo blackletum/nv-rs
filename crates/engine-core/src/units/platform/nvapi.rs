@@ -148,7 +148,9 @@ pub fn proc_address(e: &mut Engine, name: &[u8]) -> u32 {
             e.kernel.last_error = ERROR_PROC_NOT_FOUND;
             0
         }
-        None => panic!("GetProcAddress(nvapi.dll, nvapi_QueryInterface) was not captured: {CAPTURE_HINT}"),
+        None => panic!(
+            "GetProcAddress(nvapi.dll, nvapi_QueryInterface) was not captured: {CAPTURE_HINT}"
+        ),
     }
 }
 

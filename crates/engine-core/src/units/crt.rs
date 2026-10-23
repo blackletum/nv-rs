@@ -141,7 +141,10 @@ pub fn realloc(e: &mut Engine, block: Ptr, size: u32) -> Ptr {
         return Ptr::new(0);
     }
     let Some(old) = e.kernel.crt_block_sizes.get(&block.addr()).copied() else {
-        panic!("realloc of {:08x}, which the CRT's heap did not hand out: not provided", block.addr());
+        panic!(
+            "realloc of {:08x}, which the CRT's heap did not hand out: not provided",
+            block.addr()
+        );
     };
     let new = crt_alloc(e, size);
     let bytes = e.mem.bytes(block.addr(), old.min(size));
@@ -165,7 +168,10 @@ pub fn msize(e: &mut Engine, block: Ptr) -> u32 {
     }
     match e.kernel.crt_block_sizes.get(&block.addr()) {
         Some(size) => *size,
-        None => panic!("_msize of {:08x}, which the CRT's heap did not hand out: not provided", block.addr()),
+        None => panic!(
+            "_msize of {:08x}, which the CRT's heap did not hand out: not provided",
+            block.addr()
+        ),
     }
 }
 
@@ -198,7 +204,9 @@ const GCVT_S: u32 = 0x00ec_dbf6;
 /// null. The value goes through `FLD`/`FSTP double` (a signalling NaN comes out quiet).
 pub fn gcvt(e: &mut Engine, value: f64, digits: i32, buffer: Ptr) -> Ptr {
     let value = crate::prelude::x87_load64(value.to_bits());
-    let failed = e.call(GCVT_S, &args![buffer, 0xffff_ffffu32, value, digits]).u32();
+    let failed = e
+        .call(GCVT_S, &args![buffer, 0xffff_ffffu32, value, digits])
+        .u32();
     if failed == 0 {
         buffer
     } else {
@@ -211,7 +219,13 @@ pub fn gcvt(e: &mut Engine, value: f64, digits: i32, buffer: Ptr) -> Ptr {
 /// `eh vector destructor iterator` (MSVC runtime, Ghidra library match), stdcall: (array, the
 /// element size, the count, the destructor): runs the destructor (`thiscall`, no stack words)
 /// on each element, last first.
-pub fn eh_vector_destructor_iterator(e: &mut Engine, array: Ptr, size: u32, count: i32, destructor: u32) {
+pub fn eh_vector_destructor_iterator(
+    e: &mut Engine,
+    array: Ptr,
+    size: u32,
+    count: i32,
+    destructor: u32,
+) {
     let mut at = array.addr().wrapping_add(size.wrapping_mul(count as u32));
     let mut left = count;
     loop {
@@ -6896,7 +6910,10 @@ pub fn strcat(e: &mut Engine, destination: Ptr, source: Ptr) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     let mut table = vec![
         entry!(0x00ec_dd16, gcvt(f64, i32, Ptr) -> Ptr),
-        entry!(0x00ec_5fce, eh_vector_destructor_iterator(Ptr, u32, i32, u32)),
+        entry!(
+            0x00ec_5fce,
+            eh_vector_destructor_iterator(Ptr, u32, i32, u32)
+        ),
         entry!(0x00ec_be7c, access_s(Ptr, u32) -> u32),
         entry!(0x00ec_bf05, access(Ptr, u32) -> i32),
         entry!(0x00ec_6380, strcat(Ptr, Ptr) -> Ptr),
@@ -8480,7 +8497,11 @@ mod physics_step_tests {
         let seen = log.clone();
         e.register_double(FRND, move |e, a| {
             seen.borrow_mut().push((FRND, a.to_vec()));
-            assert_eq!(x87_control_word(e), 0x1b7f, "round up while it runs (bit 6 reads 1)");
+            assert_eq!(
+                x87_control_word(e),
+                0x1b7f,
+                "round up while it runs (bit 6 reads 1)"
+            );
             st0(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32)).ceil())
         });
         let got = ceil_via_registry(&mut e, 2.25);
@@ -11259,12 +11280,21 @@ mod tests_gcvt_and_iterator {
             u32::from(a[4] == 99).into_ret()
         });
         let buffer: Ptr = Ptr::new(0x1000);
-        assert_eq!(e.call(0x00ec_dd16, &args![1.5f64, 6i32, buffer]).u32(), 0x1000);
+        assert_eq!(
+            e.call(0x00ec_dd16, &args![1.5f64, 6i32, buffer]).u32(),
+            0x1000
+        );
         assert_eq!(e.call(0x00ec_dd16, &args![1.5f64, 99i32, buffer]).u32(), 0);
         let bits = 1.5f64.to_bits();
-        assert_eq!(seen.borrow()[0], vec![0x1000, 0xffff_ffff, bits as u32, (bits >> 32) as u32, 6]);
+        assert_eq!(
+            seen.borrow()[0],
+            vec![0x1000, 0xffff_ffff, bits as u32, (bits >> 32) as u32, 6]
+        );
         // A signalling NaN arrives quiet.
-        e.call(0x00ec_dd16, &args![f64::from_bits(0x7ff0_0000_0000_0001), 6i32, buffer]);
+        e.call(
+            0x00ec_dd16,
+            &args![f64::from_bits(0x7ff0_0000_0000_0001), 6i32, buffer],
+        );
         assert_eq!(seen.borrow()[2][3], 0x7ff8_0000);
     }
 
@@ -11277,10 +11307,16 @@ mod tests_gcvt_and_iterator {
             record.borrow_mut().push(a[0]);
             Ret::default()
         });
-        e.call(0x00ec_5fce, &args![0x2000u32, 0x10u32, 3i32, 0x7f00_0300u32]);
+        e.call(
+            0x00ec_5fce,
+            &args![0x2000u32, 0x10u32, 3i32, 0x7f00_0300u32],
+        );
         assert_eq!(*order.borrow(), vec![0x2020, 0x2010, 0x2000]);
         order.borrow_mut().clear();
-        e.call(0x00ec_5fce, &args![0x2000u32, 0x10u32, 0i32, 0x7f00_0300u32]);
+        e.call(
+            0x00ec_5fce,
+            &args![0x2000u32, 0x10u32, 0i32, 0x7f00_0300u32],
+        );
         assert!(order.borrow().is_empty());
     }
 }

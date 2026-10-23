@@ -1680,7 +1680,8 @@ mod tests {
         assert_eq!(e.call(0x00ec_b65a, &args![stream, 0u32, 0u32]).u32(), 0);
         // A small read goes through the stream's buffer (0x1000 bytes).
         assert_eq!(
-            e.call(0x00ec_b3a8, &args![buffer, 1u32, 0x24u32, stream]).u32(),
+            e.call(0x00ec_b3a8, &args![buffer, 1u32, 0x24u32, stream])
+                .u32(),
             0x24
         );
         assert_eq!(e.mem.bytes(buffer, 0x24), data[..0x24].to_vec());
@@ -1689,14 +1690,16 @@ mod tests {
         assert_eq!(e.call(0x00ec_b65a, &args![stream, 0x10u32, 1u32]).u32(), 0);
         assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x34);
         assert_eq!(
-            e.call(0x00ec_b3a8, &args![buffer, 0x10u32, 0x180u32, stream]).u32(),
+            e.call(0x00ec_b3a8, &args![buffer, 0x10u32, 0x180u32, stream])
+                .u32(),
             0x180
         );
         assert_eq!(e.mem.bytes(buffer, 0x1800), data[0x34..0x1834].to_vec());
         assert_eq!(e.call(0x00ec_b562, &args![stream]).u32(), 0x1834);
         // Past the end: the whole elements read, and _IOEOF.
         assert_eq!(
-            e.call(0x00ec_b3a8, &args![buffer, 0x100u32, 0x20u32, stream]).u32(),
+            e.call(0x00ec_b3a8, &args![buffer, 0x100u32, 0x20u32, stream])
+                .u32(),
             0x17
         );
         assert_ne!(e.mem.u32(stream + 0xc) & 0x10, 0);
@@ -1719,19 +1722,22 @@ mod tests {
         let buffer = e.mem.alloc(0x10);
         e.mem.write(buffer, &[0xaa; 8]);
         assert_eq!(
-            e.call(0x00ec_b312, &args![buffer, 4u32, 1u32, 8u32, stream]).u32(),
+            e.call(0x00ec_b312, &args![buffer, 4u32, 1u32, 8u32, stream])
+                .u32(),
             0
         );
         assert_eq!(e.mem.u32(block + 8), 0x22);
         assert_eq!(e.mem.bytes(buffer, 8), [0, 0, 0, 0, 0xaa, 0xaa, 0xaa, 0xaa]);
         // Zero elements read nothing; a null stream zeroes the destination.
         assert_eq!(
-            e.call(0x00ec_b312, &args![buffer, 8u32, 0u32, 8u32, stream]).u32(),
+            e.call(0x00ec_b312, &args![buffer, 8u32, 0u32, 8u32, stream])
+                .u32(),
             0
         );
         e.mem.write(buffer, &[0xaa; 8]);
         assert_eq!(
-            e.call(0x00ec_b312, &args![buffer, 8u32, 1u32, 8u32, 0u32]).u32(),
+            e.call(0x00ec_b312, &args![buffer, 8u32, 1u32, 8u32, 0u32])
+                .u32(),
             0
         );
         assert_eq!(e.mem.bytes(buffer, 8), [0; 8]);
@@ -1753,9 +1759,15 @@ mod tests {
         );
         assert_eq!(e.mem.bytes(to, 4), [0, 0, b'c', b'd']);
         assert_eq!(e.mem.u32(block + 8), 0x22);
-        assert_eq!(e.call(0x00ec_7c66, &args![to, 8u32, 0u32, 4u32]).u32(), 0x16);
+        assert_eq!(
+            e.call(0x00ec_7c66, &args![to, 8u32, 0u32, 4u32]).u32(),
+            0x16
+        );
         assert_eq!(e.mem.bytes(to, 4), [0; 4]);
-        assert_eq!(e.call(0x00ec_7c66, &args![0u32, 8u32, from, 4u32]).u32(), 0x16);
+        assert_eq!(
+            e.call(0x00ec_7c66, &args![0u32, 8u32, from, 4u32]).u32(),
+            0x16
+        );
     }
 
     #[test]
