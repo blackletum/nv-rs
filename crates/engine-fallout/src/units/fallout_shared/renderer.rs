@@ -2188,20 +2188,20 @@ pub fn fn_004de080(e: &mut Engine) -> u8 {
 
 /// The two floats `fn_004de0c0` and `fn_004de0d0` load (`0118948c`, `01189490`; Renderer::Init
 /// rounds them to the display width and height when `fn_004de070` answers true).
-const FLOAT_0118948C: u32 = 0x0118_948c;
-const FLOAT_01189490: u32 = 0x0118_9490;
+const WIDTH_0118948C: u32 = 0x0118_948c;
+const HEIGHT_01189490: u32 = 0x0118_9490;
 
 // Translated from 004de0c0 (disassembled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`cdecl`, no words): `FLD float ptr [0118948c]`, answered in `ST0`
 /// (the load quiets a signalling NaN).
 pub fn fn_004de0c0(e: &mut Engine) -> f32 {
-    f32::from_bits(x87_quiet_bits(e.mem.u32(FLOAT_0118948C)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(WIDTH_0118948C)))
 }
 
 // Translated from 004de0d0 (disassembled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`cdecl`, no words): `FLD float ptr [01189490]`, answered in `ST0`.
 pub fn fn_004de0d0(e: &mut Engine) -> f32 {
-    f32::from_bits(x87_quiet_bits(e.mem.u32(FLOAT_01189490)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(HEIGHT_01189490)))
 }
 
 // Translated from 004de2b0 (disassembled, FalloutNV.exe 1.4.0.525)
@@ -5102,9 +5102,9 @@ mod display_size_tests {
     #[test]
     fn the_float_getters_load_their_globals() {
         let mut e = Engine::new();
-        e.map(FLOAT_0118948C & !0xfff, 0x1000);
-        e.mem.set_u32(FLOAT_0118948C, 1280.0f32.to_bits());
-        e.mem.set_u32(FLOAT_01189490, 720.0f32.to_bits());
+        e.map(WIDTH_0118948C & !0xfff, 0x1000);
+        e.mem.set_u32(WIDTH_0118948C, 1280.0f32.to_bits());
+        e.mem.set_u32(HEIGHT_01189490, 720.0f32.to_bits());
         assert_eq!(e.call(0x004d_e0c0, &[]).f64(), 1280.0);
         assert_eq!(e.call(0x004d_e0d0, &[]).f64(), 720.0);
     }
