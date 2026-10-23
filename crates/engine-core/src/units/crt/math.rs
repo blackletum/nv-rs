@@ -5055,6 +5055,426 @@ pub fn ci_atan2(e: &mut Engine, y: f64, x: f64) -> f64 {
     cintrindisp2(e, ATAN2_DESCRIPTOR, y, x)
 }
 
+// ---- log and log10 ------------------------------------------------------------------------------
+
+/// The names and operation codes of `log` (`"log"`, `011c1990`, 0x1a) and `log10` (`"log10"`,
+/// `011c19a0`, 0x1b), the extended -infinity of a zero argument (`011c273a`), and the SSE2
+/// bodies (`00edbae0`/`00edbaf8`, `00edd160`/`00edd178`).
+const LOG_NAME: u32 = 0x011c_1990;
+const LOG10_NAME: u32 = 0x011c_19a0;
+const LOG_OPERATION: u32 = 0x1a;
+const LOG10_OPERATION: u32 = 0x1b;
+const MINUS_INFINITY_EXTENDED: u32 = 0x011c_273a;
+const LOG_SSE2_REGISTER: u32 = 0x00ed_bae0;
+const LOG_SSE2: u32 = 0x00ed_baf8;
+const LOG10_SSE2_REGISTER: u32 = 0x00ed_d160;
+const LOG10_SSE2: u32 = 0x00ed_d178;
+
+// Translated from 00eca920 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log` (LIBCMT; Ghidra's function ID gives this body a conflicting name, the name `"log"` its
+/// error reports pass at `011c1990` decides), cdecl, the double on the stack, the result in
+/// `ST0`: with `__use_sse2_mathfcns` set and every `MXCSR` and x87 exception masked the SSE2 body
+/// `00edbaf8`; otherwise `__fload_withFB` and the x87 body `00eca9b8`.
+pub fn log(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(LOG_SSE2, &args![x]).f64();
+    }
+    stack_x87(e, x, log_x87)
+}
+
+// Translated from 00eca960 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIlog` (the register form of `log`; no label in the map), `ST0` in, `ST0` out: the same test
+/// picks the SSE2 body `00edbae0`; otherwise `ST0` stored, `00ed2808`, and the x87 body
+/// `00eca9b8`.
+pub fn ci_log(e: &mut Engine, st0: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(LOG_SSE2_REGISTER, &args![st0]).f64();
+    }
+    register_x87(e, st0, log_x87)
+}
+
+// Translated from 00ecbc80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log10` (LIBCMT; Ghidra's function ID gives this body a conflicting name, the name `"log10"`
+/// at `011c19a0` decides), as [`log`] with the SSE2 body `00edd178` and the x87 body `00ecbd18`.
+pub fn log10(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(LOG10_SSE2, &args![x]).f64();
+    }
+    stack_x87(e, x, log10_x87)
+}
+
+// Translated from 00ecbcc0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIlog10` (the register form of `log10`; no label in the map), as [`ci_log`] with the SSE2
+/// body `00edd160` and the x87 body `00ecbd18`.
+pub fn ci_log10(e: &mut Engine, st0: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(LOG10_SSE2_REGISTER, &args![st0]).f64();
+    }
+    register_x87(e, st0, log10_x87)
+}
+
+// Translated from 00eca9b8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log`'s x87 body (no label; Ghidra gives it no name), with the inputs of `acos`'s
+/// (`fn_00eca228`). A finite argument runs under the control word at `010f2a98` (unless the
+/// saved one is `0x027f`); a positive one (a denormal included) is `FLDLN2; FXCH; FYL2X`,
+/// leaving through `__math_exit` (operation 0x1a, `"log"`); a negative one is a domain error with
+/// the indefinite NaN (type 1); a zero gives the extended -infinity (`011c273a`) with type 2.
+/// +infinity comes back as it is through the exit, -infinity is the domain error, a NaN gets
+/// its type from `00ed27ac`; errors go to `__startOneArgErrorHandling`.
+pub fn fn_00eca9b8(e: &mut Engine, zf: bool, eax: u32, st0: f64, low: u32, high: u32) -> f64 {
+    log_x87(e, zf, eax, ext_of_double(st0.to_bits()), low, high).store64()
+}
+
+fn log_x87(e: &mut Engine, zf: bool, eax: u32, x: X87Ext, low: u32, high: u32) -> X87Ext {
+    logarithm_x87(e, zf, eax, x, low, high, LOG_OPERATION)
+}
+
+// Translated from 00ecbd18 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log10`'s x87 body (no label), as `log`'s (`fn_00eca9b8`) with `FLDLG2` and the operation
+/// 0x1b (`"log10"`).
+pub fn fn_00ecbd18(e: &mut Engine, zf: bool, eax: u32, st0: f64, low: u32, high: u32) -> f64 {
+    log10_x87(e, zf, eax, ext_of_double(st0.to_bits()), low, high).store64()
+}
+
+fn log10_x87(e: &mut Engine, zf: bool, eax: u32, x: X87Ext, low: u32, high: u32) -> X87Ext {
+    logarithm_x87(e, zf, eax, x, low, high, LOG10_OPERATION)
+}
+
+/// The two logarithm bodies (the same code with `FLDLN2` or `FLDLG2`).
+fn logarithm_x87(
+    e: &mut Engine,
+    zf: bool,
+    eax: u32,
+    x: X87Ext,
+    low: u32,
+    high: u32,
+    operation: u32,
+) -> X87Ext {
+    let (name, constant) = if operation == LOG_OPERATION {
+        (LOG_NAME, X87Constant::LnTwo)
+    } else {
+        (LOG10_NAME, X87Constant::Log10Two)
+    };
+    let saved = x87_control_word(e);
+    let (kind, result) = if zf {
+        // 00ecaa0b: an infinity or NaN; EAX the high word.
+        if let Some(found) = nan_type(e, eax, x, low) {
+            found
+        } else if eax & 0x8000_0000 == 0 {
+            // +infinity: as it is, through the exit.
+            return inverse_exit(e, x, saved, operation, name, low, high);
+        } else {
+            (1, load_extended(e, INDEFINITE))
+        }
+    } else {
+        // MOV EAX, dword ptr [ESP+0xc]: the stored double's high word.
+        let eax = high;
+        if saved != 0x027f {
+            let word = e.mem.u16(ATAN_CONTROL_WORD);
+            set_x87_control_word(e, word);
+        }
+        if eax & 0x7ff0_0000 == 0 && (eax & 0xf_ffff) | low == 0 {
+            // A zero: FSTP ST0; FLD tbyte [011c273a]; type 2.
+            (2, load_extended(e, MINUS_INFINITY_EXTENDED))
+        } else if eax & 0x8000_0000 != 0 {
+            (1, load_extended(e, INDEFINITE))
+        } else {
+            // FLDLN2 / FLDLG2; FXCH; FYL2X.
+            let result = x87_fyl2x(x87_fld_constant(constant), x);
+            return inverse_exit(e, result, saved, operation, name, low, high);
+        }
+    };
+    inverse_error(e, kind, result, saved, operation, name, low, high)
+}
+
+/// `CVTSI2SD dest, r32`: the signed integer, converted exactly, in the low lane.
+fn cvtsi2sd(dest: Xmm, value: u32) -> Xmm {
+    [f64::from(value as i32).to_bits(), dest[1]]
+}
+
+/// `CMPEQSD dest, src`: the low lane all ones when the two are equal (ordered), else zero.
+fn cmpeqsd(dest: Xmm, src: u64) -> Xmm {
+    let equal = f64::from_bits(dest[0]) == f64::from_bits(src);
+    [if equal { u64::MAX } else { 0 }, dest[1]]
+}
+
+/// The two SSE2 logarithms' constants and tables (`log`'s at `010fcXXX`, `log10`'s at
+/// `010fdXXX`), by the role the bodies give them: the fraction mask, the exponent bits ORed in
+/// (also the numerator of a zero's division and the test of +infinity), the rounding addend of
+/// the table index, the high-part mask, (`log10` only) the subtrahend of the high part, the
+/// exponent's factor pair, the pair of masks indexed by whether the reduction was exact, the
+/// zero the argument is compared with, the denormals' scale, the result of +infinity, the
+/// result of a zero, the polynomial pairs (three for `log`, four for `log10`), the two tables
+/// (the reciprocals and the logarithms), and the error codes (NaN, zero, negative).
+struct LogTables {
+    fraction_mask: u32,
+    exponent_bits: u32,
+    index_addend: u32,
+    high_mask: u32,
+    high_subtrahend: Option<u32>,
+    exponent_factor: u32,
+    exact_masks: u32,
+    zero: u32,
+    denormal_scale: u32,
+    infinity: u32,
+    minus_infinity: u32,
+    polynomial: [u32; 3],
+    last_pair: Option<u32>,
+    reciprocals: u32,
+    logarithms: u32,
+    codes: [u32; 3],
+}
+
+const LOG_TABLES: LogTables = LogTables {
+    fraction_mask: 0x010f_c580,
+    exponent_bits: 0x010f_c5e0,
+    index_addend: 0x010f_c590,
+    high_mask: 0x010f_c5a0,
+    high_subtrahend: None,
+    exponent_factor: 0x010f_c5b0,
+    exact_masks: 0x010f_c5c0,
+    zero: 0x010f_c5f0,
+    denormal_scale: 0x010f_c600,
+    infinity: 0x010f_c618,
+    minus_infinity: 0x010f_c610,
+    polynomial: [0x010f_c630, 0x010f_c640, 0x010f_c650],
+    last_pair: None,
+    reciprocals: 0x010f_c660,
+    logarithms: 0x010f_ca70,
+    codes: [0x3e8, 2, 3],
+};
+
+const LOG10_TABLES: LogTables = LogTables {
+    fraction_mask: 0x010f_d380,
+    exponent_bits: 0x010f_d3f0,
+    index_addend: 0x010f_d3a0,
+    high_mask: 0x010f_d3b0,
+    high_subtrahend: Some(0x010f_d390),
+    exponent_factor: 0x010f_d3c0,
+    exact_masks: 0x010f_d3d0,
+    zero: 0x010f_d400,
+    denormal_scale: 0x010f_d410,
+    infinity: 0x010f_d428,
+    minus_infinity: 0x010f_d420,
+    polynomial: [0x010f_d440, 0x010f_d450, 0x010f_d460],
+    last_pair: Some(0x010f_d470),
+    reciprocals: 0x010f_d890,
+    logarithms: 0x010f_d480,
+    codes: [0x3e9, 8, 9],
+};
+
+// Translated from 00edbae0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `log`'s SSE2 body (no label), `ST0` in: the aligned frame, `ST0` stored
+/// (`FSTP`), `MOVQ XMM0`, and the core `00edbafe` called with it above the return address.
+pub fn fn_00edbae0(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        logarithm_sse2(e, slot.addr(), movq(stored.to_bits()), &LOG_TABLES)
+    })
+}
+
+// Translated from 00edbaf8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `log`'s SSE2 body (no label), cdecl: `MOVLPD XMM0, [ESP+4]` and the core
+/// `00edbafe` that follows.
+pub fn fn_00edbaf8(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        logarithm_sse2(e, slot.addr(), movlpd([0; 2], x.to_bits()), &LOG_TABLES)
+    })
+}
+
+// Translated from 00edbafe (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log`'s SSE2 core (no label), `XMM0` the argument (registered with the double above the return
+/// address). Every instruction is the exe's, in its order: the fraction with the exponent of 1
+/// (`010fc580`, `010fc5e0`) rounded (`010fc590`) to a table index; the reciprocal (`010fc660`)
+/// reduces it, the logarithm (`010fca70`) and the exponent times `010fc5b0` (`CVTSI2SD`) are
+/// added, the polynomial (`010fc630`..`010fc650`) on the reduced value, the high part masked by
+/// `010fc5c0`'s row (the second when the reduction is exact). A denormal is scaled by
+/// `010fc600` and runs again with the exponent less 52; a zero (`CMPEQSD` with `010fc5f0`) gives
+/// `010fc610` with error 2 (after `1 / x`, the zero divide); +infinity gives `010fc618`; a NaN
+/// error 0x3e8; a negative number or -infinity `0 / 0` (the default NaN) with error 3. Errors go
+/// to `___libm_error_support` with the argument's slot twice and a result slot holding `XMM1`'s
+/// low lane, which is then the result.
+pub fn fn_00edbafe(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        logarithm_sse2(e, slot.addr(), movq(x.to_bits()), &LOG_TABLES)
+    })
+}
+
+// Translated from 00edd160 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `log10`'s SSE2 body (no label), as `log`'s (`fn_00edbae0`) with the core
+/// `00edd17e`.
+pub fn fn_00edd160(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        logarithm_sse2(e, slot.addr(), movq(stored.to_bits()), &LOG10_TABLES)
+    })
+}
+
+// Translated from 00edd178 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `log10`'s SSE2 body (no label), cdecl, with the core `00edd17e`.
+pub fn fn_00edd178(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        logarithm_sse2(e, slot.addr(), movlpd([0; 2], x.to_bits()), &LOG10_TABLES)
+    })
+}
+
+// Translated from 00edd17e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `log10`'s SSE2 core (no label): `log`'s (`fn_00edbafe`) on its own constants (`010fd380` ..
+/// `010fd470`) and tables (`010fd890`, `010fd480`), the high part less `010fd390` instead of the
+/// exponent bits, a fourth polynomial pair (`010fd470`) added, and the error codes 0x3e9, 8 and 9.
+pub fn fn_00edd17e(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        logarithm_sse2(e, slot.addr(), movq(x.to_bits()), &LOG10_TABLES)
+    })
+}
+
+fn logarithm_sse2(e: &mut Engine, argument: u32, xmm0: Xmm, t: &LogTables) -> f64 {
+    let m = |e: &Engine, a: u32| e.mem.u64(a);
+    let mut x: [Xmm; 8] = [[0; 2]; 8];
+    x[0] = xmm0;
+    // MOV EDX, 0.
+    let mut edx: u32 = 0;
+    loop {
+        // 00edbb03
+        x[5] = x[0];
+        x[0] = unpcklpd(x[0], x[0]);
+        x[5] = psrlq(x[5], 0x34);
+        let mut ecx = pextrw(x[5], 0);
+        x[1] = m128(e, t.fraction_mask);
+        if let Some(subtrahend) = t.high_subtrahend {
+            x[2] = m128(e, subtrahend);
+        }
+        x[3] = m128(e, t.exponent_bits);
+        x[4] = m128(e, t.index_addend);
+        x[6] = m128(e, t.high_mask);
+        x[0] = andpd(x[0], x[1]);
+        x[0] = orpd(x[0], x[3]);
+        x[4] = addpd(x[4], x[0]);
+        let mut eax = pextrw(x[4], 0) & 0x7f0;
+        x[4] = m128(e, t.reciprocals.wrapping_add(eax));
+        x[7] = m128(e, t.logarithms.wrapping_add(eax));
+        x[6] = andpd(x[6], x[0]);
+        x[0] = subpd(x[0], x[6]);
+        x[6] = mulpd(x[6], x[4]);
+        // log subtracts the exponent bits, log10 its own pair (XMM2).
+        x[6] = subpd(
+            x[6],
+            if t.high_subtrahend.is_some() {
+                x[2]
+            } else {
+                x[3]
+            },
+        );
+        x[7] = addsd(x[7], x[6][0]);
+        x[0] = mulpd(x[0], x[4]);
+        x[4] = x[0];
+        x[0] = addpd(x[0], x[6]);
+        ecx &= 0xfff;
+        ecx = ecx.wrapping_sub(1);
+        if ecx <= 0x7fd {
+            ecx = ecx.wrapping_sub(0x3fe);
+            ecx = ecx.wrapping_add(edx);
+            x[6] = cvtsi2sd(x[6], ecx);
+            x[6] = unpcklpd(x[6], x[6]);
+            ecx <<= 0xa;
+            eax = eax.wrapping_add(ecx);
+            // MOV ECX, 0x10; MOV EDX, 0; CMP EAX, 0; CMOVZ EDX, ECX.
+            edx = if eax == 0 { 0x10 } else { 0 };
+            x[1] = m128(e, t.polynomial[0]);
+            x[3] = x[0];
+            x[2] = m128(e, t.polynomial[1]);
+            x[1] = mulpd(x[1], x[0]);
+            x[3] = mulpd(x[3], x[3]);
+            x[1] = addpd(x[1], x[2]);
+            x[2] = m128(e, t.polynomial[2]);
+            x[3] = mulsd(x[3], x[3][0]);
+            x[5] = m128(e, t.exponent_factor);
+            x[6] = mulpd(x[6], x[5]);
+            x[5] = m128(e, t.exact_masks.wrapping_add(edx));
+            x[4] = andpd(x[4], x[5]);
+            x[7] = addpd(x[7], x[6]);
+            x[7] = addpd(x[7], x[4]);
+            x[1] = mulpd(x[1], x[0]);
+            x[3] = mulsd(x[3], x[0][0]);
+            x[1] = addpd(x[1], x[2]);
+            if let Some(last) = t.last_pair {
+                x[2] = m128(e, last);
+                x[2] = mulpd(x[2], x[0]);
+            }
+            x[6] = x[7];
+            x[6] = unpckhpd(x[6], x[6]);
+            x[1] = mulpd(x[1], x[3]);
+            x[0] = x[1];
+            if t.last_pair.is_some() {
+                x[1] = addpd(x[1], x[2]);
+            } else {
+                x[1] = unpckhpd(x[1], x[1]);
+            }
+            if t.last_pair.is_some() {
+                x[0] = unpckhpd(x[0], x[0]);
+            }
+            x[0] = addsd(x[0], x[1][0]);
+            x[0] = addsd(x[0], x[6][0]);
+            x[0] = addsd(x[0], x[7][0]);
+            return x87_load64(x[0][0]);
+        }
+        // 00edbc3e
+        x[0] = movlpd(x[0], m(e, argument));
+        x[1] = m128(e, t.zero);
+        x[1] = cmpeqsd(x[1], x[0][0]);
+        if pextrw(x[1], 0) > 0 {
+            // A zero: 1 / x (a zero divide), the -infinity, the second code.
+            x[2] = movlpd(x[2], m(e, t.exponent_bits));
+            x[2] = divsd(x[2], x[0][0]);
+            x[1] = movlpd(x[1], m(e, t.minus_infinity));
+            return sse2_error_one(e, argument, x[1][0], t.codes[1]);
+        }
+        if ecx == u32::MAX {
+            // A denormal: scaled, and again with the exponent less 52.
+            x[1] = movlpd(x[1], m(e, t.denormal_scale));
+            x[0] = mulsd(x[0], x[1][0]);
+            edx = 0xffff_ffcc;
+            continue;
+        }
+        if ecx <= 0x7fe {
+            // 00edbc68: +infinity or a NaN.
+            x[0] = movlpd(x[0], m(e, argument));
+            x[1] = m128(e, t.fraction_mask);
+            x[2] = m128(e, t.exponent_bits);
+            x[0] = andpd(x[0], x[1]);
+            x[0] = orpd(x[0], x[2]);
+            x[2] = cmpeqsd(x[2], x[0][0]);
+            if pextrw(x[2], 0) != 0 {
+                return x87_load64(m(e, t.infinity));
+            }
+            return sse2_error_one(e, argument, x[1][0], t.codes[0]);
+        }
+        // 00edbcd4: a negative number, -infinity or a negative NaN.
+        ecx = ecx.wrapping_add(1) & 0x7ff;
+        let nan = ecx >= 0x7ff && {
+            x[2] = movlpd(x[2], m(e, argument));
+            x[0] = movlpd(x[0], m(e, argument));
+            let low = x[2][0] as u32;
+            x[2] = psrlq(x[2], 0x20);
+            let high = x[2][0] as u32 & 0xf_ffff;
+            (low | high) != 0
+        };
+        if nan {
+            return sse2_error_one(e, argument, x[1][0], t.codes[0]);
+        }
+        // 00edbce5: 0 / 0.
+        x[1] = xorpd(x[1], x[1]);
+        x[1] = divsd(x[1], x[1][0]);
+        return sse2_error_one(e, argument, x[1][0], t.codes[2]);
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ed_454f, fn_00ed454f() -> u32),
@@ -5120,6 +5540,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_bd50, fn_00edbd50(f64) -> f64),
         entry!(0x00ed_bd68, fn_00edbd68(f64) -> f64),
         entry!(0x00ed_bd6e, fn_00edbd6e(f64) -> f64),
+        entry!(0x00ec_a920, log(f64) -> f64),
+        entry!(0x00ec_a960, ci_log(f64) -> f64),
+        entry!(0x00ec_bc80, log10(f64) -> f64),
+        entry!(0x00ec_bcc0, ci_log10(f64) -> f64),
+        entry!(0x00ec_a9b8, fn_00eca9b8(bool, u32, f64, u32, u32) -> f64),
+        entry!(0x00ec_bd18, fn_00ecbd18(bool, u32, f64, u32, u32) -> f64),
+        entry!(0x00ed_bae0, fn_00edbae0(f64) -> f64),
+        entry!(0x00ed_baf8, fn_00edbaf8(f64) -> f64),
+        entry!(0x00ed_bafe, fn_00edbafe(f64) -> f64),
+        entry!(0x00ed_d160, fn_00edd160(f64) -> f64),
+        entry!(0x00ed_d178, fn_00edd178(f64) -> f64),
+        entry!(0x00ed_d17e, fn_00edd17e(f64) -> f64),
     ]
 }
 
@@ -9682,5 +10114,445 @@ mod tests_bodies {
         e.register(GET_SSE2_INFO, |_, _| 0u32.into_ret());
         assert_eq!(e.call(0x00ed_1989, &args![]).u32(), 0);
         assert_eq!(e.global::<u32>(SSE2_AVAILABLE_FLAG), 0);
+    }
+
+    // ---- log and log10 ------------------------------------------------------------------------
+
+    #[test]
+    fn logarithm_x87_bodies_run_fyl2x_bit_for_bit() {
+        let (mut e, except, _) = inverse_engine(false);
+        put_extended(&mut e, MINUS_INFINITY_EXTENDED, 0xffff, 1 << 63);
+        let mut spread = Spread(0x1095);
+        for word in [0x027fu16, 0x007f] {
+            for _ in 0..100 {
+                let x = (spread.next() * 40.0 - 20.0).exp();
+                for (entry, register, constant) in [
+                    (0x00ec_a920u32, 0x00ec_a960u32, X87Constant::LnTwo),
+                    (0x00ec_bc80, 0x00ec_bcc0, X87Constant::Log10Two),
+                ] {
+                    // The body runs under 010f2a98's word (0x027f).
+                    crate::x87::set_control_word(0x027f);
+                    let r = x87_fyl2x(x87_fld_constant(constant), X87Ext::load64(x));
+                    crate::x87::set_control_word(word);
+                    let want = r.store64().to_bits();
+                    crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+                    for addr in [entry, register] {
+                        set_x87_control_word(&mut e, word);
+                        let got = e.call(addr, &args![x]).f64().to_bits();
+                        assert_eq!(x87_control_word(&mut e), word);
+                        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+                        assert_eq!(got, want, "{addr:08x}({x:e}) under {word:04x}");
+                    }
+                }
+            }
+        }
+        // A zero: -infinity with type 2; a negative number: the indefinite NaN with type 1;
+        // +infinity as it is.
+        except.borrow_mut().clear();
+        let at = |e: &mut Engine, addr: u32, x: f64| e.call(addr, &args![x]).f64().to_bits();
+        assert_eq!(at(&mut e, 0x00ec_a920, 0.0), f64::NEG_INFINITY.to_bits());
+        assert_eq!(except.borrow().last().unwrap()[3], 2);
+        assert_eq!(at(&mut e, 0x00ec_bc80, -2.0), 0xfff8_0000_0000_0000);
+        let w = except.borrow().last().unwrap().clone();
+        assert_eq!((w[0], w[3]), (LOG10_OPERATION, 1));
+        let count = except.borrow().len();
+        assert_eq!(
+            at(&mut e, 0x00ec_a960, f64::INFINITY),
+            f64::INFINITY.to_bits()
+        );
+        assert_eq!(except.borrow().len(), count);
+    }
+
+    /// Recorded from the exe: `log` (`00eca920`) and `log10` (`00ecbc80`) on their x87 paths
+    /// under 0x027f.
+    const LOG_X87_RECORDED: &[Vector1] = &[
+        (0xc00533d3_01fa917e, 0xfff80000_00000000, 0x1_001a),
+        (0x444a7c77_c536ff35, 0x40482a64_74bfa940, 0),
+        (0x43608359_728e1991, 0x404313cb_df94cde4, 0),
+        (0x6cacc753_47974ef7, 0x407f02ff_17267afc, 0),
+        (0x3fefffff_fffffc7d, 0xbd3c1800_0000018b, 0),
+        (0x3ff00000_076d108b, 0x3e5db442_251b542c, 0),
+        (0xc04842f2_8df2e69e, 0xfff80000_00000000, 0x1_001a),
+        (0x42552118_abd56159, 0x403a9e1f_3abbb8c4, 0),
+        (0x41e1631b_4ccb046f, 0x40359219_aff76a64, 0),
+        (0x32eb1694_893a771a, 0xc0620aeb_876f397c, 0),
+        (0x1626a498_16bb45ef, 0xc07cf5e4_2a0c1d60, 0),
+        (0x4417ddda_adb69e80, 0x404712e4_c06241d8, 0),
+        (0x3fefb885_bbdab137, 0xbf81f2a3_ffa03168, 0),
+        (0x40071654_b6d660e0, 0x3ff0f518_cfb24cf4, 0),
+        (0x41842371_5d21e678, 0x40318f08_61ae3d50, 0),
+        (0x3fefffff_ffffffc7, 0xbcfc8000_00000019, 0),
+        (0x3ff00000_026d6b40, 0x3e436b59_fe86e3a0, 0),
+        (0x400efd77_2c80e3c0, 0x3ff5aae9_24340a74, 0),
+        (0x407c7b37_93c15907, 0x40187cc2_d99228f0, 0),
+        (0x3ff00000_00000012, 0x3cf1ffff_fffffff6, 0),
+        (0x3ff00000_00000000, 0x00000000_00000000, 0),
+        (0xfe73eb80_ccbc3d06, 0xfff80000_00000000, 0x1_001a),
+        (0x3fe00000_00000000, 0xbfe62e42_fefa39ef, 0),
+        (0xc0370000_00000000, 0xfff80000_00000000, 0x1_001a),
+        (0xbfe00000_00000000, 0xfff80000_00000000, 0x1_001a),
+        (0x40240000_00000000, 0x40026bb1_bbb55516, 0),
+        (0x4114fc23_72b7ed16, 0x40297ee8_15b7c0ae, 0),
+        (0x40340000_00000000, 0x4007f742_7b73e391, 0),
+        (0x3fca2447_b8557200, 0xbff96a7c_a6ad3d68, 0),
+        (0x3fe0fec0_cf181180, 0xbfe43ff8_dd8a31e4, 0),
+        (0x83a1b64e_46d86b57, 0xfff80000_00000000, 0x1_001a),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x1_001a),
+        (0x414f87e2_2ae03e85, 0x402e780c_06a09210, 0),
+        (0xfff80000_00000000, 0xfff80000_00000000, 0x7_001a),
+        (0x26670ba6_6d946b5b, 0xc071b21d_f6026e9d, 0),
+        (0xa1064f13_fa5b098b, 0xfff80000_00000000, 0x1_001a),
+        (0x3ff84a46_b5e45a80, 0x3fdab805_c51e28dc, 0),
+        (0xa02d76d0_cc9d495b, 0xfff80000_00000000, 0x1_001a),
+        (0x3cbb33c6_eebe48a1, 0xc041c1a8_17980a03, 0),
+        (0x3e83d3dd_4bd391f9, 0xc02f74af_34205810, 0),
+        (0x38dc82ae_db5cbd00, 0xc0539c3a_e8d00278, 0),
+        (0x3fefffff_fffaca3f, 0xbdc4d704_0001b24d, 0),
+        (0x3a761bc3_b50e064d, 0xc04e5637_e2be5083, 0),
+        (0xc2c1725f_900b3c48, 0xfff80000_00000000, 0x1_001a),
+        (0x3ff00000_00000000, 0x00000000_00000000, 0),
+        (0x34711b4b_7ac80116, 0xc05fde38_98c79859, 0),
+        (0x2242d218_c474bb36, 0xc0749152_18430f9b, 0),
+        (0x296062f4_fcefd7f4, 0xc06f4678_e9ee1263, 0),
+        (0x423b33f5_4c941e64, 0x40397be9_c2596e3a, 0),
+        (0x3fee75ff_cc0c53ff, 0xbfa93ca7_75f9bb46, 0),
+        (0x3fe8066d_48135240, 0xbfd25840_f1601026, 0),
+        (0xc3508b74_5a73e53a, 0xfff80000_00000000, 0x1_001a),
+        (0x3fefffff_ffffffb6, 0xbd028000_00000015, 0),
+        (0x32b79a11_ced6f959, 0xc06251de_f548fa4c, 0),
+        (0x40a64cd0_70f2f367, 0x401fd394_0b7cf205, 0),
+        (0x3feeb321_aef5c200, 0xbfa53d1f_6bc2966f, 0),
+        (0x3fba7f47_c2877200, 0xc0022525_f4f41c7f, 0),
+        (0xbfe87a19_6a923680, 0xfff80000_00000000, 0x1_001a),
+        (0xa1c6953f_c2dee439, 0xfff80000_00000000, 0x1_001a),
+        (0xc0c86e04_f92610bf, 0xfff80000_00000000, 0x1_001a),
+    ];
+    const LOG10_X87_RECORDED: &[Vector1] = &[
+        (0xc00533d3_01fa917e, 0xfff80000_00000000, 0x1_001b),
+        (0x444a7c77_c536ff35, 0x4034fd6e_a2b1a8a6, 0),
+        (0x43608359_728e1991, 0x40309202_faabb6f1, 0),
+        (0x6cacc753_47974ef7, 0x406aefb9_85c77dce, 0),
+        (0x3fefffff_fffffc7d, 0xbd2866e4_4ed1e6ef, 0),
+        (0x3ff00000_076d108b, 0x3e49ccf9_936b191a, 0),
+        (0xc04842f2_8df2e69e, 0xfff80000_00000000, 0x1_001b),
+        (0x42552118_abd56159, 0x40271eab_d10b234e, 0),
+        (0x41e1631b_4ccb046f, 0x4022bc6f_7741e06f, 0),
+        (0x32eb1694_893a771a, 0xc04f57e2_cc9ed6af, 0),
+        (0x1626a498_16bb45ef, 0xc069279f_c72e8849, 0),
+        (0x4417ddda_adb69e80, 0x40340aa9_9d570c11, 0),
+        (0x3fefb885_bbdab137, 0xbf6f2db5_51206967, 0),
+        (0x40071654_b6d660e0, 0x3fdd7541_fbe1ae25, 0),
+        (0x41842371_5d21e678, 0x401e80ab_f1f4331f, 0),
+        (0x3fefffff_ffffffc7, 0xbce8c139_9ed6a417, 0),
+        (0x3ff00000_026d6b40, 0x3e30de0f_a3206fa4, 0),
+        (0x400efd77_2c80e3c0, 0x3fe2d1fc_44cc3529, 0),
+        (0x407c7b37_93c15907, 0x400544fa_0b642156, 0),
+        (0x3ff00000_00000012, 0x3cdf44ea_77cbc19e, 0),
+        (0x3ff00000_00000000, 0x00000000_00000000, 0),
+        (0xfe73eb80_ccbc3d06, 0xfff80000_00000000, 0x1_001b),
+        (0x3fe00000_00000000, 0xbfd34413_509f79ff, 0),
+        (0xc0370000_00000000, 0xfff80000_00000000, 0x1_001b),
+        (0xbfe00000_00000000, 0xfff80000_00000000, 0x1_001b),
+        (0x40240000_00000000, 0x3ff00000_00000000, 0),
+        (0x4114fc23_72b7ed16, 0x40162532_f343293d, 0),
+        (0x40340000_00000000, 0x3ff4d104_d427de80, 0),
+        (0x3fca2447_b8557200, 0xbfe61376_757f6da6, 0),
+        (0x3fe0fec0_cf181180, 0xbfd196bd_b0f12a8c, 0),
+        (0x83a1b64e_46d86b57, 0xfff80000_00000000, 0x1_001b),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x1_001b),
+        (0x414f87e2_2ae03e85, 0x401a7708_e3738fe1, 0),
+        (0xfff80000_00000000, 0xfff80000_00000000, 0x7_001b),
+        (0x26670ba6_6d946b5b, 0xc05ebd9e_8bf07865, 0),
+        (0xa1064f13_fa5b098b, 0xfff80000_00000000, 0x1_001b),
+        (0x3ff84a46_b5e45a80, 0x3fc7352b_07eb550a, 0),
+        (0xa02d76d0_cc9d495b, 0xfff80000_00000000, 0x1_001b),
+        (0x3cbb33c6_eebe48a1, 0xc02ed89d_44b17606, 0),
+        (0x3e83d3dd_4bd391f9, 0xc01b5279_08ba368c, 0),
+        (0x38dc82ae_db5cbd00, 0xc0410884_379d3512, 0),
+        (0x3fefffff_fffaca3f, 0xbdb219ef_899f485b, 0),
+        (0x3a761bc3_b50e064d, 0xc03a59a6_c94b3eff, 0),
+        (0xc2c1725f_900b3c48, 0xfff80000_00000000, 0x1_001b),
+        (0x3ff00000_00000000, 0x00000000_00000000, 0),
+        (0x34711b4b_7ac80116, 0xc04bae24_0b2bb71c, 0),
+        (0x2242d218_c474bb36, 0xc061dd66_416e6982, 0),
+        (0x296062f4_fcefd7f4, 0xc05b2a55_5ff9e3da, 0),
+        (0x423b33f5_4c941e64, 0x40262299_54072a53, 0),
+        (0x3fee75ff_cc0c53ff, 0xbf95eba7_23b14649, 0),
+        (0x3fe8066d_48135240, 0xbfbfde3a_6dfc3b15, 0),
+        (0xc3508b74_5a73e53a, 0xfff80000_00000000, 0x1_001b),
+        (0x3fefffff_ffffffb6, 0xbcf011a3_283a7c7f, 0),
+        (0x32b79a11_ced6f959, 0xc04fd323_e84d2f41, 0),
+        (0x40a64cd0_70f2f367, 0x400ba4e5_8724e134, 0),
+        (0x3feeb321_aef5c200, 0xbf92729f_f33a7cc7, 0),
+        (0x3fba7f47_c2877200, 0xbfef8572_f4807224, 0),
+        (0xbfe87a19_6a923680, 0xfff80000_00000000, 0x1_001b),
+        (0xa1c6953f_c2dee439, 0xfff80000_00000000, 0x1_001b),
+        (0xc0c86e04_f92610bf, 0xfff80000_00000000, 0x1_001b),
+    ];
+
+    #[test]
+    fn logarithm_x87_matches_the_recorded_results() {
+        let (mut e, except, _) = inverse_engine(false);
+        put_extended(&mut e, MINUS_INFINITY_EXTENDED, 0xffff, 1 << 63);
+        for (addr, vectors) in [
+            (0x00ec_a920u32, LOG_X87_RECORDED),
+            (0x00ec_bc80, LOG10_X87_RECORDED),
+        ] {
+            for &(x, want, error) in vectors {
+                except.borrow_mut().clear();
+                let got = e.call(addr, &args![x]).f64().to_bits();
+                assert_eq!(
+                    (got, except_seen(&except)),
+                    (want, error),
+                    "{addr:08x}({x:016x})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn logarithm_sse2_special_values_without_the_tables() {
+        let (mut e, _, libm) = engine(true);
+        for t in [&LOG_TABLES, &LOG10_TABLES] {
+            e.map(t.reciprocals, 0x800);
+            e.map(t.logarithms, 0x800);
+            for at in [t.index_addend, t.high_mask] {
+                e.map(at, 16);
+            }
+            if let Some(at) = t.high_subtrahend {
+                e.map(at, 16);
+            }
+            for (at, bits) in [
+                (t.fraction_mask, 0x000f_ffff_ffff_ffffu64),
+                (t.fraction_mask + 8, 0x000f_ffff_ffff_ffff),
+                (t.exponent_bits, 1.0f64.to_bits()),
+                (t.exponent_bits + 8, 1.0f64.to_bits()),
+                (t.zero, 0),
+                (t.zero + 8, 0),
+                (t.denormal_scale, 0x4330_0000_0000_0000),
+                (t.minus_infinity, f64::NEG_INFINITY.to_bits()),
+                (t.infinity, f64::INFINITY.to_bits()),
+            ] {
+                put(&mut e, at, bits);
+            }
+        }
+        let cases: [(u32, u64, u64, u32); 10] = [
+            (0x00ec_a920, 0, f64::NEG_INFINITY.to_bits(), 2),
+            (
+                0x00ec_a920,
+                0x8000_0000_0000_0000,
+                f64::NEG_INFINITY.to_bits(),
+                2,
+            ),
+            (0x00ec_a920, (-1.0f64).to_bits(), 0xfff8_0000_0000_0000, 3),
+            (
+                0x00ec_a920,
+                f64::NEG_INFINITY.to_bits(),
+                0xfff8_0000_0000_0000,
+                3,
+            ),
+            (
+                0x00ec_a920,
+                f64::INFINITY.to_bits(),
+                f64::INFINITY.to_bits(),
+                0,
+            ),
+            (
+                0x00ec_a920,
+                0x7ff8_0000_0000_0001,
+                0x000f_ffff_ffff_ffff,
+                0x3e8,
+            ),
+            (0x00ec_bc80, 0, f64::NEG_INFINITY.to_bits(), 8),
+            (0x00ec_bc80, (-3.0f64).to_bits(), 0xfff8_0000_0000_0000, 9),
+            (
+                0x00ec_bc80,
+                f64::INFINITY.to_bits(),
+                f64::INFINITY.to_bits(),
+                0,
+            ),
+            (0x00ec_bc80, 0xfff8_0000_0000_0001, 0, 0x3e9),
+        ];
+        for (addr, x, want, error) in cases {
+            libm.borrow_mut().clear();
+            let got = e.call(addr, &args![x]).f64().to_bits();
+            let code = libm.borrow().last().map_or(0, |w| w[3]);
+            assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
+        }
+    }
+
+    /// Recorded from the exe: `log` and `log10` on their SSE2 paths.
+    const LOG_SSE2_RECORDED: &[Vector1] = &[
+        (0x429c14c8_31fc467e, 0x403dacb8_a5046dfc, 0),
+        (0x0ed3b642_5c72cf45, 0xc08104d7_233073b0, 0),
+        (0x7a9e95b6_a40954b0, 0x4084568f_4ca2a9f8, 0),
+        (0x4226410e_7a940ab0, 0x40389710_24bb2d74, 0),
+        (0x6cacc753_47974ef7, 0x407f02ff_17267afc, 0),
+        (0xc03f6b77_4bc2bf5c, 0xfff80000_00000000, 0x3),
+        (0xc09586c9_b5b947a8, 0xfff80000_00000000, 0x3),
+        (0x028a277a_cbdb0c72, 0xc08546fa_61bfe7ab, 0),
+        (0x537a54bd_76748ead, 0x406b1852_918de4fc, 0),
+        (0x42552118_abd56159, 0x403a9e1f_3abbb8c4, 0),
+        (0x7b8dea8f_74e94e73, 0x4084a98f_841decd4, 0),
+        (0x3ff00000_00031f09, 0x3dc8f847_fffd9082, 0),
+        (0x3e1b3f70_6a9d22ff, 0xc0344314_770c2668, 0),
+        (0x5154d125_5467dbae, 0x40681ea8_b9848300, 0),
+        (0x4417ddda_adb69e80, 0x404712e4_c06241d8, 0),
+        (0x400c7584_e1160060, 0x3ff44ded_2348d843, 0),
+        (0x3fd01871_614d9187, 0xbff615e4_36622c80, 0),
+        (0x3ff00000_046009a4, 0x3e518026_8d9b7575, 0),
+        (0x3ce09f0e_3d859b32, 0xc040f68a_eedc1a4c, 0),
+        (0x3fefffff_ffffffc7, 0xbcfc8000_00000019, 0),
+        (0x3fefffff_ffff779a, 0xbd910cc0_00002456, 0),
+        (0x3ff14ea4_315f027b, 0x3fb41ac4_ee476222, 0),
+        (0x3da3e9a3_85e16d12, 0xc0396d7c_610a2648, 0),
+        (0x40f6b93b_fc40dec5, 0x4026e1e0_e56de1b0, 0),
+        (0x3ff00000_00000012, 0x3cf1ffff_fffffff6, 0),
+        (0x4146f244_ed60daa6, 0x402dd554_aa69bb70, 0),
+        (0xbfeeb8ea_fb4e7c80, 0xfff80000_00000000, 0x3),
+        (0xc03b0000_00000000, 0xfff80000_00000000, 0x3),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x3),
+        (0xc0370000_00000000, 0xfff80000_00000000, 0x3),
+        (0xc0bc88c1_26a80d67, 0xfff80000_00000000, 0x3),
+        (0xd2759412_2651b0fa, 0xfff80000_00000000, 0x3),
+        (0x400ea12e_58aa48b4, 0x3ff57afc_4a3df280, 0),
+        (0x372378d6_7c06efa1, 0xc0586264_25947bec, 0),
+        (0x40340000_00000000, 0x4007f742_7b73e391, 0),
+        (0xc110aa43_bb662b8e, 0xfff80000_00000000, 0x3),
+        (0x403b0000_00000000, 0x400a5ddf_b8038490, 0),
+        (0xc108c24b_3e7cfb0d, 0xfff80000_00000000, 0x3),
+        (0x3e329b33_e3bab8f1, 0xc03341d8_9fb05258, 0),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x3),
+        (0xc0330000_00000000, 0xfff80000_00000000, 0x3),
+        (0x3ebc8415_3fd1b9a6, 0xc02a91f4_8900ebd0, 0),
+        (0x40320000_00000000, 0x40071f7b_3a6b9186, 0),
+        (0x40390000_00000000, 0x4009c041_f7ed8d33, 0),
+        (0xa1064f13_fa5b098b, 0xfff80000_00000000, 0x3),
+        (0xfff00000_00000123, 0x00000000_00000000, 0x3e8),
+        (0x3ee73e44_efe22492, 0xc026d1f5_8b62cb90, 0),
+        (0xc11c9bc9_6dfb8bdf, 0xfff80000_00000000, 0x3),
+        (0x3fbfb31f_96b84772, 0xc000b601_94cd6840, 0),
+        (0x3e83d3dd_4bd391f9, 0xc02f74af_34205810, 0),
+        (0x3fefff8d_c8246b98, 0xbf0c8e29_db5f0499, 0),
+        (0xb9222682_67c2bcff, 0xfff80000_00000000, 0x3),
+        (0xc02383ac_b5f150d0, 0xfff80000_00000000, 0x3),
+        (0xbfefffff_fffffed1, 0xfff80000_00000000, 0x3),
+        (0xc2c1725f_900b3c48, 0xfff80000_00000000, 0x3),
+        (0x8b23ab69_c3a0033a, 0xfff80000_00000000, 0x3),
+        (0x3fe5a9ba_7c73e9c0, 0xbfd8f7e4_2b6568ff, 0),
+        (0x420a02ae_1001f29d, 0x40375c19_b62880ff, 0),
+        (0xbfc4219c_a328c000, 0xfff80000_00000000, 0x3),
+        (0x296062f4_fcefd7f4, 0xc06f4678_e9ee1263, 0),
+        (0x2142806c_f8fde0a6, 0xc075430a_36e7e75d, 0),
+        (0xaf422795_e738cf4e, 0xfff80000_00000000, 0x3),
+        (0x414fc8fe_b4e7a07a, 0x402e7c29_121bce38, 0),
+        (0xbfb2d7eb_35e3a800, 0xfff80000_00000000, 0x3),
+        (0xc3508b74_5a73e53a, 0xfff80000_00000000, 0x3),
+        (0x3fdb70e4_8188b580, 0xbfeb195b_5c3bc992, 0),
+        (0x3fb8aed8_9271b000, 0xc002b666_aba39783, 0),
+        (0xbfd8d8dd_962f1600, 0xfff80000_00000000, 0x3),
+        (0x080da7a7_403368fa, 0xc0835dff_5c786bef, 0),
+        (0x3feeb321_aef5c200, 0xbfa53d1f_6bc2966f, 0),
+        (0x3fdb1647_cbe15f80, 0xbfeb83b5_eaf493aa, 0),
+        (0x1cd53eb9_93ca2740, 0xc078543e_2f30050a, 0),
+        (0x3fe184a8_a55d2880, 0xbfe347a4_f917b91c, 0),
+        (0x3fc5fc37_3d57dc00, 0xbffc2fc2_582118f8, 0),
+        (0xc0c86e04_f92610bf, 0xfff80000_00000000, 0x3),
+    ];
+    const LOG10_SSE2_RECORDED: &[Vector1] = &[
+        (0x429c14c8_31fc467e, 0x4029c66d_a215b5e0, 0),
+        (0x0ed3b642_5c72cf45, 0xc06d909b_60a5d1fb, 0),
+        (0x7a9e95b6_a40954b0, 0x4071aa5c_3fdfbc4a, 0),
+        (0x4226410e_7a940ab0, 0x40255bd2_824e04f1, 0),
+        (0x6cacc753_47974ef7, 0x406aefb9_85c77dce, 0),
+        (0xc03f6b77_4bc2bf5c, 0xfff80000_00000000, 0x9),
+        (0xc09586c9_b5b947a8, 0xfff80000_00000000, 0x9),
+        (0x028a277a_cbdb0c72, 0xc0727b2f_5db8dd7e, 0),
+        (0x537a54bd_76748ead, 0x405788d0_2e0159d6, 0),
+        (0x42552118_abd56159, 0x40271eab_d10b234e, 0),
+        (0x7b8dea8f_74e94e73, 0x4071f274_374f64ec, 0),
+        (0x3ff00000_00031f09, 0x3db5b043_d393eb42, 0),
+        (0x3e1b3f70_6a9d22ff, 0xc0219970_bd80c532, 0),
+        (0x5154d125_5467dbae, 0x4054f33d_a0aaa805, 0),
+        (0x4417ddda_adb69e80, 0x40340aa9_9d570c11, 0),
+        (0x400c7584_e1160060, 0x3fe1a2dc_87109db4, 0),
+        (0x3fd01871_614d9187, 0xbfe32ee8_605a3b39, 0),
+        (0x3ff00000_046009a4, 0x3e3e66d1_986618b2, 0),
+        (0x3ce09f0e_3d859b32, 0xc02d77c4_f382d3e5, 0),
+        (0x3fefffff_ffffffc7, 0xbce8c139_9ed6a417, 0),
+        (0x3fefffff_ffff779a, 0xbd7d9e58_ec8e6d7d, 0),
+        (0x3ff14ea4_315f027b, 0x3fa1766d_4e82c474, 0),
+        (0x3da3e9a3_85e16d12, 0xc0261611_4c8cff55, 0),
+        (0x40f6b93b_fc40dec5, 0x4013e016_af9ca4f7, 0),
+        (0x3ff00000_00000012, 0x3cdf44ea_77cbc19e, 0),
+        (0x4146f244_ed60daa6, 0x4019e9b3_8097f65a, 0),
+        (0xbfeeb8ea_fb4e7c80, 0xfff80000_00000000, 0x9),
+        (0xc03b0000_00000000, 0xfff80000_00000000, 0x9),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x9),
+        (0xc0370000_00000000, 0xfff80000_00000000, 0x9),
+        (0xc0bc88c1_26a80d67, 0xfff80000_00000000, 0x9),
+        (0xd2759412_2651b0fa, 0xfff80000_00000000, 0x9),
+        (0x400ea12e_58aa48b4, 0x3fe2a85b_ae07cc53, 0),
+        (0x372378d6_7c06efa1, 0xc0452e12_7552d40e, 0),
+        (0x40340000_00000000, 0x3ff4d104_d427de80, 0),
+        (0xc110aa43_bb662b8e, 0xfff80000_00000000, 0x9),
+        (0x403b0000_00000000, 0x3ff6e6dd_b0bbe07e, 0),
+        (0xc108c24b_3e7cfb0d, 0xfff80000_00000000, 0x9),
+        (0x3e329b33_e3bab8f1, 0xc020ba02_8ec51004, 0),
+        (0xbff00000_00000000, 0xfff80000_00000000, 0x9),
+        (0xc0330000_00000000, 0xfff80000_00000000, 0x9),
+        (0x3ebc8415_3fd1b9a6, 0xc017141a_6d71e768, 0),
+        (0x40320000_00000000, 0x3ff41598_9f4fc97e, 0),
+        (0x40390000_00000000, 0x3ff65df6_57b04301, 0),
+        (0xa1064f13_fa5b098b, 0xfff80000_00000000, 0x9),
+        (0xfff00000_00000123, 0x00000000_00000000, 0x3e9),
+        (0x3ee73e44_efe22492, 0xc013d242_e164ec10, 0),
+        (0xc11c9bc9_6dfb8bdf, 0xfff80000_00000000, 0x9),
+        (0x3fbfb31f_96b84772, 0xbfed07a8_6c6e3784, 0),
+        (0x3e83d3dd_4bd391f9, 0xc01b5279_08ba368c, 0),
+        (0x3fefff8d_c8246b98, 0xbef8cd86_fff0b28b, 0),
+        (0xb9222682_67c2bcff, 0xfff80000_00000000, 0x9),
+        (0xc02383ac_b5f150d0, 0xfff80000_00000000, 0x9),
+        (0xbfefffff_fffffed1, 0xfff80000_00000000, 0x9),
+        (0xc2c1725f_900b3c48, 0xfff80000_00000000, 0x9),
+        (0x8b23ab69_c3a0033a, 0xfff80000_00000000, 0x9),
+        (0x3fe5a9ba_7c73e9c0, 0xbfc5afed_1d66e98c, 0),
+        (0x420a02ae_1001f29d, 0x40244a3f_ce416769, 0),
+        (0xbfc4219c_a328c000, 0xfff80000_00000000, 0x9),
+        (0x296062f4_fcefd7f4, 0xc05b2a55_5ff9e3da, 0),
+        (0x2142806c_f8fde0a6, 0xc06277c3_aedd13e7, 0),
+        (0xaf422795_e738cf4e, 0xfff80000_00000000, 0x9),
+        (0x414fc8fe_b4e7a07a, 0x401a7a9b_8d36bc99, 0),
+        (0xbfb2d7eb_35e3a800, 0xfff80000_00000000, 0x9),
+        (0xc3508b74_5a73e53a, 0xfff80000_00000000, 0x9),
+        (0x3fdb70e4_8188b580, 0xbfd789b6_2cc44beb, 0),
+        (0x3fb8aed8_9271b000, 0xbff040e3_b59bf348, 0),
+        (0xbfd8d8dd_962f1600, 0xfff80000_00000000, 0x9),
+        (0x080da7a7_403368fa, 0xc070d276_4012fc42, 0),
+        (0x3feeb321_aef5c200, 0xbf92729f_f33a7cc7, 0),
+        (0x3fdb1647_cbe15f80, 0xbfd7e616_dcbbfbf9, 0),
+        (0x1cd53eb9_93ca2740, 0xc06521c8_762fbd3f, 0),
+        (0x3fe184a8_a55d2880, 0xbfd0bf0b_d8d8c37a, 0),
+        (0x3fc5fc37_3d57dc00, 0xbfe87b87_5d6f9bca, 0),
+        (0xc0c86e04_f92610bf, 0xfff80000_00000000, 0x9),
+    ];
+
+    #[test]
+    #[ignore = "needs NV_EXE: the SSE2 tables are the exe's"]
+    fn logarithm_sse2_matches_the_recorded_results_on_the_exes_tables() {
+        let Some((mut e, libm)) = exe_engine() else {
+            return;
+        };
+        for (addr, vectors) in [
+            (0x00ec_a920u32, LOG_SSE2_RECORDED),
+            (0x00ec_bc80, LOG10_SSE2_RECORDED),
+        ] {
+            for &(x, want, error) in vectors {
+                libm.borrow_mut().clear();
+                let got = e.call(addr, &args![x]).f64().to_bits();
+                let code = libm.borrow().last().map_or(0, |w| w[3]);
+                assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
+            }
+        }
     }
 }
