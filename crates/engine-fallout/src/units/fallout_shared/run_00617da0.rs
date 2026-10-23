@@ -38,11 +38,36 @@ pub fn fn_00617e80(e: &mut Engine, this: Ptr) {
     e.call(0x0061_7ea0, &args![this]);
 }
 
+/// `00460110` (unnamed; `thiscall`, no stack words): what the reset runs last.
+const RESET_TAIL_00460110: u32 = 0x0046_0110;
+
+// Translated from 00617ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): the reset of the 0x60-byte form
+/// [`fn_00617da0`] builds. Stores -1 at +0x2C, 0 at +0x34, 5 at +0x30 and 1.0 (`FLD1`) at
+/// +0x38 and +0x3C; calls slot +0 of the vtable of each of the four 8-byte components at
+/// +0x40 (with the component as `this`); then the form's own vtable slot +0xC8 with 0, and
+/// `00460110`.
+pub fn fn_00617ea0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x2c, 0xffff_ffff);
+    e.mem.set_u32(base + 0x34, 0);
+    e.mem.set_u32(base + 0x30, 5);
+    for index in 0..2u32 {
+        e.mem.set_u32(base + 0x38 + 4 * index, x87_store32(1.0));
+    }
+    for index in 0..4u32 {
+        e.vcall(base + 0x40 + 8 * index, 0, &args![]);
+    }
+    e.vcall(base, 0xc8, &args![0u32]);
+    e.call(RESET_TAIL_00460110, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0061_7e80, fn_00617e80(Ptr)),
         entry!(0x0061_7da0, fn_00617da0(Ptr) -> Ptr),
+        entry!(0x0061_7ea0, fn_00617ea0(Ptr)),
     ]
 }
 
@@ -104,5 +129,33 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x0061_7e80, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x0061_7ea0), vec![vec![0x5000]]);
+    }
+
+    #[test]
+    fn reset_sets_the_fields_and_calls_the_components() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0e00_0000, &[0x0e10_0000]);
+        e.register(0x0e10_0000, |_, _| Ret::default());
+        let mut slots = vec![0u32; 0x33];
+        slots[0x32] = 0x0e20_0000;
+        e.put_vtable(0x0e30_0000, &slots);
+        e.register(0x0e20_0000, |_, _| Ret::default());
+        e.register(RESET_TAIL_00460110, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this, 0x0e30_0000);
+        for index in 0..4 {
+            e.mem.set_u32(this + 0x40 + 8 * index, 0x0e00_0000);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0061_7ea0, &args![this]);
+        assert_eq!(
+            [0x2cu32, 0x30, 0x34, 0x38, 0x3c].map(|o| e.mem.u32(this + o)),
+            [0xffff_ffff, 5, 0, 0x3f80_0000, 0x3f80_0000]
+        );
+        let components: Vec<u32> = (0..4).map(|i| this + 0x40 + 8 * i).collect();
+        let called: Vec<u32> = calls_to(&e, 0x0e10_0000).iter().map(|w| w[0]).collect();
+        assert_eq!(called, components);
+        assert_eq!(calls_to(&e, 0x0e20_0000), vec![vec![this, 0]]);
+        assert_eq!(calls_to(&e, RESET_TAIL_00460110), vec![vec![this]]);
     }
 }

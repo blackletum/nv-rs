@@ -305,6 +305,13 @@ pub fn tes_effect_shader_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+// Translated from 00507b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map, called from many classes (a folded getter): the `float` at +0x118
+/// of `this` (`ECX`), returned in `ST0` (`FLD dword`, so a signalling NaN comes out quiet).
+pub fn fn_00507b20(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x118)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -314,6 +321,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_5db0, fn_00505db0(Ptr)),
         entry!(0x0050_6390, fn_00506390(Ptr) -> u32),
         entry!(0x0050_7b00, fn_00507b00(Ptr) -> f32),
+        entry!(0x0050_7b20, fn_00507b20(Ptr) -> f32),
         entry!(0x0050_5e70, tes_effect_shader_load(Ptr, Ptr) -> bool),
     ]
 }
@@ -575,5 +583,18 @@ mod shader_data_tests {
             }
             assert_eq!(e.mem.f32(this + 0x98), 6.5);
         }
+    }
+
+    #[test]
+    fn fn_00507b20_answers_the_float_at_0x118_quiet() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x120);
+        e.mem.set_u32(this + 0x118, 2.5f32.to_bits());
+        assert_eq!(e.call(0x0050_7b20, &args![this]).f32(), 2.5);
+        e.mem.set_u32(this + 0x118, 0xff80_0003);
+        assert_eq!(
+            e.call(0x0050_7b20, &args![this]).f32().to_bits(),
+            0xffc0_0003
+        );
     }
 }
