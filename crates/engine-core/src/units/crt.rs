@@ -3506,12 +3506,15 @@ const ASIN_X87: u32 = 0x00ec_96a8;
 /// `FPATAN` of `x / sqrt((1 + x)(1 - x))` and the error string `"asin"` at `011c1930`; called by
 /// the Euler-angle conversions): `ST0` in, `ST0` out. With the SSE2 routines available
 /// (`sse2_math_available`) it jumps to the SSE2 body `00ed7720`. Otherwise it stores the double
-/// on the stack, runs `00ed2808` (which leaves `ZF` set when the exponent is all ones), and runs
-/// the x87 body `00ec96a8` on it, returning its `ST0`.
+/// on the stack (`FST`), runs `00ed2808` (which leaves `ZF` set when the exponent is all ones),
+/// and runs the x87 body `00ec96a8` on it, returning its `ST0`. The register holds the argument
+/// as `FLD qword` leaves a double, and `FST` stores it so: a signalling NaN is quiet in both,
+/// so its error type is 7 (a quiet NaN), as the exe reports it.
 pub fn ci_asin(e: &mut Engine, st0: f64) -> f64 {
     if sse2_math_available(e) {
         return e.call(ASIN_SSE2, &args![st0]).f64();
     }
+    let st0 = x87_load64(st0.to_bits());
     let bits = st0.to_bits();
     let (low, high) = (bits as u32, (bits >> 32) as u32);
     let eax = e.call(LOAD_FLAGS_HELPER, &args![low, high]).u32();
@@ -8561,6 +8564,37 @@ mod physics_step_tests {
         e.call(0x00ec_9650, &args![0.1f64]);
         assert_eq!(calls_to(&log, ASIN_X87).len(), 1);
         assert!(calls_to(&log, ASIN_SSE2).is_empty());
+    }
+
+    #[test]
+    fn ci_asin_stores_a_signalling_nan_quiet_so_its_error_type_is_7() {
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        let log = Log::default();
+        recorder(&mut e, &log, LOAD_FLAGS_HELPER, eax(0x7ff8_0000));
+        recorder(&mut e, &log, ASIN_X87, st0(1.0));
+        e.call(0x00ec_9650, &args![0x7ff0_0000_0000_0001u64]);
+        let quiet = words(f64::from_bits(0x7ff8_0000_0000_0001));
+        assert_eq!(calls_to(&log, LOAD_FLAGS_HELPER), vec![quiet.to_vec()]);
+        assert_eq!(
+            calls_to(&log, ASIN_X87),
+            vec![vec![1, 0x7ff8_0000, quiet[0], quiet[1], quiet[0], quiet[1]]],
+            "the register and the stored double quiet"
+        );
+        // Through the real 00ed2808, 00ec96a8 and 00ed27ac: __87except sees type 7 for the
+        // operation 0xe, as the exe reports it, and the NaN comes back quiet.
+        let mut e = Engine::new();
+        e.map(USE_SSE2_MATHFCNS, 4);
+        e.map(MATH_ERROR_SWITCH, 4);
+        let seen = Log::default();
+        let record = seen.clone();
+        e.register_double(0x00ee_1b04, move |e, a| {
+            record.borrow_mut().push((a[0], vec![e.mem.u32(a[1])]));
+            Ret::default()
+        });
+        let r = e.call(0x00ec_9650, &args![0x7ff0_0000_0000_0001u64]).f64();
+        assert_eq!(r.to_bits(), 0x7ff8_0000_0000_0001);
+        assert_eq!(*seen.borrow(), vec![(0xe, vec![7])]);
     }
 
     // ---- the shared square-root body -------------------------------------------------------
