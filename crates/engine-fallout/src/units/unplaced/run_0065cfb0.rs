@@ -784,15 +784,13 @@ pub fn fn_0065e700(e: &mut Engine, count: u32, _unused_2: u32) -> u32 {
     allocate_elements(e, count, 0x58)
 }
 
-// Translated from 0065e750 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed: returns an empty iterator-tag struct by value (cdecl; callers push no words
-/// (0044ccd0) or two it does not read (bsfacegenmanager's caller), so it reads none). The
-/// result in `AL` is the byte at `EBP-1` of its frame, the top byte of the `ECX` it pushed: the
-/// caller's leftover `ECX`, a register the engine does not model. Every caller hands the byte
-/// to a tag parameter nothing reads (`0044e420`'s fifth word, the facegen copy's tag), so 0
-/// stands for it.
-pub fn fn_0065e750(_e: &mut Engine) -> u8 {
-    0
+// Translated from 0065e750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: returns an empty iterator-tag struct by value (cdecl, two words that it does not
+/// read). The result in `AL` is the byte at `EBP-1` of its frame, the top byte of the `ECX`
+/// it pushed: the caller's `ECX`, so it is the Rust function's first parameter and the first
+/// word of the registered form, before the two stack words.
+pub fn fn_0065e750(_e: &mut Engine, ecx: u32, _unused_1: u32, _unused_2: u32) -> u8 {
+    (ecx >> 24) as u8
 }
 
 /// `std::_Copy_opt` through unwrapped pointers for one element size (cdecl, six words: first,
@@ -1169,7 +1167,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0065_e670, fn_0065e670(u32, u32) -> u32),
         entry!(0x0065_e6c0, fn_0065e6c0(u32, u32, u32)),
         entry!(0x0065_e700, fn_0065e700(u32, u32) -> u32),
-        entry!(0x0065_e750, fn_0065e750() -> u8),
+        entry!(0x0065_e750, fn_0065e750(u32, u32, u32) -> u8),
         entry!(0x0065_e760, fn_0065e760(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0065_e7c0, fn_0065e7c0(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0065_e820, fn_0065e820(u32, u32, u32, u32)),
@@ -1928,10 +1926,14 @@ mod b001_tests {
     }
 
     #[test]
-    fn tag_0065e750_reads_no_words_and_answers_0() {
+    fn tag_0065e750_is_the_top_byte_of_ecx() {
         let mut e = engine();
-        assert_eq!(e.call(0x0065_e750, &args![]).u32() as u8, 0);
-        assert_eq!(e.call(0x0065_e750, &args![1u32, 2u32]).u32() as u8, 0);
+        assert_eq!(
+            e.call(0x0065_e750, &args![0xab12_3456u32, 1u32, 2u32])
+                .u32() as u8,
+            0xab
+        );
+        assert_eq!(fn_0065e750(&mut e, 0x0012_3456, 0, 0), 0);
     }
 
     fn check_destroy_each(address: u32, element: u32, seen: u32, offset: u32) {
