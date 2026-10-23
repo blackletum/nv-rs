@@ -942,8 +942,8 @@ fn os_sse_probe_filter(code: u32) -> u32 {
 // untouched, as `FSAVE`/`FRSTOR` keep it.
 
 use crate::x87::{
-    x87_fabs, x87_fadd, x87_fchs, x87_fcom, x87_fld_constant, x87_fmul, x87_fsqrt, x87_fsub,
-    X87Constant,
+    x87_fabs, x87_fadd, x87_fchs, x87_fcom, x87_fdiv, x87_fld_constant, x87_fmul, x87_fsqrt,
+    x87_fsub, X87Constant,
 };
 
 /// The x87 register stack of one routine, `ST0` last.
@@ -4311,6 +4311,730 @@ fn atan_nan(e: &mut Engine, argument: u32) -> X87Ext {
     load_double(e, argument)
 }
 
+// ---- exp ----------------------------------------------------------------------------------------
+
+/// `PADDQ`.
+fn paddq(a: Xmm, b: Xmm) -> Xmm {
+    [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])]
+}
+
+/// `UNPCKHPD dest, src`: the two high lanes.
+fn unpckhpd(dest: Xmm, src: Xmm) -> Xmm {
+    [dest[1], src[1]]
+}
+
+/// `exp`'s SSE2 constants (`010fcXXX`, `010fdXXX`): the pairs `010fcee0` (the scale factor),
+/// `010fcec0` (the rounding shifter), `010fcef0` and `010fcf00` (the reduction's two parts),
+/// `010fcf10`, `010fcf20` (the polynomial), `010fcea0` (the mask of the exponent part),
+/// `010fceb0` (its bias), `010fce90` (the exponent mask `PANDN` clears); the doubles
+/// `010fd330` (added to a tiny argument), `010fd350` and `010fd358` (the results of +-infinity),
+/// `010fd360` and `010fd368` (squared for an overflow and an underflow); and the table of pairs
+/// `010fcf30` (64 rows).
+const EXP_CEE0: u32 = 0x010f_cee0;
+const EXP_CEC0: u32 = 0x010f_cec0;
+const EXP_CEF0: u32 = 0x010f_cef0;
+const EXP_CF00: u32 = 0x010f_cf00;
+const EXP_CF10: u32 = 0x010f_cf10;
+const EXP_CF20: u32 = 0x010f_cf20;
+const EXP_CEA0: u32 = 0x010f_cea0;
+const EXP_CEB0: u32 = 0x010f_ceb0;
+const EXP_CE90: u32 = 0x010f_ce90;
+const EXP_D330: u32 = 0x010f_d330;
+const EXP_D350: u32 = 0x010f_d350;
+const EXP_D358: u32 = 0x010f_d358;
+const EXP_D360: u32 = 0x010f_d360;
+const EXP_D368: u32 = 0x010f_d368;
+const EXP_TABLE: u32 = 0x010f_cf30;
+
+// Translated from 00edbd50 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The register form of `exp`'s SSE2 body (no label; Ghidra gives it no name), `ST0` in: a
+/// 16-byte aligned frame, `ST0` stored (`FSTP`, a signalling NaN quiet), `MOVQ XMM0` of it, and
+/// the core `00edbd6e` called with the stored double above its return address.
+pub fn fn_00edbd50(e: &mut Engine, st0: f64) -> f64 {
+    let stored = x87_load64(st0.to_bits());
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), stored.to_bits());
+        exp_sse2(e, slot.addr(), movq(stored.to_bits()))
+    })
+}
+
+// Translated from 00edbd68 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The stack form of `exp`'s SSE2 body (no label), cdecl: `MOVLPD XMM0, [ESP+4]` and the core
+/// `00edbd6e` that follows.
+pub fn fn_00edbd68(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        exp_sse2(e, slot.addr(), movlpd([0; 2], x.to_bits()))
+    })
+}
+
+// Translated from 00edbd6e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `exp`'s SSE2 core (no label), `XMM0` the argument (registered with the double above the return
+/// address). Every instruction is the exe's, in its order. For a magnitude between the top
+/// words `0x3c90` and `0x408f`: `x * 010fcee0` rounded by the shifter `010fcec0` gives the
+/// integer `k`, the reduced argument is `x - k * 010fcef0 - k * 010fcf00`, its polynomial
+/// (`010fcf10`, `010fcf20`) is added to the row `k & 0x3f` of `010fcf30`, and the row's high part
+/// with the exponent `k >> 6` (masked by `010fcea0`, biased by `010fceb0`, shifted to the exponent
+/// field) scales it. A scale beyond `0x37e` either way runs the last steps on the x87 at 64-bit
+/// precision (the caller's rounding: `FSTCW`, `OR 0x300`) with the exponent split in two, the
+/// product stored as a double; an infinite or zero result there is error 0xe (overflow) or 0xf
+/// (underflow). Below `0x3c90` the result is `1 + x` (`010fd330`); from the top word `0x4090`:
+/// overflow (`010fd360` squared, 0xe) for a positive argument, underflow (`010fd368` squared,
+/// 0xf) for a negative one, +infinity `010fd350` and 0 `010fd358` for the infinities, and a NaN
+/// as it is with 0x3ea. Errors go to `___libm_error_support` with the argument's slot twice and
+/// a result slot holding `XMM0`'s low lane, which is then the result. (The bytes at
+/// `00edbf08`..`00edbf26`, after an unconditional jump, are never jumped to.)
+pub fn fn_00edbd6e(e: &mut Engine, x: f64) -> f64 {
+    e.with_stack(8, |e, slot| {
+        e.mem.set_u64(slot.addr(), x.to_bits());
+        exp_sse2(e, slot.addr(), movq(x.to_bits()))
+    })
+}
+
+fn exp_sse2(e: &mut Engine, argument: u32, xmm0: Xmm) -> f64 {
+    let mut x: [Xmm; 8] = [[0; 2]; 8];
+    x[0] = xmm0;
+    // 00edbd6e
+    x[0] = unpcklpd(x[0], x[0]);
+    x[1] = m128(e, EXP_CEE0);
+    x[6] = m128(e, EXP_CEC0);
+    x[2] = m128(e, EXP_CEF0);
+    x[3] = m128(e, EXP_CF00);
+    let mut eax = pextrw(x[0], 3) & 0x7fff;
+    let mut edx = 0x408fu32.wrapping_sub(eax);
+    eax = eax.wrapping_sub(0x3c90);
+    edx |= eax;
+    if edx >= 0x8000_0000 {
+        return exp_sse2_special(e, &mut x, argument);
+    }
+    x[1] = mulpd(x[1], x[0]);
+    x[1] = addpd(x[1], x[6]);
+    x[7] = x[1];
+    x[1] = subpd(x[1], x[6]);
+    x[2] = mulpd(x[2], x[1]);
+    x[4] = m128(e, EXP_CF10);
+    x[3] = mulpd(x[3], x[1]);
+    x[5] = m128(e, EXP_CF20);
+    x[0] = subpd(x[0], x[2]);
+    eax = x[7][0] as u32;
+    let mut ecx = eax & 0x3f;
+    ecx <<= 4;
+    eax = ((eax as i32) >> 6) as u32;
+    edx = eax;
+    x[0] = subpd(x[0], x[3]);
+    x[2] = m128(e, EXP_TABLE.wrapping_add(ecx));
+    x[4] = mulpd(x[4], x[0]);
+    x[1] = x[0];
+    x[0] = mulpd(x[0], x[0]);
+    x[5] = addpd(x[5], x[4]);
+    x[0] = mulsd(x[0], x[0][0]);
+    x[1] = addsd(x[1], x[2][0]);
+    x[2] = unpckhpd(x[2], x[2]);
+    x[6] = m128(e, EXP_CEA0);
+    x[7] = andpd(x[7], x[6]);
+    x[6] = m128(e, EXP_CEB0);
+    x[7] = paddq(x[7], x[6]);
+    x[7] = psllq(x[7], 0x2e);
+    x[0] = mulpd(x[0], x[5]);
+    x[1] = addsd(x[1], x[0][0]);
+    x[2] = orpd(x[2], x[7]);
+    x[0] = unpckhpd(x[0], x[0]);
+    x[0] = addsd(x[0], x[1][0]);
+    edx = edx.wrapping_add(0x37e);
+    if edx <= 0x77c {
+        x[0] = mulsd(x[0], x[2][0]);
+        x[0] = addsd(x[0], x[2][0]);
+        return x87_load64(x[0][0]);
+    }
+    // 00edbe73: FSTCW; OR DX, 0x300; FLDCW: 64-bit precision, the caller's rounding.
+    let saved = x87_control_word(e);
+    set_x87_control_word(e, saved | 0x300);
+    edx = eax;
+    eax = ((eax as i32) >> 1) as u32;
+    edx = edx.wrapping_sub(eax);
+    x[6] = m128(e, EXP_CE90);
+    x[6] = andnpd(x[6], x[2]);
+    eax = eax.wrapping_add(0x3ff);
+    x[3] = movd(eax);
+    x[3] = psllq(x[3], 0x34);
+    x[6] = orpd(x[6], x[3]);
+    edx = edx.wrapping_add(0x3ff);
+    x[4] = movd(edx);
+    x[4] = psllq(x[4], 0x34);
+    // FLD x0; FLD x6; FMUL ST(1), ST0; FADDP; FLD x4; FMULP; FSTP double.
+    let a = X87Ext::load64(f64::from_bits(x[0][0]));
+    let b = X87Ext::load64(f64::from_bits(x[6][0]));
+    let product = x87_fmul(a, b);
+    let sum = x87_fadd(product, b);
+    let c = X87Ext::load64(f64::from_bits(x[4][0]));
+    let scaled = x87_fmul(sum, c).store64();
+    x[0] = movlpd(x[0], scaled.to_bits());
+    set_x87_control_word(e, saved);
+    let top = pextrw(x[0], 3) & 0x7ff0;
+    let code = if top >= 0x7ff0 {
+        0xe
+    } else if top == 0 {
+        0xf
+    } else {
+        return x87_load64(x[0][0]);
+    };
+    sse2_error_one(e, argument, x[0][0], code)
+}
+
+/// `exp`'s SSE2 core outside the table range (`00edbfde`).
+fn exp_sse2_special(e: &mut Engine, x: &mut [Xmm; 8], argument: u32) -> f64 {
+    let m = |e: &Engine, a: u32| e.mem.u64(a);
+    let high = e.mem.u32(argument + 4);
+    let low = e.mem.u32(argument);
+    let magnitude = high & 0x7fff_ffff;
+    if magnitude < 0x4090_0000 {
+        // A tiny argument: 1 + x.
+        x[0] = movlpd(x[0], m(e, argument));
+        x[0] = addsd(x[0], m(e, EXP_D330));
+        return x87_load64(x[0][0]);
+    }
+    // 00edbf73
+    let code = if magnitude < 0x7ff0_0000 {
+        if high < 0x8000_0000 {
+            x[0] = movlpd(x[0], m(e, EXP_D360));
+            x[0] = mulsd(x[0], x[0][0]);
+            0xe
+        } else {
+            x[0] = movlpd(x[0], m(e, EXP_D368));
+            x[0] = mulsd(x[0], x[0][0]);
+            0xf
+        }
+    } else if magnitude > 0x7ff0_0000 || low != 0 {
+        // 00edbfd4: a NaN, XMM0 as it is.
+        0x3ea
+    } else if high == 0x7ff0_0000 {
+        return x87_load64(m(e, EXP_D350));
+    } else {
+        return x87_load64(m(e, EXP_D358));
+    };
+    sse2_error_one(e, argument, x[0][0], code)
+}
+// ---- The table-dispatched x87 bodies: exp and atan2 ----------------------------------------------
+//
+// `exp`'s x87 path and `atan2` run through the CRT's descriptor dispatch: `__ctrandisp1`
+// (`00ed6281`) / `__cintrindisp1` (`00ed60ae`) and `__ctrandisp2` (`00ed60eb`) /
+// `__cintrindisp2` (`00ed6070`) set up a 0x2d0-byte frame, `__trandisp1` (`00ed2550`) /
+// `__trandisp2` (`00ed25b7`) load the dispatch control word, classify the operands with `FXAM`
+// (through the 16-byte table at `011c1d1c`) and jump through the descriptor's table (the
+// descriptor's address in `EDX`: `011c276a` for `exp`, `011c26a0` for `atan2`, in `.data`) to a
+// handler, and the common tail (`00ed6133`/`00ed613a`) reports errors through `__87except`. The
+// two `__trandisp` routines, the tail and the handlers run in the frame of the dispatcher that
+// called them and have no registered form of their own; the handlers are reached by the
+// address the descriptor holds, translated here for the two descriptors' targets.
+
+/// The descriptors (`.data`): a length-prefixed name at +0, the argument count at +0xd, the
+/// operation code at +0xe and the handler table at +0x10.
+const EXP_DESCRIPTOR: u32 = 0x011c_276a;
+const ATAN2_DESCRIPTOR: u32 = 0x011c_26a0;
+/// `FXAM`'s classes as `__trandisp`'s `XLAT` table maps them to table offsets (`011c1d1c`).
+const FXAM_CLASSES: u32 = 0x011c_1d1c;
+/// The double `00ed2662` adds to a signalling NaN (`011c1d14`), `exp`'s range bound (extended,
+/// `011c274e`), and the tail's scaling (`010f33f8`, `010f33e8`, `010f3408` for an underflow,
+/// `010f33f0`, `010f33e0`, `010f3400` for an overflow).
+const DISPATCH_NAN_ADDEND: u32 = 0x011c_1d14;
+const EXP_BOUND: u32 = 0x011c_274e;
+const TAIL_UNDERFLOW_SCALE: u32 = 0x010f_33f8;
+const TAIL_UNDERFLOW_BOUND: u32 = 0x010f_33e8;
+const TAIL_UNDERFLOW_FACTOR: u32 = 0x010f_3408;
+const TAIL_OVERFLOW_SCALE: u32 = 0x010f_33f0;
+const TAIL_OVERFLOW_BOUND: u32 = 0x010f_33e0;
+const TAIL_OVERFLOW_FACTOR: u32 = 0x010f_3400;
+/// The Pentium `FDIV` test's answer (`0126fd94`, `_fpmath`'s) and the division `exp`'s handler
+/// calls when it is 1 (`00ed6ae1`, register operands; not translated).
+const FDIV_FLAWED: u32 = 0x0126_fd94;
+const ADJUSTED_FDIVR: u32 = 0x00ed_6ae1;
+/// `exp`'s entries' SSE2 bodies.
+const EXP_SSE2: u32 = 0x00ed_bd68;
+const EXP_SSE2_REGISTER: u32 = 0x00ed_bd50;
+
+/// The dispatch frame's state (`EBP` of the dispatcher): the saved control word
+/// (`EBP-0xa4`), the descriptor (`EBP-0x94`), the error kind byte (`EBP-0x90`: 0 none, 0xfe
+/// check the result's range, 0xff check for an overflow, any other the error type), the
+/// flags (`EBP-0x2c8`: bit 0 the arguments are already in the `_exception`, bit 1 two
+/// arguments), `CL`/`CH` (the operands' signs, 4 when negative) and `DL`, the register stack,
+/// and the `_exception` block (`EBP-0x8e`: type, name, argument 1, argument 2, result) with the
+/// saved word's slot after it, in memory for `__87except`.
+struct Dispatch {
+    saved: u16,
+    descriptor: u32,
+    kind: u8,
+    flags: u8,
+    cl: u8,
+    ch: u8,
+    dl: u8,
+    fpu: Fpu,
+    exception: u32,
+}
+
+impl Dispatch {
+    /// The frame for a dispatcher: the `_exception` block and the saved word's slot (0x24
+    /// bytes at `block`), `FSTCW` into the saved word.
+    fn new(e: &mut Engine, descriptor: u32, block: u32) -> Self {
+        Dispatch {
+            saved: x87_control_word(e),
+            descriptor,
+            kind: 0,
+            flags: 0,
+            cl: 0,
+            ch: 0,
+            dl: 0,
+            fpu: Fpu::default(),
+            exception: block,
+        }
+    }
+}
+
+/// `FXAM` of a register through `__trandisp`'s bit shuffle (`SHL; SAR; ROL` of `AH`, `AND AL,
+/// 0xf`, `XLAT` on `011c1d1c`): the handler table offset of its class, and `AH` after the
+/// shuffle (bit 2 is the sign, C1).
+fn dispatch_class(e: &Engine, x: X87Ext) -> (u32, u8) {
+    let ah = (crate::x87::x87_fxam(x) >> 8) as u8;
+    // SHL CL, 1; SAR CL, 1; ROL CL, 1.
+    let shuffled = ((((ah << 1) as i8) >> 1) as u8).rotate_left(1);
+    let class = e.mem.u8(FXAM_CLASSES + u32::from(shuffled & 0xf));
+    (class as i8 as i32 as u32, shuffled)
+}
+
+/// `__trandisp1` (`00ed2550`) and `__trandisp2` (`00ed25b7`): the dispatch control word (for
+/// the operation 5, the saved word with 53-bit precision and every exception masked; otherwise
+/// `0x133f`: 64-bit precision, round to nearest), the operands' classes and the handler the
+/// descriptor's table holds at `0x10 + offset`, which runs.
+fn trandisp(e: &mut Engine, d: &mut Dispatch, two: bool) {
+    let operation = e.mem.u8(d.descriptor + 0xe);
+    let word = if operation == 5 {
+        let high = (((d.saved >> 8) as u8 | 2) & 0xfe) as u16;
+        (high << 8) | 0x3f
+    } else {
+        0x133f
+    };
+    set_x87_control_word(e, word);
+    d.kind = 0;
+    let (class_cl, cl) = dispatch_class(e, d.fpu.st(0));
+    let offset = if two {
+        let (class_ch, ch) = dispatch_class(e, d.fpu.st(1));
+        // MOV AH, AL (the second's class); SHL AH, 2; OR AL, AH.
+        let al = (class_cl as u8) | ((class_ch as u8) << 2);
+        d.ch = ch & 0x04;
+        al as i8 as i32 as u32
+    } else {
+        // AND ECX, 0x404 leaves in CH the caller's ECX bit 10, which no one-operand handler of
+        // these descriptors reads (`exp`'s finite handler clears CH).
+        d.ch = 0;
+        class_cl
+    };
+    d.cl = cl & 0x04;
+    let target = e
+        .mem
+        .u32(d.descriptor.wrapping_add(offset).wrapping_add(0x10));
+    run_handler(e, d, target);
+}
+
+/// The handlers `exp`'s and `atan2`'s descriptors point at, by their addresses.
+fn run_handler(e: &mut Engine, d: &mut Dispatch, target: u32) {
+    match target {
+        // exp
+        0x00ed_9301 => exp_finite(e, d),
+        0x00ed_265d => {
+            // FSTP ST0; FLD1.
+            d.fpu.pop();
+            d.fpu.push(X87Ext::load64(1.0));
+        }
+        0x00ed_2662 => {
+            // FSTP tbyte; FLD tbyte; TEST byte ptr [EBP-0x97], 0x40: the quiet bit.
+            if d.fpu.st(0).significand() & (1 << 62) != 0 {
+                d.kind = 7;
+            } else {
+                d.kind = 1;
+                let sum = x87_fadd(d.fpu.st(0), double_operand(e, DISPATCH_NAN_ADDEND));
+                d.fpu.set(0, sum);
+            }
+        }
+        0x00ed_9441 => {
+            // OR CL, CL; JNZ 00ed93f4 (to 00ed2656: FSTP ST0; FLDZ).
+            d.fpu.pop();
+            if d.cl != 0 {
+                d.fpu.push(X87Ext::load64(0.0));
+            } else {
+                d.fpu.push(load_extended(e, POW_POLE));
+            }
+        }
+        // atan2
+        0x00ed_7cbc => {
+            // MOV byte ptr [EBP-0x90], 0xfe; FABS both; FPATAN; pi - it for a negative x; FCHS
+            // for a negative y.
+            d.kind = 0xfe;
+            let x = x87_fabs(d.fpu.pop());
+            let y = x87_fabs(d.fpu.pop());
+            let mut r = x87_fpatan(y, x);
+            if d.cl != 0 {
+                r = x87_fsub(x87_fld_constant(X87Constant::Pi), r);
+            }
+            if d.ch != 0 {
+                r = x87_fchs(r);
+            }
+            d.fpu.push(r);
+        }
+        0x00ed_7d38 => {
+            // FSTP ST0; MOV CL, CH; 00ed7d0c (FSTP ST0; FLD tbyte [011c1d0a]); 00ed2713.
+            d.fpu.pop();
+            d.cl = d.ch;
+            d.fpu.pop();
+            let mut r = load_extended(e, HALF_PI_EXTENDED);
+            if d.cl != 0 {
+                r = x87_fchs(r);
+            }
+            d.fpu.push(r);
+        }
+        0x00ed_7d15 => {
+            // FSTP ST0 twice; FLDPI for a negative x, else FLDZ; FCHS for a negative y.
+            d.fpu.pop();
+            d.fpu.pop();
+            let mut r = if d.cl != 0 {
+                x87_fld_constant(X87Constant::Pi)
+            } else {
+                X87Ext::load64(0.0)
+            };
+            if d.ch != 0 {
+                r = x87_fchs(r);
+            }
+            d.fpu.push(r);
+        }
+        0x00ed_268d | 0x00ed_268f => {
+            // 00ed268d: FXCH first; then the NaN on top is tested and FADDP adds the two.
+            if target == 0x00ed_268d {
+                d.fpu.fxch(1);
+            }
+            d.kind = if d.fpu.st(0).significand() & (1 << 62) != 0 {
+                7
+            } else {
+                1
+            };
+            let top = d.fpu.pop();
+            let sum = x87_fadd(d.fpu.st(0), top);
+            d.fpu.set(0, sum);
+        }
+        0x00ed_26b7 => {
+            // Both NaN: 7 only when both are quiet (the second tested after FXCH).
+            d.kind = 1;
+            if d.fpu.st(0).significand() & (1 << 62) != 0 {
+                d.fpu.fxch(1);
+                if d.fpu.st(0).significand() & (1 << 62) != 0 {
+                    d.kind = 7;
+                }
+            }
+            let top = d.fpu.pop();
+            let sum = x87_fadd(d.fpu.st(0), top);
+            d.fpu.set(0, sum);
+        }
+        0x00ed_26f6 => {
+            // FSTP ST0 twice; FLD tbyte [011c1d00]; the error type 1 unless one is set.
+            d.fpu.pop();
+            d.fpu.pop();
+            d.fpu.push(load_extended(e, INDEFINITE));
+            if (d.kind as i8) <= 0 {
+                d.kind = 1;
+            }
+        }
+        _ => panic!("{target:08x}: a dispatch handler not translated"),
+    }
+}
+
+/// `exp`'s handler for a finite nonzero argument (`00ed9301`): `x * log2(e)` (`FLDL2E`,
+/// `FMULP`), split by `00ed944e` into `n` and `2^|f| - 1`; plus 1, inverted for a negative
+/// fraction (`FDIVRP`, or `00ed6ae1` with the Pentium flaw flag set), scaled by `n` unless it
+/// is zero (`FTST`'s C3 in `DL`), the sign flag `CH` cleared, `n` dropped (`00ed2648`). A product
+/// at or beyond the bound `011c274e` gives +infinity (error kind 0xfe left for the tail) or, for
+/// a negative one, 0 with the kind 4 (underflow).
+fn exp_finite(e: &mut Engine, d: &mut Dispatch) {
+    d.kind = 0xfe;
+    d.ch = 0;
+    let product = x87_fmul(d.fpu.pop(), x87_fld_constant(X87Constant::Log2E));
+    d.fpu.push(product);
+    // 00ed944e: FLD ST0; FABS; FLD tbyte bound; FCOMPP; TEST AH, 0x41.
+    let ah = fcom_ah(load_extended(e, EXP_BOUND), x87_fabs(product));
+    if ah & 0x41 != 0 {
+        // 00ed9400: POP EAX (the handler returns from here); FTST; TEST AH, 1.
+        let below = fcom_ah(product, X87Ext::load64(0.0)) & 0x01 != 0;
+        d.fpu.pop();
+        if below {
+            d.kind = 4;
+            d.fpu.push(X87Ext::load64(0.0));
+        } else {
+            d.fpu.push(load_extended(e, POW_POLE));
+        }
+        return;
+    }
+    let n = x87_frndint(product);
+    d.dl = fcom_ah(n, X87Ext::load64(0.0));
+    // FXCH; FSUB ST0, ST1; FTST; FABS; F2XM1.
+    let fraction = x87_fsub(product, n);
+    let negative = fcom_ah(fraction, X87Ext::load64(0.0)) & 0x01 != 0;
+    let power = x87_f2xm1(x87_fabs(fraction));
+    // 00ed9313: FLD1; FADDP.
+    let mut r = x87_fadd(power, X87Ext::load64(1.0));
+    if negative {
+        r = if e.global::<u32>(FDIV_FLAWED) == 1 {
+            // CALL 00ed6ae1 with ST0 = 1 and ST1 = the sum (registered ST0 first).
+            let quotient = e.call(ADJUSTED_FDIVR, &args![1.0f64, r.store64()]);
+            X87Ext::load64(quotient.st0)
+        } else {
+            // FLD1; FDIVRP: 1 / ST1.
+            x87_fdiv(X87Ext::load64(1.0), r)
+        };
+    }
+    if d.dl & 0x40 == 0 {
+        r = x87_fscale(r, n);
+    }
+    if d.ch != 0 {
+        r = x87_fchs(r);
+    }
+    // 00ed2648: FXCH; FSTP ST0 (n off).
+    d.fpu.set(0, r);
+}
+
+/// The dispatch tail (`00ed6133`, which clears flag bit 0, falls into `00ed613a`): with the
+/// math-error switch set, the saved word back and `ST0` as it is. Otherwise the result is
+/// stored as a double (`FST`) and the error kind decides: 0 checks the precision flag (the
+/// exception unmasked in the saved word and the status flag set: type 8); 0xfe checks the
+/// stored double's exponent for an underflow (zero: type 4, scaled by `010f33f8` and, below
+/// `010f33e8`, multiplied by `010f3408`) or an overflow (all ones: type 3, scaled by `010f33f0`
+/// and, above `010f33e0`, multiplied by `010f3400`), else as 0; 0xff checks for an overflow
+/// only; any other value is the error type. A report fills the `_exception` (the descriptor's
+/// name at +1, the arguments copied from the stack unless flag bit 0 says they are there, the
+/// second one only for a descriptor with more than one argument, the result) and calls
+/// `__87except(operation, &exception, &saved word)`, whose result comes back. The saved word is
+/// loaded at the end (`FLDCW`).
+fn dispatch_tail(e: &mut Engine, d: &mut Dispatch, arguments: &[f64]) -> X87Ext {
+    if e.global::<u32>(ERROR_SWITCH) != 0 {
+        set_x87_control_word(e, d.saved);
+        return d.fpu.pop();
+    }
+    let stored = d.fpu.st(0).store64().to_bits();
+    let exponent = ((stored >> 48) as u16) & 0x7ff0;
+    let precision = |d: &Dispatch| d.saved & 0x20 == 0 && status_precision_flag();
+    let kind: u32 = match d.kind {
+        0 => {
+            if precision(d) {
+                8
+            } else {
+                set_x87_control_word(e, d.saved);
+                return d.fpu.pop();
+            }
+        }
+        0xfe if exponent == 0 => tail_scale(e, d, true),
+        0xfe | 0xff if exponent == 0x7ff0 => tail_scale(e, d, false),
+        0xfe | 0xff => {
+            if precision(d) {
+                8
+            } else {
+                set_x87_control_word(e, d.saved);
+                return d.fpu.pop();
+            }
+        }
+        other => other as i8 as i32 as u32,
+    };
+    // 00ed621f
+    let at = d.exception;
+    e.mem.set_u32(at, kind);
+    let name = d.descriptor + 1;
+    e.mem.set_u32(at + 4, name);
+    if d.flags & 1 == 0 {
+        e.mem.set_u64(at + 8, arguments[0].to_bits());
+        if e.mem.u8(name + 0xc) != 1 {
+            e.mem.set_u64(at + 0x10, arguments[1].to_bits());
+        }
+    }
+    let result = d.fpu.pop().store64();
+    e.mem.set_u64(at + 0x18, result.to_bits());
+    let slot = at + 0x20;
+    e.mem.set_u16(slot, d.saved);
+    let operation = e.mem.u8(d.descriptor + 0xe) as i8 as i32 as u32;
+    e.call(EXCEPT87, &args![operation, at, slot]);
+    let back = load_double(e, at + 0x18);
+    set_x87_control_word(e, d.saved);
+    back
+}
+
+/// The tail's scaling of an underflowed (`underflow`) or overflowed result, returning the
+/// error type (4 or 3).
+fn tail_scale(e: &Engine, d: &mut Dispatch, underflow: bool) -> u32 {
+    let (scale, bound, factor, kind) = if underflow {
+        (
+            TAIL_UNDERFLOW_SCALE,
+            TAIL_UNDERFLOW_BOUND,
+            TAIL_UNDERFLOW_FACTOR,
+            4,
+        )
+    } else {
+        (
+            TAIL_OVERFLOW_SCALE,
+            TAIL_OVERFLOW_BOUND,
+            TAIL_OVERFLOW_FACTOR,
+            3,
+        )
+    };
+    // FLD scale; FXCH; FSCALE; FSTP ST1; FLD ST0; FABS; FCOMP bound; SAHF.
+    let scaled = x87_fscale(d.fpu.st(0), load_double(e, scale));
+    d.fpu.set(0, scaled);
+    let ah = fcom_ah(x87_fabs(scaled), double_operand(e, bound));
+    // Underflow: JNC (C0 clear) skips the factor; overflow: JBE (C0 or C3) skips it.
+    let multiply = if underflow {
+        ah & 0x01 != 0
+    } else {
+        ah & 0x41 == 0
+    };
+    if multiply {
+        let product = x87_fmul(scaled, double_operand(e, factor));
+        d.fpu.set(0, product);
+    }
+    kind
+}
+
+// Translated from 00ed62b4 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The dispatchers' loader (no label; Ghidra gives it no name), cdecl, the double: `FLD
+/// double`, or for an exponent of all ones the extended value built by hand: the top word ORed
+/// with 0x7fff (the sign kept), the high dword `SHLD high, low, 11`, and the low word as it is
+/// (not shifted: the low 11 bits of the payload are not where `FLD` would put them), so a
+/// signalling NaN stays signalling. Registered with the loaded register rounded to a double.
+pub fn fn_00ed62b4(_e: &mut Engine, x: f64) -> f64 {
+    dispatch_load(x.to_bits()).store64()
+}
+
+fn dispatch_load(bits: u64) -> X87Ext {
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    let top = (high >> 16) as u16;
+    if top & 0x7ff0 != 0x7ff0 {
+        return X87Ext::load64(f64::from_bits(bits));
+    }
+    let upper = (high << 11) | (low >> 21);
+    X87Ext::from_parts(top | 0x7fff, (u64::from(upper) << 32) | u64::from(low))
+}
+
+/// A dispatcher's frame: the `_exception` block (0x20 bytes) and the saved word's slot.
+fn with_dispatch<R>(
+    e: &mut Engine,
+    descriptor: u32,
+    f: impl FnOnce(&mut Engine, &mut Dispatch) -> R,
+) -> R {
+    e.with_stack(0x24, |e, block| {
+        let mut d = Dispatch::new(e, descriptor, block.addr());
+        f(e, &mut d)
+    })
+}
+
+// Translated from 00ed6281 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__ctrandisp1` (Ghidra's function-ID label), reached by a jump with `EDX` = the descriptor
+/// and the argument on the stack above the caller's return address: the argument loaded
+/// (`00ed62b4`), the control word saved, flag bit 1 cleared, `__trandisp1` and the tail.
+pub fn ctrandisp1(e: &mut Engine, descriptor: u32, _return_address: u32, x: f64) -> f64 {
+    with_dispatch(e, descriptor, |e, d| {
+        d.fpu.push(dispatch_load(x.to_bits()));
+        d.flags &= !2;
+        trandisp(e, d, false);
+        d.flags &= !1;
+        dispatch_tail(e, d, &[x, 0.0]).store64()
+    })
+}
+
+// Translated from 00ed60ae (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__cintrindisp1` (Ghidra's function-ID label), `EDX` = the descriptor, the argument in
+/// `ST0`: the control word saved; unless the global at `011c2b60` is set the argument is stored
+/// into the `_exception` first (`FST`); `__trandisp1`; flag bit 0 set and bit 1 cleared; the
+/// tail (`00ed613a`).
+pub fn cintrindisp1(e: &mut Engine, descriptor: u32, st0: f64) -> f64 {
+    with_dispatch(e, descriptor, |e, d| {
+        let x = X87Ext::load64(st0);
+        if e.global::<u32>(MATHERR_SKIP) == 0 {
+            e.mem.set_u64(d.exception + 8, x.store64().to_bits());
+        }
+        d.fpu.push(x);
+        trandisp(e, d, false);
+        d.flags = (d.flags | 1) & !2;
+        dispatch_tail(e, d, &[st0, 0.0]).store64()
+    })
+}
+
+// Translated from 00ed60eb (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__ctrandisp2` (Ghidra's function-ID label), `EDX` = the descriptor, the two arguments on
+/// the stack above the caller's return address: both loaded (`00ed62b4`, the first ending in
+/// `ST1`), the control word saved, flag bit 1 set, the byte at `EBP-0x8f` set to 1 (nothing of
+/// these two descriptors' paths reads it), `__trandisp2` and the tail.
+pub fn ctrandisp2(e: &mut Engine, descriptor: u32, _return_address: u32, y: f64, x: f64) -> f64 {
+    with_dispatch(e, descriptor, |e, d| {
+        d.fpu.push(dispatch_load(y.to_bits()));
+        d.fpu.push(dispatch_load(x.to_bits()));
+        d.flags |= 2;
+        trandisp(e, d, true);
+        d.flags &= !1;
+        dispatch_tail(e, d, &[y, x]).store64()
+    })
+}
+
+// Translated from 00ed6070 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__cintrindisp2` (Ghidra's function-ID label), `EDX` = the descriptor, the arguments in
+/// `ST1` (the first) and `ST0`: unless the global at `011c2b60` is set both are stored into the
+/// `_exception` (`FXCH; FST; FXCH; FST`); `__trandisp2`; flag bits 0 and 1 set; the tail.
+pub fn cintrindisp2(e: &mut Engine, descriptor: u32, st1: f64, st0: f64) -> f64 {
+    with_dispatch(e, descriptor, |e, d| {
+        let (y, x) = (X87Ext::load64(st1), X87Ext::load64(st0));
+        if e.global::<u32>(MATHERR_SKIP) == 0 {
+            e.mem.set_u64(d.exception + 8, y.store64().to_bits());
+            e.mem.set_u64(d.exception + 0x10, x.store64().to_bits());
+        }
+        d.fpu.push(y);
+        d.fpu.push(x);
+        trandisp(e, d, true);
+        d.flags |= 3;
+        dispatch_tail(e, d, &[st1, st0]).store64()
+    })
+}
+
+// Translated from 00ecae30 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `exp` (LIBCMT; Ghidra's function ID), cdecl, the double on the stack, the result in `ST0`:
+/// with `__use_sse2_mathfcns` set and every `MXCSR` and x87 exception masked it jumps to the
+/// SSE2 body `00edbd68`; otherwise `MOV EDX, 011c276a` (its descriptor) and `__ctrandisp1`.
+pub fn exp(e: &mut Engine, x: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(EXP_SSE2, &args![x]).f64();
+    }
+    ctrandisp1(e, EXP_DESCRIPTOR, 0, x)
+}
+
+// Translated from 00ecae6c (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIexp` (the register form of `exp`; no label in the map, named from its body), `ST0` in,
+/// `ST0` out: the same test picks the SSE2 body `00edbd50`; otherwise the descriptor and
+/// `__cintrindisp1`.
+pub fn ci_exp(e: &mut Engine, st0: f64) -> f64 {
+    if super::sse2_math_available(e) {
+        return e.call(EXP_SSE2_REGISTER, &args![st0]).f64();
+    }
+    cintrindisp1(e, EXP_DESCRIPTOR, st0)
+}
+
+// Translated from 00ec9760 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan2` (LIBCMT; the name `"atan2"` its descriptor holds), cdecl, `y` then `x` on the stack,
+/// the result in `ST0`: `MOV EDX, 011c26a0; JMP __ctrandisp2` (no SSE2 body). Its handlers:
+/// both normal, `FPATAN` of `|y|` over `|x|`, `pi -` it for a negative `x`, negated for a
+/// negative `y`, with the range checked; `x` zero or `y` infinite (and `x` not infinite or NaN),
+/// +-pi/2 by `y`'s sign; `x` infinite or `y` zero, 0 or pi (for a negative `x`) by `y`'s sign;
+/// a NaN, the two added (error type 7 for a quiet one, 1 for a signalling one); both
+/// infinite, the indefinite NaN with type 1.
+pub fn atan2(e: &mut Engine, y: f64, x: f64) -> f64 {
+    ctrandisp2(e, ATAN2_DESCRIPTOR, 0, y, x)
+}
+
+// Translated from 00ec976a (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_CIatan2` (the register form of `atan2`; no label in the map), `y` in `ST1`, `x` in `ST0`
+/// (registered `y` first): the descriptor and `__cintrindisp2`.
+pub fn ci_atan2(e: &mut Engine, y: f64, x: f64) -> f64 {
+    cintrindisp2(e, ATAN2_DESCRIPTOR, y, x)
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ed_454f, fn_00ed454f() -> u32),
@@ -4363,6 +5087,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_5d80, fn_00ed5d80(f64) -> f64),
         entry!(0x00ed_5d98, fn_00ed5d98(f64) -> f64),
         entry!(0x00ed_5d9e, fn_00ed5d9e(f64) -> f64),
+        entry!(0x00ec_ae30, exp(f64) -> f64),
+        entry!(0x00ec_ae6c, ci_exp(f64) -> f64),
+        entry!(0x00ec_9760, atan2(f64, f64) -> f64),
+        entry!(0x00ec_976a, ci_atan2(f64, f64) -> f64),
+        entry!(0x00ed_6281, ctrandisp1(u32, u32, f64) -> f64),
+        entry!(0x00ed_60ae, cintrindisp1(u32, f64) -> f64),
+        entry!(0x00ed_60eb, ctrandisp2(u32, u32, f64, f64) -> f64),
+        entry!(0x00ed_6070, cintrindisp2(u32, f64, f64) -> f64),
+        entry!(0x00ed_62b4, fn_00ed62b4(f64) -> f64),
+        entry!(0x00ed_bd50, fn_00edbd50(f64) -> f64),
+        entry!(0x00ed_bd68, fn_00edbd68(f64) -> f64),
+        entry!(0x00ed_bd6e, fn_00edbd6e(f64) -> f64),
     ]
 }
 
@@ -8163,6 +8899,754 @@ mod tests_bodies {
                 let code = libm.borrow().last().map_or(0, |w| w[3]);
                 assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
             }
+        }
+    }
+
+    // ---- exp and atan2 ------------------------------------------------------------------------
+
+    /// The dispatch's data at the exe's values: `exp`'s and `atan2`'s descriptors (name, argument
+    /// count, operation, handler table), the `FXAM` class table, `exp`'s bound, the NaN addend,
+    /// the tail's scaling, the extended constants, and the Pentium flag clear.
+    fn dispatch_engine() -> (Engine, Seen, Seen) {
+        let (mut e, except, libm) = inverse_engine(false);
+        e.map(EXP_DESCRIPTOR, 0x20);
+        e.mem.write(EXP_DESCRIPTOR, b"\x03exp");
+        e.mem.write(EXP_DESCRIPTOR + 0xd, &[1, 0x14]);
+        for (i, target) in [0x00ed_9301u32, 0x00ed_265d, 0x00ed_2662, 0x00ed_9441]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(EXP_DESCRIPTOR + 0x10 + 4 * i as u32, target);
+        }
+        e.map(ATAN2_DESCRIPTOR, 0x50);
+        e.mem.write(ATAN2_DESCRIPTOR, b"\x05atan2");
+        e.mem.write(ATAN2_DESCRIPTOR + 0xd, &[2, 0x10]);
+        for (i, target) in [
+            0x00ed_7cbcu32,
+            0x00ed_7d38,
+            0x00ed_268f,
+            0x00ed_7d15,
+            0x00ed_7d15,
+            0x00ed_7d15,
+            0x00ed_268f,
+            0x00ed_7d15,
+            0x00ed_268d,
+            0x00ed_268d,
+            0x00ed_26b7,
+            0x00ed_268d,
+            0x00ed_7d38,
+            0x00ed_7d38,
+            0x00ed_268f,
+            0x00ed_26f6,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem
+                .set_u32(ATAN2_DESCRIPTOR + 0x10 + 4 * i as u32, target);
+        }
+        e.map(FXAM_CLASSES, 16);
+        e.mem.write(
+            FXAM_CLASSES,
+            &[8, 4, 8, 8, 8, 4, 8, 8, 0, 4, 0xc, 8, 0, 4, 0xc, 8],
+        );
+        put_extended(&mut e, EXP_BOUND, 0x400d, 0xffff_0000_0000_0000);
+        put(&mut e, DISPATCH_NAN_ADDEND, 1.0f64.to_bits());
+        put(&mut e, TAIL_UNDERFLOW_SCALE, 1536.0f64.to_bits());
+        put(&mut e, TAIL_UNDERFLOW_BOUND, f64::MIN_POSITIVE.to_bits());
+        put(&mut e, TAIL_UNDERFLOW_FACTOR, 0);
+        put(&mut e, TAIL_OVERFLOW_SCALE, (-1536.0f64).to_bits());
+        put(&mut e, TAIL_OVERFLOW_BOUND, f64::MAX.to_bits());
+        put(&mut e, TAIL_OVERFLOW_FACTOR, f64::INFINITY.to_bits());
+        e.map(FDIV_FLAWED, 4);
+        e.map(MATHERR_SKIP, 4);
+        (e, except, libm)
+    }
+
+    /// `exp`'s finite handler and `atan2`'s handler for two normal operands, as the exe runs
+    /// them at the dispatch word (0x133f), rounded to a double under the caller's word.
+    fn dispatch_sequence(atan2: bool, y: f64, x: f64, word: u16) -> u64 {
+        crate::x87::set_control_word(0x133f);
+        let r = if atan2 {
+            let mut r = x87_fpatan(X87Ext::load64(y.abs()), X87Ext::load64(x.abs()));
+            if x < 0.0 {
+                r = x87_fsub(x87_fld_constant(X87Constant::Pi), r);
+            }
+            if y < 0.0 {
+                r = x87_fchs(r);
+            }
+            r
+        } else {
+            let t = x87_fmul(X87Ext::load64(x), x87_fld_constant(X87Constant::Log2E));
+            let n = x87_frndint(t);
+            let f = x87_fsub(t, n);
+            let mut r = x87_fadd(x87_f2xm1(x87_fabs(f)), X87Ext::load64(1.0));
+            if f.sign_exponent() & 0x8000 != 0 && f.significand() != 0 {
+                r = x87_fdiv(X87Ext::load64(1.0), r);
+            }
+            if n.significand() != 0 {
+                r = x87_fscale(r, n);
+            }
+            r
+        };
+        crate::x87::set_control_word(word);
+        let bits = r.store64().to_bits();
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        bits
+    }
+
+    #[test]
+    fn exp_and_atan2_x87_run_their_handlers_bit_for_bit() {
+        let (mut e, except, _) = dispatch_engine();
+        let mut spread = Spread(0xe4b2);
+        for word in [0x027fu16, 0x007f, 0x0e7f] {
+            for _ in 0..100 {
+                let x = (spread.next() - 0.5) * 1000.0;
+                let y = (spread.next() - 0.5) * 50.0;
+                for (atan2, entry, register, args) in [
+                    (false, 0x00ec_ae30u32, 0x00ec_ae6cu32, args![x]),
+                    (true, 0x00ec_9760, 0x00ec_976a, args![y, x]),
+                ] {
+                    let want = dispatch_sequence(atan2, y, x, word);
+                    for addr in [entry, register] {
+                        set_x87_control_word(&mut e, word);
+                        let got = e.call(addr, &args).f64().to_bits();
+                        assert_eq!(x87_control_word(&mut e), word);
+                        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+                        assert_eq!(got, want, "{addr:08x}({y:e}, {x:e}) under {word:04x}");
+                    }
+                }
+            }
+        }
+        assert!(except.borrow().is_empty());
+    }
+
+    /// Recorded from the exe: `exp` (`00ecae30`) and `atan2` (`00ec9760`) on their x87 paths
+    /// under 0x027f.
+    const EXP_X87_RECORDED: &[Vector1] = &[
+        (0x3f85ae37_274cc5e6, 0x3ff02b97_64f9d88d, 0),
+        (0xc086554b_da14a6fe, 0x5f7f236e_a4e4af36, 0x4_0014),
+        (0xc0327f6f_0ea57132, 0x3e43e195_ea682d02, 0),
+        (0x402bae26_244ed780, 0x412f4743_bd9ffd31, 0),
+        (0x3c0c23f0_afb4a9be, 0x3ff00000_00000000, 0),
+        (0xc0589fc9_82b30540, 0x370dd7e4_60c69672, 0),
+        (0xc0860548_7a870fca, 0x0064f72f_5cd1738c, 0),
+        (0xc00ef049_208f5266, 0x3f956a88_20a0be19, 0),
+        (0xc031f179_a870fe11, 0x3e514ec6_ede43679, 0),
+        (0x40870f58_b9e03636, 0x22781a37_9f4cb9c3, 0x3_0014),
+        (0xc01c5c26_8b9769e4, 0x3f4b4f1b_b3653f14, 0),
+        (0x4082cc54_6348e902, 0x762ca6a7_9bf2a9bb, 0),
+        (0xc06025e8_6e95c278, 0x3448b135_b363d041, 0),
+        (0xbad4687d_ca9cd9ab, 0x3ff00000_00000000, 0),
+        (0xbff70022_31bad119, 0x3fce66d4_11cb3551, 0),
+        (0x4022f5cb_1f4642f7, 0x40c99405_5f66da89, 0),
+        (0x408708be_7ac5b7ae, 0x22651e4d_a8467253, 0x3_0014),
+        (0xc0869284_60546d5f, 0x5ece477a_017265a1, 0x4_0014),
+        (0x407eb343_bb510c44, 0x6c393d61_9a3891ba, 0),
+        (0x4085f89e_c37057fe, 0x7f541015_9dfe8b8f, 0),
+        (0x1a3780d8_545ba158, 0x3ff00000_00000000, 0),
+        (0x43e5229e_fd6f30b2, 0x7ff00000_00000000, 0x3_0014),
+        (0xc119b631_41af58f5, 0x00000000_00000000, 0x4_0014),
+        (0xbfec3430_4e883d00, 0x3fda827e_a225be95, 0),
+        (0x3fdefa50_82198f00, 0x3ff9f628_535f4967, 0),
+        (0x4190fc4f_944a10e8, 0x7ff00000_00000000, 0x3_0014),
+        (0xf097b062_c41a3152, 0x00000000_00000000, 0x4_0014),
+        (0x4096fc11_f153cdca, 0x6492c2e1_786ccea8, 0x3_0014),
+        (0x3ff0ab0b_badf6700, 0x4006ac70_5742fb61, 0),
+        (0x3fb4703f_b9d9fc00, 0x3ff1546c_923a4b01, 0),
+        (0x4114d55e_5675d0e0, 0x7ff00000_00000000, 0x3_0014),
+        (0x8676739f_bf6f2f0c, 0x3ff00000_00000000, 0),
+        (0x408ff000_00000000, 0x3c159edc_d37d3631, 0x3_0014),
+        (0xbf89c85a_ca443977, 0x3fef9984_128129a0, 0),
+        (0xc0240000_00000000, 0x3f07cd79_b5647c9b, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x1_0014),
+        (0x3f643e6f_b6d43a5a, 0x3ff00a22_6c29b9e4, 0),
+        (0xc0f0cf01_bfdeffca, 0x00000000_00000000, 0x4_0014),
+        (0x7fefffff_ffffffff, 0x7ff00000_00000000, 0x3_0014),
+        (0x41113c61_089a2d7b, 0x7ff00000_00000000, 0x3_0014),
+        (0x40f53301_ab30c756, 0x7ff00000_00000000, 0x3_0014),
+        (0xbfeb3bdf_728bd979, 0x3fdb535b_3aae60c5, 0),
+        (0x3fe20369_087e91c0, 0x3ffc17b2_76419242, 0),
+        (0x40e2240e_f253e43c, 0x7ff00000_00000000, 0x3_0014),
+        (0xbfefffff_fffffffe, 0x3fd78b56_362cef39, 0),
+        (0x3fef7eb6_607d85c0, 0x400567de_ef1eb7f7, 0),
+        (0x3fb74b04_57120000, 0x3ff1862b_7da36a96, 0),
+        (0x3fefffff_fffffe92, 0x4005bf0a_8b145671, 0),
+        (0x81413427_fdf207a6, 0x3ff00000_00000000, 0),
+        (0xbfd8970b_20b6d180, 0x3fe5ca9b_65711fcd, 0),
+        (0x3fa9694f_53ab1400, 0x3ff0d06b_967b459e, 0),
+        (0xbfd34c56_166d4400, 0x3fe7ab7a_b31a6de2, 0),
+        (0xbfd69291_45b6a880, 0x3fe67d43_7e1ce871, 0),
+        (0x42326de7_3977435e, 0x7ff00000_00000000, 0x3_0014),
+        (0xb1eff83f_f9ba6119, 0x3ff00000_00000000, 0),
+        (0xbfd02239_bc261880, 0x3fe8de9f_5b9f4082, 0),
+        (0x3fd07f9e_f6094e00, 0x3ff4b47e_c6048a39, 0),
+        (0x3fefffff_fffffff7, 0x4005bf0a_8b145763, 0),
+        (0xbfdabc81_48064480, 0x3fe5129f_60534ec9, 0),
+        (0x4007de20_12fb488b, 0x4033c18c_494cb377, 0),
+    ];
+    const ATAN2_X87_RECORDED: &[Vector] = &[
+        (
+            0xfff80000_00000000,
+            0x7ff80000_00000123,
+            0x7ff80000_00000000,
+            0x7_0010,
+        ),
+        (
+            0x00000000_00000001,
+            0x7fefffff_ffffffff,
+            0x1cd00000_00000000,
+            0x4_0010,
+        ),
+        (
+            0x40000000_00000000,
+            0x408ff000_00000000,
+            0x3f600802_aaa9dd33,
+            0,
+        ),
+        (
+            0x40240000_00000000,
+            0x7ff40000_00000000,
+            0x7ffc0000_00000000,
+            0x1_0010,
+        ),
+        (
+            0xc3400000_00000000,
+            0x3fe00000_00000000,
+            0xbff921fb_54442d18,
+            0,
+        ),
+        (
+            0x00080000_00000000,
+            0x43300000_00000001,
+            0x5cbfffff_fffffffe,
+            0x4_0010,
+        ),
+        (
+            0xbff55652_fd0dae80,
+            0x1a599520_09fd3179,
+            0xbff921fb_54442d18,
+            0,
+        ),
+        (
+            0xffefffff_ffffffff,
+            0xc02e0000_00000000,
+            0xbff921fb_54442d18,
+            0,
+        ),
+        (
+            0x3e6c3243_0bfd0e8f,
+            0xc0330000_00000000,
+            0x400921fb_53e532f3,
+            0,
+        ),
+        (
+            0xc0330000_00000000,
+            0x40140000_00000000,
+            0xbff503fb_db7f996e,
+            0,
+        ),
+        (
+            0x4082562b_0b59ba56,
+            0x7a4a63a8_9c55665d,
+            0x06263c35_acffd124,
+            0,
+        ),
+        (
+            0x3ff58948_086f9f40,
+            0x2df36655_a8ad9be3,
+            0x3ff921fb_54442d18,
+            0,
+        ),
+        (
+            0xc0300000_00000000,
+            0x41161c6f_c9d10e49,
+            0xbf0727e3_3544044f,
+            0,
+        ),
+        (
+            0x40e3ecd6_f5efd387,
+            0xbfd02d9e_7f3cff00,
+            0x3ff92201_d32307da,
+            0,
+        ),
+        (
+            0x699785ff_a10dd421,
+            0xbe74121b_2da0b6ce,
+            0x3ff921fb_54442d18,
+            0,
+        ),
+        (
+            0x3f404737_f2c324aa,
+            0xc0320000_00000000,
+            0x400921ec_dc1271d0,
+            0,
+        ),
+        (
+            0xdfa17949_30fa1148,
+            0x40a60704_ba79b913,
+            0xbff921fb_54442d18,
+            0,
+        ),
+        (
+            0x3fc50cbd_2bd07d22,
+            0x404bd9ec_a53df5b8,
+            0x3f682f6d_d7f43559,
+            0,
+        ),
+        (
+            0x3fcdedcd_9eab419f,
+            0xc0545b53_7085c2fc,
+            0x40091c19_d397a71b,
+            0,
+        ),
+        (
+            0x3ffd11d1_995c20b2,
+            0xc03c6fc7_992a1150,
+            0x40089f4f_6bee04c0,
+            0,
+        ),
+        (
+            0x40044eae_7183eb4c,
+            0xc0477868_2f0ec258,
+            0x4008b356_e94df26b,
+            0,
+        ),
+        (
+            0x3fd6e932_f9384d99,
+            0xc05199d6_41cbf184,
+            0x40091791_7e23daec,
+            0,
+        ),
+        (
+            0x3fe255b2_9d05293a,
+            0xc04a4254_1f6e9ab8,
+            0x40090ba3_b2754407,
+            0,
+        ),
+        (
+            0x4012ec1a_00617884,
+            0x403bc697_8cbfcd30,
+            0x3fc597c5_c8bf89f7,
+            0,
+        ),
+        (
+            0x3fe4b938_9da66e3c,
+            0x404d7e91_464770e8,
+            0x3f867bad_40355ee5,
+            0,
+        ),
+        (
+            0x4003e4ff_9240c670,
+            0xc0270df3_f5ccaf20,
+            0x40076ed4_0f2d9fce,
+            0,
+        ),
+        (
+            0x3fb9af52_2002e71b,
+            0xc03a146b_8ad43ef0,
+            0x40091a1a_59f84d7b,
+            0,
+        ),
+        (
+            0x3fe00cd8_9f113aaf,
+            0xc05468dc_3c634d14,
+            0x40091566_43417905,
+            0,
+        ),
+        (
+            0x40283ead_0091581f,
+            0x4053b724_88079a14,
+            0x3fc385e5_98967ec9,
+            0,
+        ),
+        (
+            0x3fe2a40c_31de9b03,
+            0xc03445ab_ec7fc910,
+            0x4008e725_eddce175,
+            0,
+        ),
+        (
+            0x3fdebf7a_2313e6b0,
+            0x404e0134_4d55ebc8,
+            0x3f80655f_8c537b91,
+            0,
+        ),
+        (
+            0x40299dd6_0101b3f1,
+            0xc01da011_3ba45740,
+            0x4000c2b1_c6353e19,
+            0,
+        ),
+        (
+            0x3fce0068_d435e91b,
+            0xc0178e97_c71bc4c0,
+            0x4008d084_17415f59,
+            0,
+        ),
+        (
+            0x3fec6954_89e5a4ce,
+            0x40404a8f_5515f2b8,
+            0x3f9be588_636bc0b8,
+            0,
+        ),
+        (
+            0x4022dc93_f8569b79,
+            0xc033a081_0bb4f1f0,
+            0x40058c9f_b54a77c3,
+            0,
+        ),
+        (
+            0x3fcb26b9_26cfdd4f,
+            0x40508d1c_56f50a2c,
+            0x3f6a3f37_79efa988,
+            0,
+        ),
+        (
+            0x3ff0efd8_86e1e77f,
+            0xc033e0b4_35792ab0,
+            0x4008b505_9a361c50,
+            0,
+        ),
+        (
+            0x402bcc2b_3fb4761e,
+            0xc03abf06_4ebb4c10,
+            0x40054c7b_e32eff3e,
+            0,
+        ),
+        (
+            0x402ed7ac_1ceb1f7e,
+            0xc03460f4_b94e9b70,
+            0x4003f34b_e95db799,
+            0,
+        ),
+        (
+            0x3fb60dcd_c25f86f2,
+            0xc04b5f2f_3416bc68,
+            0x40091ec2_46b4fb0c,
+            0,
+        ),
+        (
+            0x3fdc41e9_0cf0a0ec,
+            0x4051d5e7_42abeef4,
+            0x3f795958_1df93d4e,
+            0,
+        ),
+        (
+            0xc030f8cd_2ea143fe,
+            0x40330000_00000000,
+            0xbfe75499_84258903,
+            0,
+        ),
+        (
+            0xbfe8b2e6_250c27f8,
+            0xc0440000_00000000,
+            0xc008fa77_f2319ebb,
+            0,
+        ),
+        (
+            0xc025071b_92c21c2d,
+            0x40220000_00000000,
+            0xbfeb9c3e_a47d9c00,
+            0,
+        ),
+        (
+            0xc01a474d_20ea969b,
+            0xc04d0000_00000000,
+            0xc0083afd_8861fde2,
+            0,
+        ),
+        (
+            0xc01ca53c_cd4f9bd3,
+            0xc0528000_00000000,
+            0xc0085c66_c39a459a,
+            0,
+        ),
+        (
+            0xbfda7720_ec7bc96e,
+            0xc02e0000_00000000,
+            0xc008e989_61a19005,
+            0,
+        ),
+        (
+            0x0c8735fb_9628e799,
+            0xbfeea01c_c1274500,
+            0x400921fb_54442d18,
+            0,
+        ),
+        (
+            0x304b3a1d_91cc33da,
+            0xbff9bb51_87efb580,
+            0x400921fb_54442d18,
+            0,
+        ),
+        (
+            0x5f49d6ea_4d65f7c1,
+            0xbffcdeaa_0257b880,
+            0x3ff921fb_54442d18,
+            0,
+        ),
+        (
+            0x42cc6852_f047868b,
+            0x3fe51bae_f532a900,
+            0x3ff921fb_54442ce9,
+            0,
+        ),
+        (
+            0x5b04e8ec_03e9a673,
+            0x3fe0986a_45b0e300,
+            0x3ff921fb_54442d18,
+            0,
+        ),
+        (
+            0x60e6de2b_42bf27a7,
+            0xbfe301b3_9e2ac300,
+            0x3ff921fb_54442d18,
+            0,
+        ),
+        (
+            0x3fefffff_19a2fd7b,
+            0xc1baacef_e347f353,
+            0x400921fb_53f766d7,
+            0,
+        ),
+        (
+            0x3fefffff_2eb06e7c,
+            0xc190cd51_7f1e17ed,
+            0x400921fb_525c9db6,
+            0,
+        ),
+        (
+            0x3ff00000_657c9a37,
+            0xc1894a37_f7f3b2bf,
+            0x400921fb_51bc542a,
+            0,
+        ),
+        (
+            0x3fefffff_32078865,
+            0xc1bd59b4_85985d84,
+            0x400921fb_53fe660c,
+            0,
+        ),
+        (
+            0x3ff00000_78563c6d,
+            0x41a5b623_3ee3e38b,
+            0x3e3794fe_9cd4137b,
+            0,
+        ),
+    ];
+
+    #[test]
+    fn exp_and_atan2_x87_match_the_recorded_results() {
+        let (mut e, except, _) = dispatch_engine();
+        for &(x, want, error) in EXP_X87_RECORDED {
+            except.borrow_mut().clear();
+            let got = e.call(0x00ec_ae30, &args![x]).f64().to_bits();
+            assert_eq!((got, except_seen(&except)), (want, error), "exp({x:016x})");
+        }
+        for &(y, x, want, error) in ATAN2_X87_RECORDED {
+            except.borrow_mut().clear();
+            let got = e.call(0x00ec_9760, &args![y, x]).f64().to_bits();
+            assert_eq!(
+                (got, except_seen(&except)),
+                (want, error),
+                "atan2({y:016x}, {x:016x})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dispatch_fills_the_exception_from_the_stack_or_the_registers() {
+        let (mut e, _, _) = dispatch_engine();
+        let fields: Seen = Rc::default();
+        let record = fields.clone();
+        e.register_double(EXCEPT87, move |e, a| {
+            let at = a[1];
+            let mut w = vec![a[0]];
+            for i in 0..8 {
+                w.push(e.mem.u32(at + 4 * i));
+            }
+            w.push(u32::from(e.mem.u16(a[2])));
+            record.borrow_mut().push(w);
+            Ret::default()
+        });
+        let words = |v: f64| [v.to_bits() as u32, (v.to_bits() >> 32) as u32];
+        // atan2(inf, inf): the indefinite NaN, type 1, both arguments copied from the stack.
+        let r = e
+            .call(0x00ec_9760, &args![f64::INFINITY, f64::NEG_INFINITY])
+            .f64();
+        assert_eq!(r.to_bits(), 0xfff8_0000_0000_0000);
+        let w = fields.borrow()[0].clone();
+        assert_eq!(w[..3], [0x10, 1, ATAN2_DESCRIPTOR + 1]);
+        assert_eq!(w[3..5], words(f64::INFINITY));
+        assert_eq!(w[5..7], words(f64::NEG_INFINITY));
+        assert_eq!(w[7..9], words(r));
+        assert_eq!(w[9], 0x027f);
+        // exp overflow from the register form: type 3, the argument stored by FST first; the
+        // result the tail scaled by 2^-1536 (the doubled __87except leaves it).
+        let r = e.call(0x00ec_ae6c, &args![1000.0f64]).f64();
+        assert!(r > 0.0 && r < 1e-27, "{r:e}");
+        let w = fields.borrow()[1].clone();
+        assert_eq!(w[..3], [0x14, 3, EXP_DESCRIPTOR + 1]);
+        assert_eq!(w[3..5], words(1000.0));
+        // With the global at 011c2b60 set the register form stores nothing first.
+        e.set_global(MATHERR_SKIP, 1u32);
+        let r = e.call(0x00ec_ae6c, &args![-1000.0f64]).f64();
+        assert!(r > 1e27 && r.is_finite(), "{r:e}");
+        let w = fields.borrow()[2].clone();
+        assert_eq!(w[..3], [0x14, 4, EXP_DESCRIPTOR + 1]);
+        assert_eq!(w[3..5], [0, 0]);
+        // The math-error switch: no report, the saved word back.
+        e.set_global(ERROR_SWITCH, 1u32);
+        set_x87_control_word(&mut e, 0x007f);
+        assert_eq!(e.call(0x00ec_ae30, &args![1000.0f64]).f64(), f64::INFINITY);
+        assert_eq!(x87_control_word(&mut e), 0x007f);
+        set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
+        assert_eq!(fields.borrow().len(), 3);
+        // The loader keeps a signalling NaN and the low word unshifted.
+        let loaded = dispatch_load(0x7ff0_0000_0000_0123);
+        assert_eq!(
+            (loaded.sign_exponent(), loaded.significand()),
+            (0x7fff, 0x8000_0000_0000_0123)
+        );
+        assert_eq!(e.call(0x00ed_62b4, &args![2.5f64]).f64(), 2.5);
+    }
+
+    #[test]
+    fn exp_picks_its_body_and_its_sse2_special_values() {
+        let (mut e, _, libm) = engine(true);
+        let seen: Seen = Rc::default();
+        for body in [EXP_SSE2, EXP_SSE2_REGISTER] {
+            let record = seen.clone();
+            e.register_double(body, move |_, a| {
+                record.borrow_mut().push(a.to_vec());
+                f64::from(a.len() as u32).into_ret()
+            });
+        }
+        assert_eq!(e.call(0x00ec_ae30, &args![0.5f64]).f64(), 2.0);
+        assert_eq!(e.call(0x00ec_ae6c, &args![0.5f64]).f64(), 2.0);
+        assert_eq!(seen.borrow().len(), 2);
+        // The core's special paths, with the constants they read at the exe's values.
+        for at in [EXP_CEE0, EXP_CEC0, EXP_CEF0, EXP_CF00] {
+            e.map(at, 16);
+        }
+        for (at, bits) in [
+            (EXP_D330, 1.0f64.to_bits()),
+            (EXP_D350, f64::INFINITY.to_bits()),
+            (EXP_D358, 0),
+            (EXP_D360, f64::MAX.to_bits()),
+            (EXP_D368, f64::MIN_POSITIVE.to_bits()),
+        ] {
+            put(&mut e, at, bits);
+        }
+        let cases: [(u64, u64, u32); 8] = [
+            (0x3c00_0000_0000_0000, 1.0f64.to_bits(), 0),
+            (0x8000_0000_0000_0001, 1.0f64.to_bits(), 0),
+            (0x4090_0000_0000_0000, f64::INFINITY.to_bits(), 0xe),
+            (0xc090_0000_0000_0000, 0, 0xf),
+            (f64::INFINITY.to_bits(), f64::INFINITY.to_bits(), 0),
+            (f64::NEG_INFINITY.to_bits(), 0, 0),
+            (0x7ff4_0000_0000_0000, 0x7ffc_0000_0000_0000, 0x3ea),
+            (0xfff8_0000_0000_0001, 0xfff8_0000_0000_0001, 0x3ea),
+        ];
+        for (x, want, error) in cases {
+            libm.borrow_mut().clear();
+            let got = fn_00edbd68(&mut e, f64::from_bits(x)).to_bits();
+            let code = libm.borrow().last().map_or(0, |w| w[3]);
+            assert_eq!((got, code), (want, error), "exp({x:016x})");
+        }
+    }
+
+    /// Recorded from the exe: `exp` on its SSE2 path.
+    const EXP_SSE2_RECORDED: &[Vector1] = &[
+        (0x4078db11_74af9148, 0x63cadec2_05b29a84, 0),
+        (0xc0875f8b_f7adec82, 0x00000000_00000000, 0xf),
+        (0xc0327689_cd11d073, 0x3e44958c_48191b34, 0),
+        (0x4032d0e1_126460c6, 0x41a1b321_41b6265e, 0),
+        (0x402bae26_244ed780, 0x412f4743_bd9ffd31, 0),
+        (0x406fef59_165fc680, 0x56f7e774_fe6f71df, 0),
+        (0xc0788906_4d6bfc29, 0x1c891a75_56b95823, 0),
+        (0x3f99f548_ac188cf5, 0x3ff06928_e9bcf95f, 0),
+        (0xc086d0ff_ff0b92f0, 0x00000000_00192581, 0xf),
+        (0xc00ef049_208f5266, 0x3f956a88_20a0be19, 0),
+        (0xc081beec_d78b107f, 0x0cbac783_df1f48a2, 0),
+        (0x40732d4f_df22a4b4, 0x5b995e82_332d560e, 0),
+        (0xc084aca6_4f9f24e0, 0x044743c7_0ee1884e, 0),
+        (0x4086c239_af14cc24, 0x7ff00000_00000000, 0xe),
+        (0x4082cc54_6348e902, 0x762ca6a7_9bf2a9bb, 0),
+        (0xc07eb529_3144aac0, 0x13a204a9_7fa75909, 0),
+        (0x3f0ca721_0c4ae04e, 0x3ff00039_4ea8b89b, 0),
+        (0x40676d65_92705ea8, 0x50d4efc5_1f65e4dd, 0),
+        (0x40874bb4_27f2800e, 0x7ff00000_00000000, 0xe),
+        (0x4022f5cb_1f4642f7, 0x40c99405_5f66da89, 0),
+        (0x4025636a_2900d3db, 0x40e5883f_70e6add4, 0),
+        (0xc06c37e9_62c73d08, 0x2b93e982_aa746005, 0),
+        (0xc076c4b3_9040bb8f, 0x1f15a1c1_3083e681, 0),
+        (0xc086a0f6_80a69fad, 0x00000000_27cff5c9, 0xf),
+        (0x4085f89e_c37057fe, 0x7f541015_9dfe8b8f, 0),
+        (0x40300000_00000000, 0x4160f2eb_d0a80020, 0),
+        (0x800fffff_ffffffff, 0x3ff00000_00000000, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x3ea),
+        (0x3f79c38f_3a73600c, 0x3ff019d8_589c1909, 0),
+        (0xbfec3430_4e883d00, 0x3fda827e_a225be95, 0),
+        (0x554ac3bd_4d8d552b, 0x7ff00000_00000000, 0xe),
+        (0xc06a5058_4e27fb1e, 0x2cf3a8ca_0232b251, 0),
+        (0x3e744577_aaf9f102, 0x3ff00000_144577b8, 0),
+        (0xc02e0000_00000000, 0x3e94875c_a227ec38, 0),
+        (0x4096fc11_f153cdca, 0x7ff00000_00000000, 0xe),
+        (0xc0330000_00000000, 0x3e381056_ff2c5772, 0),
+        (0x32784719_8f63f56f, 0x3ff00000_00000000, 0),
+        (0x40fca1a5_3e90d1d9, 0x7ff00000_00000000, 0xe),
+        (0xbfdda656_afc51300, 0x3fe4228d_c86e8930, 0),
+        (0x8676739f_bf6f2f0c, 0x3ff00000_00000000, 0),
+        (0xffba8b6e_e8950ca4, 0x00000000_00000000, 0xf),
+        (0x3fe750f3_f958da80, 0x400093f4_88f14cf3, 0),
+        (0x40350000_00000000, 0x41d3a6e1_fd9eecfd, 0),
+        (0xc0000000_00000000, 0x3fc152aa_a3bf81cc, 0),
+        (0x7ff40000_00000000, 0x7ffc0000_00000000, 0x3ea),
+        (0x32c5f369_1f91e0ac, 0x3ff00000_00000000, 0),
+        (0x3ff01e4b_af1036ff, 0x4005e85e_b09383f0, 0),
+        (0xbfbf303b_6c85d000, 0x3fec545e_cc82d475, 0),
+        (0xc10bfcf6_5aed19f8, 0x00000000_00000000, 0xf),
+        (0x41113c61_089a2d7b, 0x7ff00000_00000000, 0xe),
+        (0x3fe5620c_c7b6f700, 0x3fff3650_010c8830, 0),
+        (0xa24b3e27_cad53f50, 0x3ff00000_00000000, 0),
+        (0x25db985e_e59db937, 0x3ff00000_00000000, 0),
+        (0x3fd2c2e2_ba943e00, 0x3ff5733f_c95654a9, 0),
+        (0x40e2240e_f253e43c, 0x7ff00000_00000000, 0xe),
+        (0xc0b006b9_448d76db, 0x00000000_00000000, 0xf),
+        (0x3fefffff_fffffffe, 0x4005bf0a_8b145768, 0),
+        (0x033da741_a1a6c832, 0x3ff00000_00000000, 0),
+        (0x981994a2_cd55157a, 0x3ff00000_00000000, 0),
+        (0x3fefffff_fffffe92, 0x4005bf0a_8b145671, 0),
+        (0xbfefffdc_8c57d5c7, 0x3fd78b70_4bba25cb, 0),
+        (0xc24a0267_9f3300d9, 0x00000000_00000000, 0xf),
+        (0x3fefffff_3a375827, 0x4005bf0a_04abe40e, 0),
+        (0xbfe222ab_49728740, 0x3fe227f2_e3dc396e, 0),
+        (0xbfd34c56_166d4400, 0x3fe7ab7a_b31a6de2, 0),
+        (0xbfd7af1d_d415aa00, 0x3fe61a23_3e43a490, 0),
+        (0x10528df5_9e6ffb99, 0x3ff00000_00000000, 0),
+        (0x3fe2ae07_a74f7ac0, 0x3ffcaf0d_b5b2b867, 0),
+        (0x3f57085e_295b8000, 0x3ff005c3_20eac46e, 0),
+        (0xbfd02239_bc261880, 0x3fe8de9f_5b9f4082, 0),
+        (0x3fe5ccad_7c9196c0, 0x3fff9efe_b15be543, 0),
+        (0xbfefffff_ffebc7fa, 0x3fd78b56_363bcf86, 0),
+        (0xbfcab083_62fa3f00, 0x3fe9fa32_2622dd67, 0),
+        (0x428639c5_e7652593, 0x7ff00000_00000000, 0xe),
+        (0x4007de20_12fb488b, 0x4033c18c_494cb377, 0),
+    ];
+
+    #[test]
+    #[ignore = "needs NV_EXE: the SSE2 tables are the exe's"]
+    fn exp_sse2_matches_the_recorded_results_on_the_exes_tables() {
+        let Some((mut e, libm)) = exe_engine() else {
+            return;
+        };
+        for &(x, want, error) in EXP_SSE2_RECORDED {
+            libm.borrow_mut().clear();
+            let got = e.call(0x00ec_ae30, &args![x]).f64().to_bits();
+            let code = libm.borrow().last().map_or(0, |w| w[3]);
+            assert_eq!((got, code), (want, error), "exp({x:016x})");
         }
     }
 }

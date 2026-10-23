@@ -673,6 +673,34 @@ pub fn x87_fcom(a: X87Ext, b: X87Ext) -> u16 {
     imp::fcom(a, b) & (X87_STATUS_C0 | X87_STATUS_C2 | X87_STATUS_C3)
 }
 
+/// `FXAM` of a (non-empty) register: the status word's C3, C2, C1 and C0 (C1 the sign; C3 C2
+/// C0 the class: 000 unsupported, 001 NaN, 010 normal, 011 infinity, 100 zero, 110 denormal).
+/// The class is the register's encoding: an exponent of 0x7fff with the integer bit set is an
+/// infinity (fraction zero) or a NaN, without it unsupported; a zero exponent is a zero
+/// (significand zero) or a denormal; any other exponent is normal with the integer bit set and
+/// unsupported (an unnormal) without it.
+pub fn x87_fxam(x: X87Ext) -> u16 {
+    const C1: u16 = 0x0200;
+    let sign = if x.sign_exponent() & 0x8000 != 0 {
+        C1
+    } else {
+        0
+    };
+    let exponent = x.sign_exponent() & 0x7fff;
+    let significand = x.significand();
+    let integer = significand & (1 << 63) != 0;
+    let class = match exponent {
+        0x7fff if !integer => 0,
+        0x7fff if significand << 1 == 0 => X87_STATUS_C2 | X87_STATUS_C0,
+        0x7fff => X87_STATUS_C0,
+        0 if significand == 0 => X87_STATUS_C3,
+        0 => X87_STATUS_C3 | X87_STATUS_C2,
+        _ if integer => X87_STATUS_C2,
+        _ => 0,
+    };
+    sign | class
+}
+
 /// `FCHS`: the sign bit flipped (NaNs included).
 pub fn x87_fchs(a: X87Ext) -> X87Ext {
     let mut bytes = a.0;
@@ -1971,6 +1999,23 @@ mod tests {
             X87_STATUS_C0 | X87_STATUS_C2 | X87_STATUS_C3
         );
         assert_eq!(soft::fcom(ext(1.0), ext(2.0)), X87_STATUS_C0);
+    }
+
+    #[test]
+    fn fxam_classifies_the_register() {
+        let c = |bits: u64| x87_fxam(ext(f64::from_bits(bits)));
+        let (c0, c1, c2, c3) = (X87_STATUS_C0, 0x0200, X87_STATUS_C2, X87_STATUS_C3);
+        assert_eq!(c(1.5f64.to_bits()), c2);
+        assert_eq!(c((-1.5f64).to_bits()), c1 | c2);
+        assert_eq!(c(0), c3);
+        assert_eq!(c(0x8000_0000_0000_0000), c1 | c3);
+        assert_eq!(c(f64::INFINITY.to_bits()), c2 | c0);
+        assert_eq!(c(0xfff8_0000_0000_0000), c1 | c0);
+        // A double denormal is a normal extended value.
+        assert_eq!(c(1), c2);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0, 5)), c3 | c2);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0x3fff, 5)), 0);
+        assert_eq!(x87_fxam(X87Ext::from_parts(0x7fff, 0)), 0);
     }
 
     #[test]
