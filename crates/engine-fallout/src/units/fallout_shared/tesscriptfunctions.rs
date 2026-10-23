@@ -3978,7 +3978,7 @@ pub fn fn_005b9f50(e: &mut Engine, this: Ptr, value: f32) {
 /// `this + 0x58`.
 pub fn fn_005b9f80(e: &mut Engine, this: Ptr, value: f32) {
     e.mem.set_u8(this.addr() + 5, 1);
-    e.mem.set_f32(this.addr() + 0x58, value);
+    e.mem.set_f32(this.addr() + 0x58, x87_quiet(value));
 }
 
 // Translated from 005b9fa0 (decompiled, FalloutNV.exe 1.4.0.525)
