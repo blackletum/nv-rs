@@ -28,12 +28,14 @@ const MBSRCHR: u32 = 0x00ee_248c;
 const MBSRCHR_L: u32 = 0x00ee_23d0;
 /// `_ismbbtype_l` (cdecl: locale, character, ctype mask, mbctype mask).
 const ISMBBTYPE_L: u32 = 0x00ed_5c21;
+#[cfg(test)]
 const ISMBBLEAD: u32 = 0x00ed_5c8d;
 /// `__strlwr_s_l` and its body `_strlwr_s_l_stat` (cdecl: string, size, locale / `_LocaleUpdate`).
 const STRLWR_S_L: u32 = 0x00ec_8fb7;
 const STRLWR_S_L_STAT: u32 = 0x00ec_8e34;
 /// `__mbsdec_l` (cdecl: start, position, locale) and `_mbsdec`.
 const MBSDEC_L: u32 = 0x00ed_5ca5;
+#[cfg(test)]
 const MBSDEC: u32 = 0x00ed_5d3e;
 const GETDRIVE: u32 = 0x00ed_74ad;
 const FULLPATH_HELPER: u32 = 0x00ec_91dc;
