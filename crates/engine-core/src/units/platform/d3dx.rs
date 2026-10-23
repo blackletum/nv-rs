@@ -14,6 +14,10 @@
 //!   by `00e83db0` < `00e826d0` < `00bca980` (a shader pass's set-up, in `00b994f0`).
 //! - `D3DXMatrixTranspose` (slot `00fdf42c`, thunk `00ee6dd4`): written ahead, from the same
 //!   measurement.
+//! - `D3DXVec3TransformNormal` (slot `00fdf420`, thunk `00ee6df2`) and `D3DXVec4Transform`
+//!   (slot `00fdf3ec`): written ahead, from the same measurement. `D3DXVec3TransformCoord` is
+//!   not: its division is not a plain divide (results 1-2 ulp below `x / w`, also for `w` = 2: a
+//!   reciprocal estimate and refinement, CPU-specific), not modelled yet.
 
 use crate::{Engine, Ptr};
 
@@ -119,6 +123,56 @@ pub fn matrix_multiply_transpose(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> 
 /// The transpose of a row-major matrix: word `4 * i + j` from word `4 * j + i`.
 fn transpose(m: &[u32; 16]) -> [u32; 16] {
     std::array::from_fn(|n| m[4 * (n % 4) + n / 4])
+}
+
+/// The words of a vector of `n` floats at `at`.
+fn vector(e: &Engine, at: u32, n: usize) -> Vec<u32> {
+    (0..n)
+        .map(|i| e.mem.u32(at.wrapping_add(4 * i as u32)))
+        .collect()
+}
+
+/// `D3DXVec3TransformNormal`'s words for `v` and `m`: column `j` is
+/// `(m[1][j]*v1 + m[0][j]*v0) + m[2][j]*v2`, each product with the matrix word first (the only
+/// order of the products and sums that reproduces all 4000 measured calls bit for bit,
+/// `measure/d3dx-functions-2026-10-22.tsv`).
+pub fn transform_normal(v: &[u32], m: &[u32; 16]) -> [u32; 3] {
+    std::array::from_fn(|j| {
+        let p: [u32; 3] = std::array::from_fn(|k| single::mul(m[4 * k + j], v[k]));
+        single::add(single::add(p[1], p[0]), p[2])
+    })
+}
+
+/// `D3DXVec4Transform`'s words for `v` and `m`: column `j` is
+/// `(m[3][j]*v3 + m[2][j]*v2) + (m[1][j]*v1 + m[0][j]*v0)`, each product with the matrix word
+/// first (the only such order that reproduces all 4000 measured calls bit for bit).
+pub fn vec4_transform(v: &[u32], m: &[u32; 16]) -> [u32; 4] {
+    std::array::from_fn(|j| {
+        let p: [u32; 4] = std::array::from_fn(|k| single::mul(m[4 * k + j], v[k]));
+        single::add(single::add(p[3], p[2]), single::add(p[1], p[0]))
+    })
+}
+
+// Platform: replaces d3dx9_38.dll D3DXVec3TransformNormal (import)
+/// `D3DXVec3TransformNormal(out, v, m)` (stdcall): [`transform_normal`], the inputs read before
+/// `out` is written (measured with `out` = `v`); answers `out`.
+pub fn vec3_transform_normal(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
+    let r = transform_normal(&vector(e, v.addr(), 3), &matrix(e, m.addr()));
+    for (i, w) in r.iter().enumerate() {
+        e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
+    }
+    out.addr()
+}
+
+// Platform: replaces d3dx9_38.dll D3DXVec4Transform (import)
+/// `D3DXVec4Transform(out, v, m)` (stdcall): [`vec4_transform`], the inputs read before `out`
+/// is written (measured with `out` = `v`); answers `out`.
+pub fn vec4_transform_import(e: &mut Engine, out: Ptr, v: Ptr, m: Ptr) -> u32 {
+    let r = vec4_transform(&vector(e, v.addr(), 4), &matrix(e, m.addr()));
+    for (i, w) in r.iter().enumerate() {
+        e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
+    }
+    out.addr()
 }
 
 // Platform: replaces d3dx9_38.dll D3DXMatrixTranspose (import)
@@ -690,6 +744,46 @@ mod tests {
                 (f[1].to_string(), words(f[3]), words(f[4]), words(f[5]))
             })
             .collect()
+    }
+
+    #[test]
+    fn vector_transforms_match_the_measured_dll_bit_for_bit() {
+        let text = include_str!("../../../data/d3dx/vector_transforms.tsv");
+        let words = |t: &str| -> Vec<u32> {
+            t.split(' ')
+                .map(|w| u32::from_str_radix(w.trim(), 16).unwrap())
+                .collect()
+        };
+        let mut n = [0; 2];
+        for line in text.lines().filter(|l| !l.starts_with('#')) {
+            let f: Vec<&str> = line.split('\t').collect();
+            let (v, m, want) = (words(f[3]), words(f[4]), words(f[5]));
+            let mut e = Engine::new();
+            let at = e.mem.alloc(16);
+            for (i, w) in v.iter().enumerate() {
+                e.mem.set_u32(at + 4 * i as u32, *w);
+            }
+            let mat = e.mem.alloc(64);
+            for (i, w) in m.iter().enumerate() {
+                e.mem.set_u32(mat + 4 * i as u32, *w);
+            }
+            let out = if f[1] == "out=in" {
+                at
+            } else {
+                e.mem.alloc(16)
+            };
+            let (o, v, m) = (Ptr::new(out), Ptr::new(at), Ptr::new(mat));
+            let r = if f[0] == "Vec3TransformNormal" {
+                n[0] += 1;
+                vec3_transform_normal(&mut e, o, v, m)
+            } else {
+                n[1] += 1;
+                vec4_transform_import(&mut e, o, v, m)
+            };
+            assert_eq!(r, out);
+            assert_eq!(vector(&e, out, want.len()), want, "{line}");
+        }
+        assert_eq!(n, [250, 250]);
     }
 
     #[test]

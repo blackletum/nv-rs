@@ -1922,6 +1922,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "d3dx9_38.dll",
+            "D3DXVec3TransformNormal",
+            entry!(0, d3dx::vec3_transform_normal(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXVec4Transform",
+            entry!(0, d3dx::vec4_transform_import(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
             "D3DXGetImageInfoFromFileInMemory",
             entry!(0, d3dx::get_image_info_from_file_in_memory(Ptr, u32, Ptr) -> u32).1,
         ),
