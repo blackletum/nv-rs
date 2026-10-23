@@ -92,7 +92,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00c3_a5e0, bs_multi_bound_node_update_upward_pass(Ptr)),
         entry!(0x00c3_a640, fn_00c3a640(Ptr, u32) -> u32),
-        entry!(0x00c3_a670, fn_00c3a670(Ptr, u32, u32)),
+        entry!(0x00c3_a670, fn_00c3a670(Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -101,7 +101,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 const NI_NODE_UPDATE_DOWNWARD_PASS: u32 = 0x00a5_dd70;
 const NI_NODE_UPDATE_UPWARD_PASS: u32 = 0x00a5_db30;
 /// The memory manager object (`011f6238`) and its `thiscall` allocate (`00aa3e40`, one
-/// word) and sized free (`00aa4150`, block and size).
+/// word) and `00aa4150` (block and size; it answers a block, which `0042f5d0` and
+/// `0084b630` pass on as the reallocated one).
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
 const MEMORY_FREE_SIZED: u32 = 0x00aa_4150;
@@ -134,9 +135,13 @@ pub fn fn_00c3a640(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
 
 // Translated from 00c3a670 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (unit `bsmultiboundroom.obj`; `thiscall`, `RET 8`, `this` not
-/// read): the matching free of `count` pointers at `block` (`00aa4150` with `count * 4`).
-pub fn fn_00c3a670(e: &mut Engine, _this: Ptr, block: u32, count: u32) {
-    e.call(MEMORY_FREE_SIZED, &args![MEMORY_MANAGER, block, count << 2]);
+/// read): `00aa4150` on the memory manager with `block` and `count * 4`, answering the block
+/// it gives (the exe ends on that call and leaves its `EAX`). It sits in the vtable slot
+/// `+0xC` of a `BSSimpleArray` (RTTI), `_Reallocate` in the Xbox PDB, which answers the new
+/// buffer.
+pub fn fn_00c3a670(e: &mut Engine, _this: Ptr, block: u32, count: u32) -> u32 {
+    e.call(MEMORY_FREE_SIZED, &args![MEMORY_MANAGER, block, count << 2])
+        .u32()
 }
 
 #[cfg(test)]
@@ -239,6 +244,16 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c3_a610, &args![0x1000u32]).u32(), 0x0120_2828);
         assert_eq!(e.call(0x00c3_a610, &args![0u32]).u32(), 0x0120_2828);
+    }
+
+    #[test]
+    fn fn_00c3a670_answers_the_block_the_manager_gives() {
+        let mut e = Engine::new();
+        e.register(MEMORY_FREE_SIZED, |_, a| (a[1] + a[2]).into_ret());
+        assert_eq!(
+            e.call(0x00c3_a670, &args![0u32, 0x5000u32, 3u32]).u32(),
+            0x500c
+        );
     }
 }
 
