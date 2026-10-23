@@ -1152,6 +1152,112 @@ pub fn shift(e: &mut Engine, text: u32, distance: u32) -> u32 {
     .u32()
 }
 
+// ---- Text to double, and the x87 double to 64-bit integer -------------------------------------
+
+/// `_isctype_l` (`00ed41e7`, cdecl: character, mask, `_LocaleUpdate`) and `_fltin2`
+/// (`00edb0db`, cdecl: the `_flt` to fill, string, length, 0, 0, `_LocaleUpdate`; answers the
+/// `_flt`, its double at `+0x10`).
+const ISCTYPE_L_ADDR: u32 = 0x00ed_41e7;
+const FLTIN2: u32 = 0x00ed_b0db;
+/// `_SPACE`, the ctype bit `__atof_l` skips.
+const CTYPE_SPACE: u32 = 8;
+
+// Translated from 00eca4c8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__atof_l` (Ghidra's function ID), cdecl: (string, locale), the result in `ST0`. A
+/// `_LocaleUpdate` for the locale is made on the stack. A null string sets `errno` `EINVAL`
+/// (0x16), calls the invalid-parameter handler and gives 0.0. Otherwise leading white space is
+/// skipped (`_SPACE`: through `_isctype_l` when the locale's `mb_cur_max` (+0xac, signed) is
+/// above 1, else from its ctype table (+0xc8, a word per byte)), and `_fltin2(&flt, string,
+/// strlen(string), 0, 0, &update)` converts the rest: its double (`+0x10`) is the result
+/// (`FLD`). Either way an update that set the thread's own-locale bit clears it again (bit 1 of
+/// the thread data's +0x70).
+pub fn atof_l(e: &mut Engine, string: Ptr, locale: u32) -> f64 {
+    // The frame from EBP-0x28: the 0x18-byte `_flt`, then the `_LocaleUpdate` at EBP-0x10.
+    e.with_stack(0x28, |e, frame| {
+        let flt = frame.addr();
+        let update = flt + 0x18;
+        e.call(LOCALE_UPDATE_ADDR, &args![update, locale]);
+        let mut at = string.addr();
+        let value = if at == 0 {
+            report(e, 0x16);
+            0.0
+        } else {
+            loop {
+                let info = e.mem.u32(update);
+                let c = u32::from(e.mem.u8(at));
+                let space = if e.mem.i32(info.wrapping_add(0xac)) > 1 {
+                    e.call(ISCTYPE_L_ADDR, &args![c, CTYPE_SPACE, update]).u32()
+                } else {
+                    let table = e.mem.u32(info.wrapping_add(0xc8));
+                    u32::from(e.mem.u16(table.wrapping_add(2 * c))) & CTYPE_SPACE
+                };
+                if space == 0 {
+                    break;
+                }
+                at = at.wrapping_add(1);
+            }
+            let length = e.call(STRLEN_ADDR, &args![at]).u32();
+            let result = e
+                .call(FLTIN2, &args![flt, at, length, 0u32, 0u32, update])
+                .u32();
+            x87_load64(e.mem.u64(result.wrapping_add(0x10)))
+        };
+        if e.mem.u8(update + 0xc) != 0 {
+            let thread = e.mem.u32(update + 8);
+            let own = e.mem.u32(thread.wrapping_add(0x70));
+            e.mem.set_u32(thread.wrapping_add(0x70), own & !2);
+        }
+        value
+    })
+}
+
+/// `FILD qword`: the 64-bit integer `n` in a register, exact (the 64-bit significand holds it).
+/// The x87 module has no helper for it.
+fn fild64(n: i64) -> X87Ext {
+    if n == 0 {
+        return X87Ext::from_parts(0, 0);
+    }
+    let sign = if n < 0 { 0x8000 } else { 0 };
+    let magnitude = n.unsigned_abs();
+    let zeros = magnitude.leading_zeros();
+    X87Ext::from_parts(sign | (0x3fff + 63 - zeros) as u16, magnitude << zeros)
+}
+
+// Translated from 00ec62f6 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_ftol2`'s x87 body (unnamed in the engine map; the entry `00ec62c0` jumps here without
+/// SSE2): `ST0` in, the 64-bit integer in `EDX:EAX` out, `ST0` popped. The value is stored as
+/// a float (`FST`; only its sign is read) and as an integer rounded by the control word
+/// (`FISTP qword`). A low word of 0 with a high word of 0 or 0x80000000 (zero, or the integer
+/// indefinite) is the answer as it is, and with a low word of 0 the sign tested below is the
+/// high word's rather than the float's. Otherwise the integer is loaded back (`FILD`) and the
+/// value minus it (`FSUBP`) stored as a float: for a negative sign, a positive nonzero
+/// difference adds 1; for a non-negative sign, a negative nonzero difference takes 1 off (the
+/// carry of `ADD ECX,0x7fffffff` on the float bits, the sign bit flipped first for a negative
+/// value): the value truncated toward zero.
+pub fn ftol2_x87(_e: &mut Engine, value: f64) -> u64 {
+    let st0 = X87Ext::load64(value);
+    let float_bits = st0.store32();
+    let integer = x87_fistp64(st0);
+    let bits = integer as u64;
+    let (low, high) = (bits as u32, (bits >> 32) as u32);
+    let mut sign = float_bits;
+    if low == 0 {
+        sign = high;
+        if high & 0x7fff_ffff == 0 {
+            return bits;
+        }
+    }
+    let difference = crate::x87::x87_fsub(st0, fild64(integer)).store32();
+    if (sign as i32) < 0 {
+        let flipped = difference ^ 0x8000_0000;
+        let carry = flipped.checked_add(0x7fff_ffff).is_none();
+        bits.wrapping_add(u64::from(carry))
+    } else {
+        let borrow = difference.checked_add(0x7fff_ffff).is_none();
+        bits.wrapping_sub(u64::from(borrow))
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ec_dbf6, gcvt_s(Ptr, u32, f64, u32) -> i32),
@@ -1166,6 +1272,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_1cb7, cftoe_l(Ptr, Ptr, u32, i32, u32, u32) -> i32),
         entry!(0x00ed_1b48, cftoe2_l(u32, u32, i32, u32, u32, u32, u32) -> i32),
         entry!(0x00ed_1b03, shift(u32, u32) -> u32),
+        entry!(0x00ec_a4c8, atof_l(Ptr, u32) -> f64),
+        entry!(0x00ec_62f6, ftol2_x87(f64) -> u64),
     ]
 }
 
@@ -2190,5 +2298,75 @@ mod tests {
         assert_eq!(e.call(SHIFT, &[text, 2]).u32(), text + 2);
         assert_eq!(calls(&e, MEMMOVE_ADDR), vec![vec![text + 2, text, 4]]);
         assert_eq!(e.mem.bytes(text, 6), b"ababc\0".to_vec());
+    }
+
+    #[test]
+    fn atof_l_skips_white_space_and_converts_through_fltin2() {
+        let (mut e, slot) = engine();
+        // The `_LocaleUpdate` double: the locale info (mb_cur_max 1, a ctype table with
+        // `_SPACE` on the blank and the tab), a thread block, and the "updated" byte set.
+        let info = block(&mut e, 0x100, 0);
+        let table = block(&mut e, 0x200, 0);
+        e.mem.set_u16(table + 2 * 0x20, 8);
+        e.mem.set_u16(table + 2 * 9, 8);
+        e.mem.set_u32(info + 0xc8, table);
+        e.mem.set_u32(info + 0xac, 1);
+        let thread = block(&mut e, 0x80, 0);
+        e.mem.set_u32(thread + 0x70, 0xff);
+        e.register_double(LOCALE_UPDATE_ADDR, move |e, a| {
+            e.mem.set_u32(a[0], info);
+            e.mem.set_u32(a[0] + 8, thread);
+            e.mem.set_u8(a[0] + 0xc, 1);
+            a[0].into_ret()
+        });
+        e.register(FLTIN2, |e, a| {
+            assert_eq!(e.mem.cstr(a[1]).len() as u32, a[2]);
+            e.mem.set_u64(a[0] + 0x10, 2.5f64.to_bits());
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let s = block(&mut e, 16, 0);
+        e.mem.write(s, b" \t2.5x\0");
+        let r = e.call(0x00ec_a4c8, &args![s, 0x1234u32]);
+        assert_eq!(r.st0, 2.5);
+        let fltin = calls(&e, FLTIN2);
+        assert_eq!(fltin[0][1..5].to_vec(), vec![s + 2, 4, 0, 0]);
+        assert_eq!(calls(&e, LOCALE_UPDATE_ADDR)[0][1], 0x1234);
+        assert_eq!(e.mem.u32(thread + 0x70), 0xfd);
+        // A null string: EINVAL with the handler, 0.0, the bit cleared.
+        e.mem.set_u32(thread + 0x70, 0xff);
+        assert_eq!(e.call(0x00ec_a4c8, &args![0u32, 0u32]).st0, 0.0);
+        assert_eq!(e.mem.u32(slot), 0x16);
+        assert_eq!(calls(&e, INVALID_PARAMETER_ADDR).len(), 1);
+        assert_eq!(e.mem.u32(thread + 0x70), 0xfd);
+        // A multibyte locale asks `_isctype_l` (character, `_SPACE`, the update).
+        e.mem.set_u32(info + 0xac, 2);
+        e.register(ISCTYPE_L_ADDR, |_, a| u32::from(a[0] == 0x23).into_ret());
+        e.mem.write(s, b"##7\0");
+        e.call(0x00ec_a4c8, &args![s, 0u32]);
+        let asked = calls(&e, ISCTYPE_L_ADDR);
+        assert_eq!(asked.len(), 3);
+        assert_eq!(asked[2][..2].to_vec(), vec![0x37, 8]);
+        assert_eq!(calls(&e, FLTIN2)[1][1], s + 2);
+    }
+
+    #[test]
+    fn ftol2_x87_truncates_toward_zero() {
+        let mut e = Engine::new();
+        let mut f = |v: f64| e.call(0x00ec_62f6, &args![v]).u64() as i64;
+        assert_eq!(f(2.5), 2);
+        assert_eq!(f(2.7), 2);
+        assert_eq!(f(-2.5), -2);
+        assert_eq!(f(-2.7), -2);
+        assert_eq!(f(3.0), 3);
+        assert_eq!(f(-3.0), -3);
+        assert_eq!(f(0.4), 0);
+        assert_eq!(f(0.6), 0);
+        assert_eq!(f(-0.6), 0);
+        assert_eq!(f(4_294_967_296.5), 4_294_967_296);
+        assert_eq!(f(-4_294_967_296.5), -4_294_967_296);
+        assert_eq!(f(4_294_967_295.7), 4_294_967_295);
+        assert_eq!(f(1e300), i64::MIN);
+        assert_eq!(f(f64::NAN), i64::MIN);
     }
 }

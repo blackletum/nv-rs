@@ -4657,7 +4657,7 @@ fn trandisp(e: &mut Engine, d: &mut Dispatch, two: bool) {
     run_handler(e, d, target);
 }
 
-/// The handlers `exp`'s and `atan2`'s descriptors point at, by their addresses.
+/// The handlers `exp`'s, `atan2`'s and `fmod`'s descriptors point at, by their addresses.
 fn run_handler(e: &mut Engine, d: &mut Dispatch, target: u32) {
     match target {
         // exp
@@ -4762,6 +4762,14 @@ fn run_handler(e: &mut Engine, d: &mut Dispatch, target: u32) {
             if (d.kind as i8) <= 0 {
                 d.kind = 1;
             }
+        }
+        // fmod
+        0x00ec_9144 => fmod_finite(e, d),
+        0x00ed_2654 => {
+            // FSTP ST0 twice; FLDZ.
+            d.fpu.pop();
+            d.fpu.pop();
+            d.fpu.push(X87Ext::load64(0.0));
         }
         _ => panic!("{target:08x}: a dispatch handler not translated"),
     }
@@ -5478,6 +5486,52 @@ fn logarithm_sse2(e: &mut Engine, argument: u32, xmm0: Xmm, t: &LogTables) -> f6
     }
 }
 
+// ---- fmod ---------------------------------------------------------------------------------------
+
+/// `fmod`'s descriptor (`.data`, `"fmod"`, two arguments, operation 0x16) and the routine its
+/// handler calls instead of `FPREM` when the Pentium flaw flag is 1 (`00ed6cfc`, register
+/// operands; not translated).
+const FMOD_DESCRIPTOR: u32 = 0x011c_18e0;
+const ADJUSTED_FPREM: u32 = 0x00ed_6cfc;
+
+// Translated from 00ec9130 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `fmod` (LIBCMT; unnamed in the engine map, the name `"fmod"` its descriptor holds), cdecl,
+/// `y` then `x` on the stack, the result in `ST0`: `MOV EDX, 011c18e0; JMP __ctrandisp2` (no
+/// SSE2 body). Its handlers: both normal, `FPREM` of `y` by `x` until it is complete (C2
+/// clear), the sign of `y`; `y` zero with `x` normal, +0 (`FLDZ`); a NaN, the two added (error
+/// type 7 for a quiet one, 1 for a signalling one); `x` zero or infinite, or `y` infinite, the
+/// indefinite NaN with type 1.
+pub fn fmod(e: &mut Engine, y: f64, x: f64) -> f64 {
+    ctrandisp2(e, FMOD_DESCRIPTOR, 0, y, x)
+}
+
+/// `fmod`'s handler for two normal operands (`00ec9144`): `FXCH` (`y` on top), then `FPREM`
+/// (or, with the Pentium flaw flag at 1, `00ed6cfc` with `ST0` and `ST1`, registered `ST0`
+/// first, giving the partial remainder in `ST0` and the status word `FSTSW` reads in `AX`)
+/// while `FSTSW; SAHF; JP` finds C2 set; `FSTP ST1` leaves the remainder.
+fn fmod_finite(e: &mut Engine, d: &mut Dispatch) {
+    d.fpu.fxch(1);
+    loop {
+        let status = if e.global::<u32>(FDIV_FLAWED) == 1 {
+            let r = e.call(
+                ADJUSTED_FPREM,
+                &args![d.fpu.st(0).store64(), d.fpu.st(1).store64()],
+            );
+            d.fpu.set(0, X87Ext::load64(r.st0));
+            r.eax as u16
+        } else {
+            let (r, status) = x87_fprem(d.fpu.st(0), d.fpu.st(1));
+            d.fpu.set(0, r);
+            status
+        };
+        if status & X87_STATUS_C2 == 0 {
+            break;
+        }
+    }
+    let r = d.fpu.pop();
+    d.fpu.set(0, r);
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ed_454f, fn_00ed454f() -> u32),
@@ -5535,6 +5589,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_ae6c, ci_exp(f64) -> f64),
         entry!(0x00ec_9760, atan2(f64, f64) -> f64),
         entry!(0x00ec_976a, ci_atan2(f64, f64) -> f64),
+        entry!(0x00ec_9130, fmod(f64, f64) -> f64),
         entry!(0x00ed_6281, ctrandisp1(u32, u32, f64) -> f64),
         entry!(0x00ed_60ae, cintrindisp1(u32, f64) -> f64),
         entry!(0x00ed_60eb, ctrandisp2(u32, u32, f64, f64) -> f64),
@@ -10557,5 +10612,99 @@ mod tests_bodies {
                 assert_eq!((got, code), (want, error), "{addr:08x}({x:016x})");
             }
         }
+    }
+
+    /// [`dispatch_engine`] with `fmod`'s descriptor at the exe's values (its handler table read
+    /// from the exe at `011c18f0`).
+    fn fmod_engine() -> (Engine, Seen) {
+        let (mut e, except, _) = dispatch_engine();
+        e.map(FMOD_DESCRIPTOR, 0x50);
+        e.mem.write(FMOD_DESCRIPTOR, b"\x04fmod");
+        e.mem.write(FMOD_DESCRIPTOR + 0xd, &[2, 0x16]);
+        for (i, target) in [
+            0x00ec_9144u32,
+            0x00ed_26f6,
+            0x00ed_268f,
+            0x00ed_26f6,
+            0x00ed_2654,
+            0x00ed_26f6,
+            0x00ed_268f,
+            0x00ed_26f6,
+            0x00ed_268d,
+            0x00ed_268d,
+            0x00ed_26b7,
+            0x00ed_268d,
+            0x00ed_26f6,
+            0x00ed_26f6,
+            0x00ed_268f,
+            0x00ed_26f6,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(FMOD_DESCRIPTOR + 0x10 + 4 * i as u32, target);
+        }
+        (e, except)
+    }
+
+    #[test]
+    fn fmod_runs_fprem_to_completion_and_its_special_handlers() {
+        let (mut e, except) = fmod_engine();
+        let mut spread = Spread(0x5eed);
+        for _ in 0..200 {
+            let y = (spread.next() - 0.5) * 1e6;
+            let x = (spread.next() - 0.5) * 7.0;
+            let got = e.call(0x00ec_9130, &args![y, x]).f64();
+            assert_eq!(got.to_bits(), (y % x).to_bits(), "fmod({y:e}, {x:e})");
+        }
+        // Far apart (several FPREM rounds), and a remainder of zero keeps the dividend's sign.
+        for (y, x) in [
+            (1e300f64, 3.0f64),
+            (-1e300, 7.25),
+            (6.0, -3.0),
+            (-6.0, 3.0),
+            (5.5, 1e10),
+        ] {
+            let got = e.call(0x00ec_9130, &args![y, x]).f64();
+            assert_eq!(got.to_bits(), (y % x).to_bits(), "fmod({y:e}, {x:e})");
+        }
+        assert!(except.borrow().is_empty());
+        // y zero: +0 whatever its sign.
+        assert_eq!(
+            e.call(0x00ec_9130, &args![-0.0f64, 5.0f64]).f64().to_bits(),
+            0
+        );
+        assert!(except.borrow().is_empty());
+        // x zero, x infinite, y infinite: the indefinite NaN, reported.
+        for (y, x) in [(5.0f64, 0.0f64), (5.0, f64::INFINITY), (f64::INFINITY, 2.0)] {
+            let got = e.call(0x00ec_9130, &args![y, x]).f64();
+            assert_eq!(got.to_bits(), 0xfff8_0000_0000_0000, "fmod({y:e}, {x:e})");
+        }
+        assert_eq!(except.borrow().len(), 3);
+        // A quiet NaN goes through.
+        let got = e.call(0x00ec_9130, &args![f64::NAN, 2.0f64]).f64();
+        assert!(got.is_nan());
+    }
+
+    #[test]
+    fn fmod_takes_the_flawed_fprem_routine_with_the_pentium_flag() {
+        let (mut e, _) = fmod_engine();
+        e.mem.set_u32(FDIV_FLAWED, 1);
+        let rounds = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = rounds.clone();
+        // A double that answers 1.0 incomplete (C2) once, then 0.5 complete.
+        e.register_double(ADJUSTED_FPREM, move |_, a| {
+            let st0 = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            let st1 = f64::from_bits(u64::from(a[2]) | u64::from(a[3]) << 32);
+            seen.borrow_mut().push((st0, st1));
+            let first = seen.borrow().len() == 1;
+            Ret {
+                eax: if first { u32::from(X87_STATUS_C2) } else { 0 },
+                st0: if first { 1.0 } else { 0.5 },
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x00ec_9130, &args![9.0f64, 4.0f64]).f64(), 0.5);
+        assert_eq!(*rounds.borrow(), vec![(9.0, 4.0), (1.0, 4.0)]);
     }
 }

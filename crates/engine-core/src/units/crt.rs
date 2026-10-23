@@ -18,6 +18,7 @@ pub mod cvt;
 pub mod fpinit;
 pub mod lowio;
 pub mod math;
+pub mod runtime;
 pub mod scanf;
 pub mod search;
 pub mod startup;
@@ -3056,7 +3057,7 @@ fn snprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
 
 // ---- Program ---------------------------------------------------------------
 
-// Platform: replaces 00ec658f (_atexit, LIBCMT) with its callees 00ec6553 (__onexit) and 00ec6468 (__onexit_nolock)
+// Platform: replaces 00ec658f (_atexit, LIBCMT) with its callee 00ec6468 (__onexit_nolock)
 /// Registers a function to run at exit: appends it to the CRT's table of
 /// exit functions (`ONEXIT_BEGIN`, `ONEXIT_END`), which [`doexit`] runs.
 /// Answers 0, or -1 when the table could not take it (`(f != 0) - 1` of
@@ -7076,6 +7077,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(fpinit::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
+    table.extend(runtime::funcs());
     table.extend(scanf::funcs());
     table.extend(search::funcs());
     table.extend(stdio::funcs());

@@ -255,11 +255,69 @@ pub fn strcpy_s(e: &mut Engine, destination: Ptr, size: u32, source: Ptr) -> i32
     0
 }
 
+/// `_getptd` (`00ed11de`, cdecl): the thread's data, whose `_token` (`+0x18`) `strtok` keeps.
+const GETPTD: u32 = 0x00ed_11de;
+const PTD_TOKEN: u32 = 0x18;
+
+// Translated from 00ecc6e6 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ecc6e6 - the /GS stack cookie check (00ec408c) is not translated.
+/// `strtok` (LIBCMT/strtok.c, Ghidra's function ID), cdecl: (string, delimiters). The
+/// delimiters, their terminating zero included, are set in a 32-byte bit map on the stack (bit
+/// `c & 7` of byte `c >> 3`). A null string goes on from the thread's `_token` (`_getptd()`
+/// +0x18). Leading delimiters are skipped (the zero, always in the map, ends the skip); the
+/// token runs to the next delimiter, which is overwritten with a zero and stepped over, or to
+/// the string's end. `_token` keeps where it stopped. Answers the token's start, or null when
+/// it is empty.
+pub fn strtok(e: &mut Engine, string: Ptr, delimiters: Ptr) -> Ptr {
+    let ptd = e.call(GETPTD, &args![]).u32();
+    let mut map = [0u8; 32];
+    let mut at = delimiters.addr();
+    loop {
+        let c = e.mem.u8(at);
+        map[(c >> 3) as usize] |= 1 << (c & 7);
+        at = at.wrapping_add(1);
+        if c == 0 {
+            break;
+        }
+    }
+    let delimiter = |c: u8| map[(c >> 3) as usize] & (1 << (c & 7)) != 0;
+    let mut p = string.addr();
+    if p == 0 {
+        p = e.mem.u32(ptd.wrapping_add(PTD_TOKEN));
+    }
+    // 00ecc748: skip delimiters, stopping at the zero.
+    loop {
+        let c = e.mem.u8(p);
+        if !delimiter(c) || c == 0 {
+            break;
+        }
+        p = p.wrapping_add(1);
+    }
+    let start = p;
+    // 00ecc77d: the token.
+    while e.mem.u8(p) != 0 {
+        if delimiter(e.mem.u8(p)) {
+            e.mem.set_u8(p, 0);
+            p = p.wrapping_add(1);
+            break;
+        }
+        p = p.wrapping_add(1);
+    }
+    e.mem.set_u32(ptd.wrapping_add(PTD_TOKEN), p);
+    // SUB EAX,EDX; NEG; SBB; AND EBX: the start unless it is where the scan stopped.
+    if start != p {
+        Ptr::new(start)
+    } else {
+        Ptr::new(0)
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ec_8e34, strlwr_s_l_stat(Ptr, u32, u32) -> i32),
         entry!(0x00ed_5d55, strnlen(Ptr, u32) -> u32),
         entry!(0x00ec_65a6, strcpy_s(Ptr, u32, Ptr) -> i32),
+        entry!(0x00ec_c6e6, strtok(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -491,5 +549,40 @@ mod tests {
         assert_eq!(strcpy_s(&mut e, Ptr::new(to), 4, Ptr::new(long)), 0x22);
         assert_eq!(strcpy_s(&mut e, Ptr::new(to), 5, Ptr::new(long)), 0);
         assert_eq!(e.mem.bytes(to, 6), b"abcd\0x".to_vec());
+    }
+
+    #[test]
+    fn strtok_splits_on_the_delimiters_and_keeps_the_rest_in_the_thread_data() {
+        let mut e = Engine::new();
+        let ptd = e.mem.alloc(0x100);
+        e.register_double(GETPTD, move |_, _| ptd.into_ret());
+        let s = text(&mut e, b", ab,,c d ,");
+        let delimiters = text(&mut e, b" ,");
+        let next = |e: &mut Engine, from: u32| -> u32 {
+            e.call(0x00ec_c6e6, &args![from, delimiters]).u32()
+        };
+        let first = next(&mut e, s);
+        assert_eq!(first, s + 2);
+        assert_eq!(e.mem.cstr(first), b"ab".to_vec());
+        assert_eq!(e.mem.u32(ptd + 0x18), s + 5);
+        let second = next(&mut e, 0);
+        assert_eq!(e.mem.cstr(second), b"c".to_vec());
+        let third = next(&mut e, 0);
+        assert_eq!(e.mem.cstr(third), b"d".to_vec());
+        // Only delimiters left: null, the token at the string's end.
+        assert_eq!(next(&mut e, 0), 0);
+        assert_eq!(e.mem.u32(ptd + 0x18), s + 11);
+        assert_eq!(next(&mut e, 0), 0);
+        // No delimiters: the whole string, the token at its zero.
+        let plain = text(&mut e, b"plain");
+        let none = text(&mut e, b"");
+        assert_eq!(e.call(0x00ec_c6e6, &args![plain, none]).u32(), plain);
+        assert_eq!(e.mem.u32(ptd + 0x18), plain + 5);
+        // A delimiter byte from 0x80 up is in the map as well.
+        let high = text(&mut e, b"x\xffy");
+        let hd = text(&mut e, b"\xff");
+        assert_eq!(e.call(0x00ec_c6e6, &args![high, hd]).u32(), high);
+        assert_eq!(e.mem.cstr(high), b"x".to_vec());
+        assert_eq!(e.mem.u32(ptd + 0x18), high + 2);
     }
 }

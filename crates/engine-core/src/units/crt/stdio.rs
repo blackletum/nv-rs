@@ -1128,6 +1128,44 @@ fn printf_entry(e: &mut Engine, words: &[u32]) -> Ret {
     printf(e, Ptr::new(words[0]), &words[1..]).into_ret()
 }
 
+/// `MoveFileA` and `GetLastError` (KERNEL32 import slots `00fdf188`, `00fdf094`) and
+/// `_dosmaperr` (`00ec8609`, cdecl: the Windows error).
+const IMPORT_MOVE_FILE_A: u32 = 0x00fd_f188;
+const IMPORT_GET_LAST_ERROR: u32 = 0x00fd_f094;
+const DOSMAPERR: u32 = 0x00ec_8609;
+
+// Translated from 00ec862c (disassembled, FalloutNV.exe 1.4.0.525)
+/// `rename` (LIBCMT/rename.c, engine map), cdecl: (old name, new name). `MoveFileA(old, new)`;
+/// when it fails, `GetLastError()` is the error, else 0. A nonzero error goes through
+/// `_dosmaperr` and answers -1; otherwise 0.
+pub fn rename(e: &mut Engine, old: Ptr, new: Ptr) -> i32 {
+    let moved = e.call(IMPORT_MOVE_FILE_A, &args![old, new]).u32();
+    let error = if moved == 0 {
+        e.call(IMPORT_GET_LAST_ERROR, &args![]).u32()
+    } else {
+        0
+    };
+    if error != 0 {
+        e.call(DOSMAPERR, &args![error]);
+        return -1;
+    }
+    0
+}
+
+// Translated from 00ecc244 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `__finally` block of `fgets` (`00ecc104`, which runs the same unlock inline): run on
+/// `fgets`'s frame with the stream in `ESI` (the one word here), `_unlock_file(stream)`.
+pub fn fgets_finally(e: &mut Engine, stream: Ptr) {
+    e.call(UNLOCK_FILE, &args![stream]);
+}
+
+// Translated from 00ec997b (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `__finally` block of `fclose` (`00ec9907`, which runs the same unlock inline): run on
+/// `fclose`'s frame with the stream in `ESI` (the one word here), `_unlock_file(stream)`.
+pub fn fclose_finally(e: &mut Engine, stream: Ptr) {
+    e.call(UNLOCK_FILE, &args![stream]);
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         (0x00ec_9d4a, printf_entry as AbiFn),
@@ -1146,6 +1184,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_c5f8, strtok_s(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ed_cf0c, read(u32, Ptr, u32) -> i32),
         entry!(0x00ed_c94a, read_nolock(u32, Ptr, u32) -> i32),
+        entry!(0x00ec_862c, rename(Ptr, Ptr) -> i32),
+        entry!(0x00ec_c244, fgets_finally(Ptr)),
+        entry!(0x00ec_997b, fclose_finally(Ptr)),
     ]
 }
 
@@ -1792,5 +1833,41 @@ mod tests {
         assert_eq!(e.mem.u32(iob + 0x20 + 0xc) & 0x8000, 0);
         assert_eq!(e.call(0x00ec_9d4a, &args![0u32]).i32(), -1);
         assert_eq!(e.mem.u32(block + 8), 0x16);
+    }
+
+    #[test]
+    fn rename_moves_the_file_or_maps_the_windows_error() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let moved = std::rc::Rc::new(std::cell::Cell::new(1u32));
+        let answer = moved.clone();
+        e.register_double(IMPORT_MOVE_FILE_A, move |_, _| answer.get().into_ret());
+        e.register(IMPORT_GET_LAST_ERROR, |_, _| 5u32.into_ret());
+        e.register(DOSMAPERR, |_, _| Ret::default());
+        let (old, new) = (e.mem.alloc(8), e.mem.alloc(8));
+        assert_eq!(e.call(0x00ec_862c, &args![old, new]).i32(), 0);
+        assert_eq!(calls(&e, IMPORT_MOVE_FILE_A), vec![vec![old, new]]);
+        assert!(calls(&e, IMPORT_GET_LAST_ERROR).is_empty());
+        assert!(calls(&e, DOSMAPERR).is_empty());
+        moved.set(0);
+        assert_eq!(e.call(0x00ec_862c, &args![old, new]).i32(), -1);
+        assert_eq!(calls(&e, DOSMAPERR), vec![vec![5]]);
+        // A failure with no error code answers 0 without `_dosmaperr`.
+        e.register(IMPORT_GET_LAST_ERROR, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ec_862c, &args![old, new]).i32(), 0);
+        assert_eq!(calls(&e, DOSMAPERR).len(), 1);
+    }
+
+    #[test]
+    fn the_fgets_and_fclose_finally_blocks_unlock_the_stream() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(UNLOCK_FILE, |_, _| Ret::default());
+        e.call(0x00ec_c244, &args![0x0123_0000u32]);
+        e.call(0x00ec_997b, &args![0x0456_0000u32]);
+        assert_eq!(
+            calls(&e, UNLOCK_FILE),
+            vec![vec![0x0123_0000], vec![0x0456_0000]]
+        );
     }
 }
