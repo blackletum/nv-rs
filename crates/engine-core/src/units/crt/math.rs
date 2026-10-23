@@ -828,6 +828,26 @@ pub fn fn_00ed454f(e: &mut Engine) -> u32 {
     0
 }
 
+/// `__sse2_available` (`01270a6c`; the flag `crt/fpinit.rs`'s `_control87` and
+/// `___set_fpsr_sse2` read).
+const SSE2_AVAILABLE_FLAG: u32 = 0x0127_0a6c;
+
+// Translated from 00ed1989 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The C initializer that sets `__sse2_available` (`01270a6c`; Ghidra has no function here: the
+/// entry of `__cinit`'s `_initterm_e` table at `010113d4`, before `00ed454f`'s), no arguments:
+/// stores `__get_sse2_info()`'s answer (`00ed1927`) there and answers 0 (`XOR EAX, EAX`), so
+/// `_initterm_e` goes on. `__cinit` runs `_fpmath` (`_FPinit`, `__setdefaultprecision`) before
+/// the table, so the start-up's `_controlfp_s` still sees the flag clear; from here on
+/// `_control87` (and `_controlfp`, `_controlfp_s` through it) also reads `MXCSR` and answers its
+/// state with the x87's (`_EM_AMBIGUOUS` when they differ in the shared bits), and a change of
+/// its SSE bits goes to `___set_fpsr_sse2`, which loads `MXCSR` (`fpinit.rs`: only `0x1f80` is
+/// modelled).
+pub fn fn_00ed1989(e: &mut Engine) -> u32 {
+    let available = e.call(GET_SSE2_INFO, &args![]).u32();
+    e.set_global(SSE2_AVAILABLE_FLAG, available);
+    0
+}
+
 // Translated from 00ed1927 (disassembled, FalloutNV.exe 1.4.0.525)
 /// `__get_sse2_info` (Ghidra's label), cdecl, no arguments: 1 when the processor has SSE2 and
 /// the operating system runs SSE instructions, else 0. The frame's words (`EBP-0x18..EBP-4`)
@@ -5038,6 +5058,7 @@ pub fn ci_atan2(e: &mut Engine, y: f64, x: f64) -> f64 {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ed_454f, fn_00ed454f() -> u32),
+        entry!(0x00ed_1989, fn_00ed1989() -> u32),
         entry!(0x00ed_1927, fn_00ed1927() -> u32),
         entry!(0x00ed_18d7, fn_00ed18d7() -> u32),
         entry!(0x00ec_6940, floor(f64) -> f64),
@@ -9648,5 +9669,18 @@ mod tests_bodies {
             let code = libm.borrow().last().map_or(0, |w| w[3]);
             assert_eq!((got, code), (want, error), "exp({x:016x})");
         }
+    }
+
+    #[test]
+    fn the_c_initializer_stores_the_sse2_answer_in_sse2_available() {
+        let mut e = Engine::new();
+        e.register(GET_SSE2_INFO, |_, _| 1u32.into_ret());
+        e.map(SSE2_AVAILABLE_FLAG, 4);
+        e.set_global(SSE2_AVAILABLE_FLAG, 7u32);
+        assert_eq!(e.call(0x00ed_1989, &args![]).u32(), 0);
+        assert_eq!(e.global::<u32>(SSE2_AVAILABLE_FLAG), 1);
+        e.register(GET_SSE2_INFO, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ed_1989, &args![]).u32(), 0);
+        assert_eq!(e.global::<u32>(SSE2_AVAILABLE_FLAG), 0);
     }
 }
