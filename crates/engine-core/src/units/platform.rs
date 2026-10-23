@@ -1884,6 +1884,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, d3dx::matrix_multiply(Ptr, Ptr, Ptr) -> u32).1,
         ),
         (
+            "d3dx9_38.dll",
+            "D3DXGetImageInfoFromFileInMemory",
+            entry!(0, d3dx::get_image_info_from_file_in_memory(Ptr, u32, Ptr) -> u32).1,
+        ),
+        (
             "d3d9.dll",
             "D3DPERF_SetOptions",
             entry!(0, d3dperf_set_options(u32)).1,

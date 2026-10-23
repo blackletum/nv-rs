@@ -14,6 +14,7 @@
 //! written are the values before the call).
 mod analyze;
 mod functions;
+mod image;
 
 use std::ffi::c_void;
 use std::io::Write;
@@ -206,6 +207,7 @@ fn main() {
                 assert!(!p.is_null());
                 matrix_multiply(&mut o, std::mem::transmute(p), count);
             }
+            "image-info" => image::image_info(&mut o, module, &args[2]),
             "functions" => {
                 let name = args.get(3).map(String::as_str).unwrap_or("all");
                 functions::measure(&mut o, module, name, count);
