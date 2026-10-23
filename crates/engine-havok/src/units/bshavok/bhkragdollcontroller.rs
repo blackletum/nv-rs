@@ -6072,17 +6072,18 @@ pub fn fn_00c74c90(e: &mut Engine, this: Ptr, out: Ptr) {
 // Translated from 00c75580 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Thiscall with one byte stack word `enable` (no engine-map name). The byte at `+0xb3` becomes
 /// 1 when the byte at `+0x43` is 0, the byte at `+0xb1` is set and `enable` is non-zero, 0 when
-/// `+0x43` is 0 otherwise, and stays when `+0x43` is set. When `enable` is zero the two
+/// `+0x43` is 0 otherwise, and stays as it is (the byte written back unchanged) when `+0x43`
+/// is set. When `enable` is zero the two
 /// quaternions at `+0x120` and `+0x170` are set to the identity vector at `010c71b0` and the
 /// bytes at `+0x180` and `+0x130` to 1.
 pub fn fn_00c75580(e: &mut Engine, this: Ptr, enable: u8) {
     let base = this.addr();
     let flag = if e.mem.u8(base + 0x43) == 0 {
-        e.mem.u8(base + 0xb1) != 0 && enable != 0
+        u8::from(e.mem.u8(base + 0xb1) != 0 && enable != 0)
     } else {
-        e.mem.u8(base + 0xb3) != 0
+        e.mem.u8(base + 0xb3)
     };
-    e.mem.set_u8(base + 0xb3, flag as u8);
+    e.mem.set_u8(base + 0xb3, flag);
     if enable == 0 {
         let identity = load4(e, 0x010c_71b0);
         store4(e, base + 0x120, identity);
