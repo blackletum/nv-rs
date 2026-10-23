@@ -968,13 +968,13 @@ pub fn fn_00be20b0(e: &mut Engine, _this: Ptr, block: Ptr) {
 }
 
 // Translated from 00be20e0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with two words: a
-/// block (first word a property, +0x10 another) and a flag (low byte). `00b984d0(3, 0)` when
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable slot (`thiscall`, `RET 8`;
+/// `this` is not read) with two words: a block (first word a property, +0x10 another) and a flag (low byte). `00b984d0(3, 0)` when
 /// the second property's flags (+0x18) have both bits 10 and 11 or the pass type being rendered
 /// (`011f91e4`) is 0x56 or 0x57, else `00b984d0(1, 0)`. Then `00b97ed0` with the block's argument
 /// word whose low byte the exe has replaced (0, or with the flag and a first property, bit 9 of
 /// that property's flags) and 0: the upper three bytes stay those of the block address.
-pub fn fn_00be20e0(e: &mut Engine, block: Ptr, flag: bool) {
+pub fn fn_00be20e0(e: &mut Engine, _this: Ptr, block: Ptr, flag: bool) {
     let block = block.addr();
     let mut set = false;
     let pass_type = e.global::<u32>(RENDERING_PASS_TYPE_011F91E4);
@@ -1078,7 +1078,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00be_1f90, fn_00be1f90(Ptr, u32)),
         entry!(0x00be_1ff0, fn_00be1ff0(Ptr, Ptr)),
         entry!(0x00be_20b0, fn_00be20b0(Ptr, Ptr)),
-        entry!(0x00be_20e0, fn_00be20e0(Ptr, bool)),
+        entry!(0x00be_20e0, fn_00be20e0(Ptr, Ptr, bool)),
         entry!(0x00be_2170, fn_00be2170()),
         entry!(0x00be_21b0, fn_00be21b0()),
     ]
@@ -2022,7 +2022,7 @@ mod b054_tests {
         e.mem.set_u32(block, first);
         e.mem.set_u32(block + 0x10, second);
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x10u32);
-        e.call(0x00be_20e0, &args![block, 1u32]);
+        e.call(0x00be_20e0, &args![0u32, block, 1u32]);
         assert_eq!(calls(&e, BATCH_STATE_00B984D0), vec![vec![3, 0]]);
         assert_eq!(
             calls(&e, RENDER_STATE_00B97ED0),
@@ -2030,7 +2030,7 @@ mod b054_tests {
         );
         // Neither bit pair nor pass type: 1; without the flag the low byte is 0.
         e.mem.set_u16(second + 0x18, 0x0800);
-        e.call(0x00be_20e0, &args![block, 0x100u32]);
+        e.call(0x00be_20e0, &args![0u32, block, 0x100u32]);
         assert_eq!(calls(&e, BATCH_STATE_00B984D0)[1], vec![1, 0]);
         assert_eq!(
             calls(&e, RENDER_STATE_00B97ED0)[1],
@@ -2038,7 +2038,7 @@ mod b054_tests {
         );
         // Pass type 0x57 sets it; a null block passes 0.
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x57u32);
-        e.call(0x00be_20e0, &args![0u32, 1u32]);
+        e.call(0x00be_20e0, &args![0u32, 0u32, 1u32]);
         assert_eq!(calls(&e, BATCH_STATE_00B984D0)[2], vec![3, 0]);
         assert_eq!(calls(&e, RENDER_STATE_00B97ED0)[2], vec![0, 0]);
     }
