@@ -33,6 +33,7 @@ pub use engine_bs::units::bsmenu;
 pub use engine_bs::units::bsmovie;
 pub use engine_bs::units::bsshader;
 pub use engine_bs::units::bssystem;
+pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
 pub use engine_gamebryo::units::nianimation;
