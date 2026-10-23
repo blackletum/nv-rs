@@ -14,6 +14,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod cvt;
 pub mod fpinit;
 pub mod lowio;
 pub mod math;
@@ -6983,6 +6984,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_9df9, get_printf_count_output() -> u32),
         (0x00ed_2f21, output_l_entry as AbiFn),
     ];
+    table.extend(cvt::funcs());
     table.extend(fpinit::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
