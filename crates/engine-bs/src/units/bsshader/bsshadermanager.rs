@@ -293,7 +293,8 @@ pub fn fn_00b57420(e: &mut Engine) {
     }
     e.set_global(GLOBAL_011FFE2C, 0u32);
     e.set_global(GLOBAL_011FFE30, 0u32);
-    e.call(0x00ba_3720, &args![]);
+    // ECX at 00b57750 is the rendering system 01200088 (MOV ECX at 00b576d1), CreateThreads's `this`.
+    e.call(0x00ba_3720, &args![0x0120_0088u32]);
     e.call(0x00b9_7c10, &args![]);
     let copied = e.global::<u32>(GLOBAL_011F94F0);
     let count = e.global::<u32>(ACCUMULATOR_COUNT_011F916C);

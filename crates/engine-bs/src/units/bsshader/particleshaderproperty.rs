@@ -1122,7 +1122,9 @@ pub fn particle_shader_property_collect_geometry_recursive(
     }
     let name = e.mem.u32(node + 8);
     if name != e.mem.u32(NULL_NAME_0109B220)
-        && e.call(STRNCMP, &args![name, BIP_PREFIX_010205AC, 3u32]).u32() == 0
+        && e.call(STRNCMP, &args![name, BIP_PREFIX_010205AC, 3u32])
+            .u32()
+            == 0
     {
         return;
     }

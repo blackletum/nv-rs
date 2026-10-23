@@ -17,16 +17,25 @@ const THREAD_CODE_00BA3190: u32 = 0x00ba_3190;
 const THREAD_NAME: u32 = 0x010b_7f84;
 
 // Translated from 00ba3720 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `MTRenderingSystem::CreateThreads` (Xbox PDB). No arguments: when the byte at `011f94b4`
-/// is not 0, calls `MTRenderingSystem::AddThread` (`00ba2e00`) with 1, the word at
+/// `MTRenderingSystem::CreateThreads` (Xbox PDB). No stack arguments; it never touches ECX, so the
+/// caller's ECX (the rendering system `01200088` at its one call, 00b57750) reaches
+/// `MTRenderingSystem::AddThread` (`00ba2e00`) as its `this`. When the byte at `011f94b4` is not
+/// 0, calls AddThread with 1, the word at
 /// `01200080`, the code address `00ba3190`, the name `"Rendering Task Thread 2"`
 /// (`010b7f84`) and 0x20000.
-pub fn mt_rendering_system_create_threads(e: &mut Engine) {
+pub fn mt_rendering_system_create_threads(e: &mut Engine, this: Ptr) {
     if e.global::<u8>(SECOND_THREAD_ENABLED_011F94B4) != 0 {
         let word = e.global::<u32>(THREAD_ARGUMENT_01200080);
         e.call(
             ADD_THREAD,
-            &args![1u32, word, THREAD_CODE_00BA3190, THREAD_NAME, 0x20000u32],
+            &args![
+                this.addr(),
+                1u32,
+                word,
+                THREAD_CODE_00BA3190,
+                THREAD_NAME,
+                0x20000u32
+            ],
         );
     }
 }
@@ -557,7 +566,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00ba_2ff0, fn_00ba2ff0(Ptr, u8) -> Ptr),
         entry!(0x00ba_3190, fn_00ba3190()),
-        entry!(0x00ba_3720, mt_rendering_system_create_threads()),
+        entry!(0x00ba_3720, mt_rendering_system_create_threads(Ptr)),
         entry!(0x00ba_2f30, fn_00ba2f30(Ptr)),
         entry!(0x00ba_2fa0, fn_00ba2fa0(Ptr)),
         entry!(0x00ba_3030, fn_00ba3030(Ptr)),
@@ -598,14 +607,21 @@ mod tests {
         e.set_global(THREAD_ARGUMENT_01200080, 0x4242u32);
         e.register(ADD_THREAD, |_, _| Ret::default());
         e.call_log = Some(vec![]);
-        e.call(0x00ba_3720, &args![]);
+        e.call(0x00ba_3720, &args![RENDERING_SYSTEM_01200088]);
         assert!(add_thread_calls(&e).is_empty());
 
         e.set_global(SECOND_THREAD_ENABLED_011F94B4, 1u8);
-        e.call(0x00ba_3720, &args![]);
+        e.call(0x00ba_3720, &args![RENDERING_SYSTEM_01200088]);
         assert_eq!(
             add_thread_calls(&e),
-            vec![vec![1, 0x4242, 0x00ba_3190, 0x010b_7f84, 0x20000]]
+            vec![vec![
+                RENDERING_SYSTEM_01200088,
+                1,
+                0x4242,
+                0x00ba_3190,
+                0x010b_7f84,
+                0x20000
+            ]]
         );
     }
 }
