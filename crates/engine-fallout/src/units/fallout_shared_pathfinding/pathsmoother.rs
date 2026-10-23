@@ -27,9 +27,12 @@ const BUFFER_REALLOCATE_0042F5D0: u32 = 0x0042_f5d0;
 // Translated from 006f2e20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The `BSSimpleArray<PathSmoother::AvoidNode,1024>` instance's buffer
 /// reallocation (thiscall, `RET 8`; `this` unused): `0042f5d0(buffer,
-/// count * 16)`, the elements being 16 bytes. Returns nothing.
-pub fn fn_006f2e20(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) {
-    e.call(BUFFER_REALLOCATE_0042F5D0, &args![buffer, count << 4]);
+/// count * 16)`, the elements being 16 bytes. Answers the new buffer (the exe
+/// ends on that call and leaves its `EAX`; `_Reallocate` answers the buffer
+/// in the Xbox PDB).
+pub fn fn_006f2e20(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
+    e.call(BUFFER_REALLOCATE_0042F5D0, &args![buffer, count << 4])
+        .u32()
 }
 
 /// The vtables of `BSScrapArray<PathSmoother::AvoidNode,1024>` (`0106d878`)
@@ -429,7 +432,7 @@ pub fn fn_006f31c0(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x006f_2e00, fn_006f2e00(Ptr)),
-        entry!(0x006f_2e20, fn_006f2e20(Ptr, u32, u32)),
+        entry!(0x006f_2e20, fn_006f2e20(Ptr, u32, u32) -> u32),
         entry!(0x006e_d220, path_smoother_destructor(Ptr)),
         entry!(0x006e_d4e0, fn_006ed4e0(Ptr, u32) -> Ptr),
         entry!(
@@ -785,5 +788,16 @@ mod array_destructor_tests {
         e.register(ARRAY_CHECK_0076B610, |_, _| 1u32.into_ret());
         let (_, log) = run(&mut e, 0x006e_d220, &[this]);
         assert!(!log.iter().any(|(a, _)| *a == MOVE_ITEMS_009A4320));
+    }
+
+    #[test]
+    fn fn_006f2e20_answers_the_new_buffer() {
+        let mut e = Engine::new();
+        e.register(BUFFER_REALLOCATE_0042F5D0, |_, _| 0x0abd_0000u32.into_ret());
+        assert_eq!(
+            e.call(0x006f_2e20, &args![0x1234u32, 0x0abc_0000u32, 5u32])
+                .u32(),
+            0x0abd_0000
+        );
     }
 }

@@ -354,4 +354,11 @@ mod tests {
         e.call(0x0044_ac20, &args![a, a + 4]);
         assert_eq!(e.mem.u32(a), 0xdead_beef);
     }
+
+    #[test]
+    fn forwarder_answers_the_allocation() {
+        let mut e = engine();
+        e.register(FORWARD_TARGET, |_, _| 0x6000u32.into_ret());
+        assert_eq!(e.call(0x0044_abd0, &args![0x10u32, 0x77u32]).u32(), 0x6000);
+    }
 }

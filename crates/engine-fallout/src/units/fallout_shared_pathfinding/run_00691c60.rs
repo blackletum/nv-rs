@@ -22,9 +22,12 @@ pub fn fn_00691c60(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
 
 // Translated from 00691d20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `0042f5d0` with an address and 12 times a count (`thiscall`, `ECX` not
-/// read; `RET 8`). The engine map gives it no name.
-pub fn fn_00691d20(e: &mut Engine, _unused_0: Ptr, address: u32, count: u32) {
-    e.call(SIZED_0042F5D0, &args![address, count.wrapping_mul(0xc)]);
+/// read; `RET 8`), answering the block it gives (the exe ends on that call
+/// and leaves its `EAX`): a `BSSimpleArray` `_Reallocate` (vtable slot
+/// `+0xC`, Xbox PDB). The engine map gives it no name.
+pub fn fn_00691d20(e: &mut Engine, _unused_0: Ptr, address: u32, count: u32) -> u32 {
+    e.call(SIZED_0042F5D0, &args![address, count.wrapping_mul(0xc)])
+        .u32()
 }
 
 /// `0042f5a0` (`cdecl`, two words; no engine-map name), `0072ba80` (`thiscall`, two words:
@@ -64,7 +67,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0069_1c90, fn_00691c90(Ptr, u32, u32)),
         entry!(0x0069_1c60, fn_00691c60(Ptr, Ptr) -> Ptr),
-        entry!(0x0069_1d20, fn_00691d20(Ptr, u32, u32)),
+        entry!(0x0069_1d20, fn_00691d20(Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -140,6 +143,16 @@ mod tests {
             ]
         );
         assert_eq!(e.mem.u32(this + 8), 5);
+    }
+
+    #[test]
+    fn at_00691d20_answers_the_new_block() {
+        let mut e = Engine::new();
+        e.register(SIZED_0042F5D0, |_, a| (a[0] + a[1]).into_ret());
+        assert_eq!(
+            e.call(0x0069_1d20, &args![0u32, 0x5000u32, 3u32]).u32(),
+            0x5024
+        );
     }
 }
 
