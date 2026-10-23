@@ -18,6 +18,7 @@ pub mod cvt;
 pub mod fpinit;
 pub mod lowio;
 pub mod math;
+pub mod rtti;
 pub mod runtime;
 pub mod scanf;
 pub mod search;
@@ -3290,68 +3291,6 @@ fn doexit_entry(e: &mut Engine, words: &[u32]) -> Ret {
 // Platform: replaces 00ec7c56 (the invalid-parameter path, LIBCMT)
 pub fn invalid_parameter_noinfo(_e: &mut Engine) {
     invalid_parameter("noinfo")
-}
-
-// ---- RTTI ------------------------------------------------------------------
-
-/// Whether two `TypeDescriptor`s are the same type: the same address or
-/// the same decorated name (MSVC compares names after the address).
-fn same_type(e: &Engine, a: u32, b: u32) -> bool {
-    a == b || (a != 0 && b != 0 && e.mem.cstr(a + 8) == e.mem.cstr(b + 8))
-}
-
-// Platform: replaces 00ec43fb (__RTDynamicCast, LIBCMT)
-/// `dynamic_cast` through the game's own RTTI in mapped memory: from the
-/// object's vtable to its complete object locator, then the class
-/// hierarchy's base class array. A target that is a base (or the complete
-/// type) gives the address of that subobject; otherwise null, or a panic
-/// for a reference cast (`std::bad_cast`). For a class with multiple
-/// inheritance MSVC also checks that the source and target subobjects are
-/// unambiguous and public; here the first visible match is taken, which is
-/// the same result for every cast that MSVC allows.
-pub fn rt_dynamic_cast(
-    e: &mut Engine,
-    inptr: Ptr,
-    _vf_delta: i32,
-    _src_type: Ptr,
-    target_type: Ptr,
-    is_reference: i32,
-) -> Ptr {
-    if inptr.is_null() {
-        return Ptr::NULL;
-    }
-    let vft = e.mem.u32(inptr.addr());
-    let col = e.mem.u32(vft.wrapping_sub(4));
-    let offset = e.mem.u32(col + 4);
-    let cd_offset = e.mem.u32(col + 8);
-    let mut complete = inptr.addr().wrapping_sub(offset);
-    if cd_offset != 0 {
-        complete = complete.wrapping_sub(e.mem.u32(inptr.addr().wrapping_sub(cd_offset)));
-    }
-    let chd = e.mem.u32(col + 16);
-    let count = e.mem.u32(chd + 8);
-    let bases = e.mem.u32(chd + 12);
-    for i in 0..count {
-        let bcd = e.mem.u32(bases + 4 * i);
-        let td = e.mem.u32(bcd);
-        let attributes = e.mem.u32(bcd + 20);
-        if attributes & 1 != 0 || !same_type(e, td, target_type.addr()) {
-            continue; // BCD_NOTVISIBLE, or another type
-        }
-        let mdisp = e.mem.i32(bcd + 8);
-        let pdisp = e.mem.i32(bcd + 12);
-        let vdisp = e.mem.i32(bcd + 16);
-        let mut off = mdisp;
-        if pdisp >= 0 {
-            let vbtable = e.mem.u32(complete.wrapping_add(pdisp as u32));
-            off += pdisp + e.mem.i32(vbtable.wrapping_add(vdisp as u32));
-        }
-        return Ptr::new(complete.wrapping_add(off as u32));
-    }
-    if is_reference != 0 {
-        panic!("std::bad_cast from {:08x}", inptr.addr());
-    }
-    Ptr::NULL
 }
 
 // ---- The physics step's remaining runtime functions ----------------------------------------
@@ -7013,7 +6952,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x00ec623a, sprintf_entry as AbiFn),
         (0x00eca38d, snprintf_entry as AbiFn),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
-        entry!(0x00ec43fb, rt_dynamic_cast(Ptr, i32, Ptr, Ptr, i32) -> Ptr),
         entry!(0x00ec9e10, ceil(f64) -> f64),
         entry!(0x00ec605d, fn_00ec605d(bool, f64, u32, u32) -> f64),
         entry!(0x00ec85e3, errno() -> Ptr),
@@ -7077,6 +7015,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(fpinit::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
+    table.extend(rtti::funcs());
     table.extend(runtime::funcs());
     table.extend(scanf::funcs());
     table.extend(search::funcs());
@@ -7274,52 +7213,6 @@ mod tests {
         let q: Ptr = e.call_as(0x0040_1000, &args![12u32]);
         e.call(0x0040_1460, &args![q, p, 12u32]);
         assert_eq!(e.call(0x00ec_4835, &args![p, q, 12u32]).i32(), 0);
-    }
-
-    /// A class `D : B` with RTTI laid out as MSVC does (COL, CHD, base
-    /// class array with D then B), and a `D` object.
-    #[test]
-    fn dynamic_cast_to_a_base_and_back() {
-        let mut e = Engine::new();
-        let r = e.mem.alloc(0x200);
-        let (td_d, td_b, td_x) = (r, r + 0x20, r + 0x40);
-        e.mem.set_cstr(td_d + 8, b".?AVD@@");
-        e.mem.set_cstr(td_b + 8, b".?AVB@@");
-        e.mem.set_cstr(td_x + 8, b".?AVX@@");
-        let (bcd_d, bcd_b) = (r + 0x60, r + 0x80);
-        for (bcd, td) in [(bcd_d, td_d), (bcd_b, td_b)] {
-            e.mem.set_u32(bcd, td);
-            e.mem.set_i32(bcd + 12, -1); // pdisp: not a virtual base
-        }
-        let array = r + 0xa0;
-        e.mem.set_u32(array, bcd_d);
-        e.mem.set_u32(array + 4, bcd_b);
-        let chd = r + 0xb0;
-        e.mem.set_u32(chd + 8, 2);
-        e.mem.set_u32(chd + 12, array);
-        let col = r + 0xc0;
-        e.mem.set_u32(col + 12, td_d);
-        e.mem.set_u32(col + 16, chd);
-        let vft = r + 0xe0;
-        e.mem.set_u32(vft - 4, col);
-        let obj = e.mem.alloc(8);
-        e.mem.set_u32(obj, vft);
-        let cast = |e: &mut Engine, to: u32| -> u32 {
-            e.call(
-                0x00ec_43fb,
-                &args![
-                    Ptr::<()>::new(obj),
-                    0i32,
-                    Ptr::<()>::new(td_b),
-                    Ptr::<()>::new(to),
-                    0i32
-                ],
-            )
-            .u32()
-        };
-        assert_eq!(cast(&mut e, td_d), obj);
-        assert_eq!(cast(&mut e, td_b), obj);
-        assert_eq!(cast(&mut e, td_x), 0);
     }
 
     /// `vsprintf(format, words)` through the registered entry.
