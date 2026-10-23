@@ -938,6 +938,9 @@ pub struct Kernel {
     pub sound: dsound::Sound,
     /// The Direct3D 9 objects ([`d3d9`]).
     pub graphics: d3d9::Graphics,
+    /// The sizes the CRT's heap blocks were asked for (`malloc`, `realloc`, `__calloc_crt` on
+    /// the platform allocator), as `HeapSize` answers them for `_msize` (`crate::units::crt`).
+    pub crt_block_sizes: std::collections::HashMap<u32, u32>,
     /// Window classes, windows, the message queue and the command line ([`window`]).
     pub windows: window::Windows,
     /// The files the game made in this run ([`files`]).

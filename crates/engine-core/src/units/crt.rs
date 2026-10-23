@@ -88,19 +88,84 @@ pub fn memset_wrapper(e: &mut Engine, dst: Ptr, c: i32, n: u32) -> Ptr {
     e.call_as(0x00ec_61c0, &args![dst, c, n])
 }
 
+/// A block from the platform allocator for the CRT's heap, its asked-for size kept for `_msize`
+/// (`HeapSize` answers the size `HeapAlloc` was asked for; 0 is asked as 1, as the exe's
+/// `malloc` body does on the system heap).
+fn crt_alloc(e: &mut Engine, n: u32) -> u32 {
+    let block = e.mem.alloc(n);
+    e.kernel.crt_block_sizes.insert(block, n.max(1));
+    block
+}
+
 // Platform: replaces 00ed0cdf (malloc, LIBCMT)
 pub fn malloc(e: &mut Engine, n: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(n))
+    Ptr::new(crt_alloc(e, n))
 }
 
 // Platform: replaces 00ecd291 (free, LIBCMT)
 pub fn free(e: &mut Engine, p: Ptr) {
+    e.kernel.crt_block_sizes.remove(&p.addr());
     e.mem.free(p.addr())
 }
 
 // Platform: replaces 00ed0d24 (__calloc_crt, LIBCMT)
 pub fn calloc_crt(e: &mut Engine, count: u32, size: u32) -> Ptr {
-    Ptr::new(e.mem.alloc(count.saturating_mul(size)))
+    Ptr::new(crt_alloc(e, count.saturating_mul(size)))
+}
+
+/// `_callnewh` (`00ede20b`, the call at 00ecd137 in the exe's `realloc`).
+const CALLNEWH: u32 = CALL_NEW_HANDLER;
+
+// Platform: replaces 00eccf5d (realloc, LIBCMT)
+/// `realloc(block, size)` on the platform allocator, with the exe's observable edges (read from
+/// 00eccf5d): a null block is `malloc(size)`; size 0 frees the block and answers null; a size
+/// above 0xFFFFFFE0 calls the new handler (`__callnewh(size)`), sets `errno` `ENOMEM` (0xc) and
+/// answers null, the block kept. Otherwise a block of the new size holds the old one's bytes up
+/// to the smaller size and replaces it (the system heap's `HeapReAlloc`, the path the exe takes
+/// with `__active_heap` 1; the allocator never fails, so the exe's retry through `_newmode` and
+/// `__callnewh` and its `errno` from `GetLastError` are not reached). A block the CRT's heap did
+/// not hand out is not provided.
+pub fn realloc(e: &mut Engine, block: Ptr, size: u32) -> Ptr {
+    if block.is_null() {
+        return malloc(e, size);
+    }
+    if size == 0 {
+        free(e, block);
+        return Ptr::new(0);
+    }
+    if size > 0xffff_ffe0 {
+        e.call(CALLNEWH, &[size]);
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0xc);
+        return Ptr::new(0);
+    }
+    let Some(old) = e.kernel.crt_block_sizes.get(&block.addr()).copied() else {
+        panic!("realloc of {:08x}, which the CRT's heap did not hand out: not provided", block.addr());
+    };
+    let new = crt_alloc(e, size);
+    let bytes = e.mem.bytes(block.addr(), old.min(size));
+    e.mem.write(new, &bytes);
+    free(e, block);
+    Ptr::new(new)
+}
+
+// Platform: replaces 00ecd31f (_msize, LIBCMT)
+/// `_msize(block)` on the platform allocator, with the exe's edges (read from 00ecd31f): a null
+/// block sets `errno` `EINVAL` (0x16), calls the invalid-parameter handler (five zeros) and
+/// answers -1; otherwise the block's size as `HeapSize` gives it on the system heap (the path
+/// the exe takes with `__active_heap` 1): the size it was asked for. A block the CRT's heap did
+/// not hand out is not provided.
+pub fn msize(e: &mut Engine, block: Ptr) -> u32 {
+    if block.is_null() {
+        let slot = errno(e);
+        e.mem.set_u32(slot.addr(), 0x16);
+        e.call(0x00ec_7c30, &[0, 0, 0, 0, 0]);
+        return 0xffff_ffff;
+    }
+    match e.kernel.crt_block_sizes.get(&block.addr()) {
+        Some(size) => *size,
+        None => panic!("_msize of {:08x}, which the CRT's heap did not hand out: not provided", block.addr()),
+    }
 }
 
 // ---- Strings --------------------------------------------------------------
@@ -6845,6 +6910,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec3bf0, byteswap_uint64(u64) -> u64),
         entry!(0x00ed0cdf, malloc(u32) -> Ptr),
         entry!(0x00ecd291, free(Ptr)),
+        entry!(0x00ec_cf5d, realloc(Ptr, u32) -> Ptr),
+        entry!(0x00ec_d31f, msize(Ptr) -> u32),
         entry!(0x00ed0d24, calloc_crt(u32, u32) -> Ptr),
         entry!(0x00ec6130, strlen(Ptr) -> u32),
         entry!(0x00ec6370, strcpy(Ptr, Ptr) -> Ptr),
@@ -11213,5 +11280,51 @@ mod tests_gcvt_and_iterator {
         order.borrow_mut().clear();
         e.call(0x00ec_5fce, &args![0x2000u32, 0x10u32, 0i32, 0x7f00_0300u32]);
         assert!(order.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_realloc_msize {
+    use super::*;
+
+    #[test]
+    fn realloc_keeps_the_bytes_and_follows_the_exe_s_edges() {
+        let mut e = Engine::new();
+        let thread_data = e.mem.alloc(0x80);
+        e.register_double(GETPTD_NOEXIT, move |_, _| thread_data.into_ret());
+        let a = e.call(0x00ed0cdf, &args![6u32]).u32();
+        e.mem.write(a, b"abcdef");
+        assert_eq!(e.call(0x00ec_d31f, &args![a]).u32(), 6);
+        let b = e.call(0x00ec_cf5d, &args![a, 3u32]).u32();
+        assert_eq!(e.mem.bytes(b, 3), b"abc");
+        assert_eq!(e.call(0x00ec_d31f, &args![b]).u32(), 3);
+        let c = e.call(0x00ec_cf5d, &args![b, 0x40u32]).u32();
+        assert_eq!(e.mem.bytes(c, 4), b"abc\0");
+        // A null block is malloc; size 0 frees and answers null.
+        let d = e.call(0x00ec_cf5d, &args![0u32, 8u32]).u32();
+        assert_ne!(d, 0);
+        assert_eq!(e.call(0x00ec_cf5d, &args![d, 0u32]).u32(), 0);
+        assert!(!e.kernel.crt_block_sizes.contains_key(&d));
+        // Too big: the new handler, ENOMEM, null, the block kept.
+        let called = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen = called.clone();
+        e.register_double(CALL_NEW_HANDLER, move |_, a| {
+            seen.set(a[0]);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00ec_cf5d, &args![c, 0xffff_fff0u32]).u32(), 0);
+        assert_eq!(called.get(), 0xffff_fff0);
+        assert_eq!(errno_value(&mut e), 0xc);
+        assert_eq!(e.call(0x00ec_d31f, &args![c]).u32(), 0x40);
+    }
+
+    #[test]
+    fn msize_of_null_is_einval_and_minus_one() {
+        let mut e = Engine::new();
+        let thread_data = e.mem.alloc(0x80);
+        e.register_double(GETPTD_NOEXIT, move |_, _| thread_data.into_ret());
+        e.register(0x00ec_7c30, |_, _| Ret::default());
+        assert_eq!(e.call(0x00ec_d31f, &args![0u32]).u32(), 0xffff_ffff);
+        assert_eq!(errno_value(&mut e), 0x16);
     }
 }
