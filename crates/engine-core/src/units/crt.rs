@@ -20,6 +20,7 @@ pub mod scanf;
 pub mod startup;
 pub mod stat;
 pub mod stdio;
+pub mod string;
 pub mod time;
 
 // ---- Memory ---------------------------------------------------------------
@@ -7055,6 +7056,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(lowio::funcs());
     table.extend(scanf::funcs());
     table.extend(stdio::funcs());
+    table.extend(string::funcs());
     table.extend(startup::funcs());
     table.extend(stat::funcs());
     table.extend(time::funcs());
