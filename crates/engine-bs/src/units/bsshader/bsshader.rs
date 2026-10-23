@@ -880,7 +880,9 @@ const PASS_GETTER_00E7F7C0: u32 = 0x00e7_f7c0;
 /// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word it
 /// does not read. Takes the object `00e7f7c0` answers for the current pass (`0126f74c`); hands
 /// its vtable slot +0x8c what the pass's +0x5c answers from slot +0x84 (with 0); then, when the
-/// pass's +0x44 is set, its slot +0x7c with what that answers from slot +0x7c (with 0). Each
+/// pass's +0x44 is set, its slot +0x7c with what that answers from slot +0x7c (with 0). The
+/// getters take no stack word (`00e95d50`, plain `RET`): each pushed 0 stays on the stack as the
+/// object's second word (`00e90e00`/`00e88870`, `RET 8`). Each
 /// slot of the object is read before the call that feeds it, as in the exe.
 pub fn fn_00be1f90(e: &mut Engine, _unused_0: u32) {
     let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
@@ -888,16 +890,16 @@ pub fn fn_00be1f90(e: &mut Engine, _unused_0: u32) {
     let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
     let source = e.mem.u32(pass + 0x5c);
     let vtable = e.mem.u32(object);
-    let value = e.vcall(source, 0x84, &args![0u32]).u32();
+    let value = e.vcall(source, 0x84, &args![]).u32();
     let target = e.mem.u32(vtable + 0x8c);
-    e.call(target, &args![object, value]);
+    e.call(target, &args![object, value, 0u32]);
     let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
     let source = e.mem.u32(pass + 0x44);
     if source != 0 {
         let vtable = e.mem.u32(object);
-        let value = e.vcall(source, 0x7c, &args![0u32]).u32();
+        let value = e.vcall(source, 0x7c, &args![]).u32();
         let target = e.mem.u32(vtable + 0x7c);
-        e.call(target, &args![object, value]);
+        e.call(target, &args![object, value, 0u32]);
     }
 }
 
@@ -1959,13 +1961,13 @@ mod b054_tests {
         e.set_global(CURRENT_PASS_0126F74C, pass);
         e.call(0x00be_1f90, &args![0u32]);
         assert_eq!(calls(&e, PASS_GETTER_00E7F7C0), vec![vec![pass]]);
-        assert_eq!(calls(&e, 0x0e13_0084), vec![vec![source, 0]]);
-        assert_eq!(calls(&e, 0x0e11_008c), vec![vec![object, 0x84]]);
+        assert_eq!(calls(&e, 0x0e13_0084), vec![vec![source]]);
+        assert_eq!(calls(&e, 0x0e11_008c), vec![vec![object, 0x84, 0]]);
         assert!(calls(&e, 0x0e11_007c).is_empty());
         e.mem.set_u32(pass + 0x44, source);
         e.call(0x00be_1f90, &args![0u32]);
-        assert_eq!(calls(&e, 0x0e13_007c), vec![vec![source, 0]]);
-        assert_eq!(calls(&e, 0x0e11_007c), vec![vec![object, 0x7c]]);
+        assert_eq!(calls(&e, 0x0e13_007c), vec![vec![source]]);
+        assert_eq!(calls(&e, 0x0e11_007c), vec![vec![object, 0x7c, 0]]);
     }
 
     #[test]
