@@ -877,14 +877,14 @@ pub fn bs_shader_destructor(e: &mut Engine, this: Ptr) {
 const PASS_GETTER_00E7F7C0: u32 = 0x00e7_f7c0;
 
 // Translated from 00be1f90 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word it
-/// does not read. Takes the object `00e7f7c0` answers for the current pass (`0126f74c`); hands
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable slot (`thiscall`, `RET 4`):
+/// neither `this` nor its one word is read. Takes the object `00e7f7c0` answers for the current pass (`0126f74c`); hands
 /// its vtable slot +0x8c what the pass's +0x5c answers from slot +0x84 (with 0); then, when the
 /// pass's +0x44 is set, its slot +0x7c with what that answers from slot +0x7c (with 0). The
 /// getters take no stack word (`00e95d50`, plain `RET`): each pushed 0 stays on the stack as the
 /// object's second word (`00e90e00`/`00e88870`, `RET 8`). Each
 /// slot of the object is read before the call that feeds it, as in the exe.
-pub fn fn_00be1f90(e: &mut Engine, _unused_0: u32) {
+pub fn fn_00be1f90(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
     let object = e.call(PASS_GETTER_00E7F7C0, &args![pass]).u32();
     let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
@@ -912,7 +912,8 @@ const RENDER_STATE_00B97ED0: u32 = 0x00b9_7ed0;
 const BATCH_STATE_00B984D0: u32 = 0x00b9_84d0;
 
 // Translated from 00be1ff0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (unit `bsshader.cpp`), `stdcall` with one word: a block whose
+/// Unnamed in the engine map (unit `bsshader.cpp`), a vtable slot (`thiscall`, `RET 4`; `this`
+/// is not read) with one word: a block whose
 /// first word is a property with flags at +0x18 and whose +0xc is an object with a register
 /// word at +0x1c and two floats at +0x28 and +0x2c (the object counts as null when its +0x1c is
 /// -1). Unless both floats are at least 1.0 (or unordered) and bit 0 of the flags is clear:
@@ -920,7 +921,7 @@ const BATCH_STATE_00B984D0: u32 = 0x00b9_84d0;
 /// (with it clear); else `00b97fa0(0, 0)`. A null object's floats are read at its null address,
 /// as in the exe. The byte the exe stores from flag bit 9 into its own argument slot is never
 /// read.
-pub fn fn_00be1ff0(e: &mut Engine, block: Ptr) {
+pub fn fn_00be1ff0(e: &mut Engine, _this: Ptr, block: Ptr) {
     let block = block.addr();
     let property = e.mem.u32(block);
     let object = e.mem.u32(block + 0xc);
@@ -956,10 +957,10 @@ pub fn fn_00be1ff0(e: &mut Engine, block: Ptr) {
 }
 
 // Translated from 00be20b0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word: a
-/// block whose first word is a property. `00b97f20` with bits 10-12 of the property's flags
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable slot (`thiscall`, `RET 4`;
+/// `this` is not read) with one word: a block whose first word is a property. `00b97f20` with bits 10-12 of the property's flags
 /// (+0x18), its byte +0x1a and 0.
-pub fn fn_00be20b0(e: &mut Engine, block: Ptr) {
+pub fn fn_00be20b0(e: &mut Engine, _this: Ptr, block: Ptr) {
     let property = e.mem.u32(block.addr());
     let flags = u32::from(e.mem.u16(property + 0x18));
     let byte = u32::from(e.mem.u8(property + 0x1a));
@@ -1074,9 +1075,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00be_0eb0, fn_00be0eb0(u32)),
         entry!(0x00be_0ee0, fn_00be0ee0(u32)),
         entry!(0x00be_0f10, bs_shader_destructor(Ptr)),
-        entry!(0x00be_1f90, fn_00be1f90(u32)),
-        entry!(0x00be_1ff0, fn_00be1ff0(Ptr)),
-        entry!(0x00be_20b0, fn_00be20b0(Ptr)),
+        entry!(0x00be_1f90, fn_00be1f90(Ptr, u32)),
+        entry!(0x00be_1ff0, fn_00be1ff0(Ptr, Ptr)),
+        entry!(0x00be_20b0, fn_00be20b0(Ptr, Ptr)),
         entry!(0x00be_20e0, fn_00be20e0(Ptr, bool)),
         entry!(0x00be_2170, fn_00be2170()),
         entry!(0x00be_21b0, fn_00be21b0()),
@@ -1959,13 +1960,13 @@ mod b054_tests {
         let pass = e.mem.alloc(0x60);
         e.mem.set_u32(pass + 0x5c, source);
         e.set_global(CURRENT_PASS_0126F74C, pass);
-        e.call(0x00be_1f90, &args![0u32]);
+        e.call(0x00be_1f90, &args![0u32, 0u32]);
         assert_eq!(calls(&e, PASS_GETTER_00E7F7C0), vec![vec![pass]]);
         assert_eq!(calls(&e, 0x0e13_0084), vec![vec![source]]);
         assert_eq!(calls(&e, 0x0e11_008c), vec![vec![object, 0x84, 0]]);
         assert!(calls(&e, 0x0e11_007c).is_empty());
         e.mem.set_u32(pass + 0x44, source);
-        e.call(0x00be_1f90, &args![0u32]);
+        e.call(0x00be_1f90, &args![0u32, 0u32]);
         assert_eq!(calls(&e, 0x0e13_007c), vec![vec![source]]);
         assert_eq!(calls(&e, 0x0e11_007c), vec![vec![object, 0x7c, 0]]);
     }
@@ -1981,20 +1982,20 @@ mod b054_tests {
         let block = e.mem.alloc(0x10);
         e.mem.set_u32(block, property);
         e.mem.set_u32(block + 0xc, object);
-        e.call(0x00be_1ff0, &args![block]);
+        e.call(0x00be_1ff0, &args![0u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97FA0), vec![vec![0, 0]]);
         // A float below 1.0: on, with 6 and 7.
         e.mem.set_f32(object + 0x2c, 0.5);
-        e.call(0x00be_1ff0, &args![block]);
+        e.call(0x00be_1ff0, &args![0u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97FA0)[1], vec![1, 0]);
         assert_eq!(calls(&e, RENDER_STATE_00B97FF0), vec![vec![6, 7, 0]]);
         // NaN counts as at least 1.0; flag bit 0 gives the flag fields.
         e.mem.set_f32(object + 0x2c, f32::NAN);
         e.mem.set_u16(property + 0x18, 0x01e5);
-        e.call(0x00be_1ff0, &args![block]);
+        e.call(0x00be_1ff0, &args![0u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97FF0)[1], vec![2, 0xf, 0]);
         e.mem.set_u16(property + 0x18, 0);
-        e.call(0x00be_1ff0, &args![block]);
+        e.call(0x00be_1ff0, &args![0u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97FA0)[3], vec![0, 0]);
     }
 
@@ -2006,7 +2007,7 @@ mod b054_tests {
         e.mem.set_u8(property + 0x1a, 0x42);
         let block = e.mem.alloc(4);
         e.mem.set_u32(block, property);
-        e.call(0x00be_20b0, &args![block]);
+        e.call(0x00be_20b0, &args![0u32, block]);
         assert_eq!(calls(&e, RENDER_STATE_00B97F20), vec![vec![7, 0x42, 0]]);
     }
 
