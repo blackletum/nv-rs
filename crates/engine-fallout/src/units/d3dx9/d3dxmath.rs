@@ -80,6 +80,19 @@ pub fn fn_00ee6df8(e: &mut Engine, word_0: Ptr, word_1: Ptr, word_2: Ptr) -> Ptr
         .ptr()
 }
 
+/// The import slot `00ee6dfe` jumps through.
+const IMPORT_SLOT_00EE6DFE: u32 = 0x00fd_f410;
+
+// Translated from 00ee6dfe (disassembled, FalloutNV.exe 1.4.0.525)
+/// Import thunk `JMP dword ptr [0x00fdf410]` (the exe's import table names the slot
+/// `d3dx9_38.dll` `D3DXMatrixMultiplyTranspose`). stdcall: the 3 stack words go unchanged to
+/// the import and its result comes back. Argument count from the import (out and two
+/// matrices).
+pub fn fn_00ee6dfe(e: &mut Engine, word_0: Ptr, word_1: Ptr, word_2: Ptr) -> Ptr {
+    e.call(IMPORT_SLOT_00EE6DFE, &args![word_0, word_1, word_2])
+        .ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -89,6 +102,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ee_6dec, fn_00ee6dec(Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6df2, fn_00ee6df2(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6df8, fn_00ee6df8(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00ee_6dfe, fn_00ee6dfe(Ptr, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -116,6 +130,11 @@ mod tests {
     #[test]
     fn thunk_00ee6dd4() {
         import(0x00ee_6dd4, IMPORT_SLOT_00EE6DD4, &[0x1001, 0x1002]);
+    }
+
+    #[test]
+    fn thunk_00ee6dfe() {
+        import(0x00ee_6dfe, IMPORT_SLOT_00EE6DFE, &[0x1001, 0x1002, 0x1003]);
     }
 
     #[test]

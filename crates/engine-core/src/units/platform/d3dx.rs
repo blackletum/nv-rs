@@ -10,6 +10,8 @@
 //! Functions reached so far (import slots of FalloutNV.exe 1.4.0.525):
 //! - `D3DXMatrixMultiply` (slot `00fdf424`, thunk `00ee6de0`): first reached by
 //!   `Do_SetCameraData` `00e6c780` in `NiDX9Renderer::Initialize` `00e72e60`.
+//! - `D3DXMatrixMultiplyTranspose` (slot `00fdf410`, thunk `00ee6dfe`): first reached
+//!   by `00e83db0` < `00e826d0` < `00bca980` (a shader pass's set-up, in `00b994f0`).
 
 use crate::{Engine, Ptr};
 
@@ -95,6 +97,26 @@ pub fn matrix_multiply(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> u32 {
         e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
     }
     out.addr()
+}
+
+// Platform: replaces d3dx9_38.dll D3DXMatrixMultiplyTranspose (import)
+/// `D3DXMatrixMultiplyTranspose(out, m1, m2)` (stdcall): `out = transpose(m1 * m2)`, the
+/// product worked out exactly as [`multiply`] (all 4000 measured calls match bit for bit,
+/// `measure/d3dx-functions-2026-10-22.tsv`), both inputs read before `out` is written (measured
+/// with `out` = `m1`); answers `out`.
+pub fn matrix_multiply_transpose(e: &mut Engine, out: Ptr, m1: Ptr, m2: Ptr) -> u32 {
+    let a = matrix(e, m1.addr());
+    let b = matrix(e, m2.addr());
+    let r = multiply(&a, &b);
+    for (i, w) in transpose(&r).iter().enumerate() {
+        e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
+    }
+    out.addr()
+}
+
+/// The transpose of a row-major matrix: word `4 * i + j` from word `4 * j + i`.
+fn transpose(m: &[u32; 16]) -> [u32; 16] {
+    std::array::from_fn(|n| m[4 * (n % 4) + n / 4])
 }
 
 /// `D3DXERR_INVALIDDATA`.
@@ -626,8 +648,56 @@ mod tests {
         }
     }
 
+    type MeasuredCase = (String, [u32; 16], [u32; 16], [u32; 16]);
+
+    fn measured_transpose() -> Vec<MeasuredCase> {
+        let text = include_str!("../../../data/d3dx/matrix_multiply_transpose.tsv");
+        let words = |t: &str| -> [u32; 16] {
+            let v: Vec<u32> = t
+                .split(' ')
+                .map(|w| u32::from_str_radix(w, 16).unwrap())
+                .collect();
+            v.try_into().unwrap()
+        };
+        text.lines()
+            .filter(|l| l.starts_with("MatrixMultiplyTranspose"))
+            .map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                (f[1].to_string(), words(f[3]), words(f[4]), words(f[5]))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn multiply_transpose_matches_the_measured_dll_bit_for_bit() {
+        let cases = measured_transpose();
+        assert!(cases.len() > 250);
+        for (alias, a, b, want) in cases {
+            let mut e = Engine::new();
+            let m1 = e.mem.alloc(64);
+            let m2 = e.mem.alloc(64);
+            for i in 0..16u32 {
+                e.mem.set_u32(m1 + 4 * i, a[i as usize]);
+                e.mem.set_u32(m2 + 4 * i, b[i as usize]);
+            }
+            let out = if alias == "out=in" {
+                m1
+            } else {
+                e.mem.alloc(64)
+            };
+            let r = matrix_multiply_transpose(&mut e, Ptr::new(out), Ptr::new(m1), Ptr::new(m2));
+            assert_eq!(r, out);
+            assert_eq!(matrix(&e, out), want, "{alias} {a:08x?} * {b:08x?}");
+        }
+    }
+
     #[test]
     fn the_import_slot_is_registered_by_name() {
+        assert!(crate::units::platform::imports()
+            .iter()
+            .any(|(dll, name, _)| {
+                *dll == "d3dx9_38.dll" && *name == "D3DXMatrixMultiplyTranspose"
+            }));
         let table = crate::units::platform::imports();
         assert!(table
             .iter()
