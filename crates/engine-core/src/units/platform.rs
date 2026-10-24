@@ -13,6 +13,7 @@ pub mod dinput;
 pub mod dsound;
 pub mod files;
 pub mod loader;
+pub mod mmio;
 pub mod nvapi;
 pub mod time;
 pub mod window;
@@ -2431,6 +2432,43 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, bink::copy_to_buffer_rect(u32, Ptr, i32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32).1,
         ),
         // The Bink imports: end.
+        // The sound imports (`mmio`, `dsound`, slot a11): begin.
+        (
+            "WINMM.dll",
+            "mmioOpenA",
+            entry!(0, mmio::mmio_open_a(Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioClose",
+            entry!(0, mmio::mmio_close(u32, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioRead",
+            entry!(0, mmio::mmio_read(u32, Ptr, i32) -> i32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioDescend",
+            entry!(0, mmio::mmio_descend(u32, Ptr, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioAscend",
+            entry!(0, mmio::mmio_ascend(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioGetInfo",
+            entry!(0, mmio::mmio_get_info(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            "WINMM.dll",
+            "mmioAdvance",
+            entry!(0, mmio::mmio_advance(u32, Ptr, u32) -> u32).1,
+        ),
+        // The sound imports: end.
     ]
 }
 
