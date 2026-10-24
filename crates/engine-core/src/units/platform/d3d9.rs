@@ -115,6 +115,12 @@ pub struct Adapter {
     /// EDX`), for the CRT's `__get_sse2_info`.
     cpu_id_flag_test: Option<u32>,
     cpuid: HashMap<u32, [u32; 4]>,
+    /// The code pages (`d3d9-capture codepages`): `GetACP`, `GetOEMCP`, and by code page
+    /// `IsValidCodePage`'s answer and `GetCPInfo`'s answer with the 20 `CPINFO` bytes.
+    ansi_code_page: Option<u32>,
+    oem_code_page: Option<u32>,
+    valid_code_pages: HashMap<u32, u32>,
+    code_page_info: HashMap<u32, (u32, Vec<u8>)>,
 }
 
 fn words(text: &str) -> Vec<u32> {
@@ -167,6 +173,15 @@ impl Adapter {
                     a.cpuid.insert(words(f[1])[0], [r[0], r[1], r[2], r[3]]);
                 }
                 "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
+                "GetACP" => a.ansi_code_page = Some(hex(2)),
+                "GetOEMCP" => a.oem_code_page = Some(hex(2)),
+                "IsValidCodePage" => {
+                    a.valid_code_pages.insert(words(f[1])[0], hex(2));
+                }
+                "GetCPInfo" => {
+                    a.code_page_info
+                        .insert(words(f[1])[0], (hex(2), bytes(f[3])));
+                }
                 "EnumDisplayDevicesA" => {
                     a.display_devices
                         .insert(words(f[1])[0], (hex(2), bytes(f[3])));
@@ -334,6 +349,51 @@ pub fn cpu_id_flag_test(e: &mut Engine) -> u32 {
 /// `CPUID` with `EAX = leaf` (`00ed1951` leaf 0, `00ed1964` leaf 1; cdecl: the leaf, the four
 /// words `EAX`, `EBX`, `ECX`, `EDX` are written to): the player's processor's answer from the
 /// machine table; a leaf it lacks stops the run.
+/// The hint for code-page lines missing from the machine table.
+const CODE_PAGE_HINT: &str = "run `d3d9-capture codepages` and add the lines";
+
+// Platform: replaces KERNEL32.DLL GetACP (import)
+/// `GetACP()`: the player's ANSI code page as the machine table recorded it.
+pub fn get_acp(e: &mut Engine) -> u32 {
+    adapter(e).ansi_code_page.unwrap_or_else(|| {
+        panic!("GetACP is not in the machine table: {CODE_PAGE_HINT}: {CAPTURE_HINT}")
+    })
+}
+
+// Platform: replaces KERNEL32.DLL GetOEMCP (import)
+/// `GetOEMCP()`: the player's OEM code page as the machine table recorded it.
+pub fn get_oemcp(e: &mut Engine) -> u32 {
+    adapter(e).oem_code_page.unwrap_or_else(|| {
+        panic!("GetOEMCP is not in the machine table: {CODE_PAGE_HINT}: {CAPTURE_HINT}")
+    })
+}
+
+// Platform: replaces KERNEL32.DLL IsValidCodePage (import)
+/// `IsValidCodePage(code page)`: the answer the machine table recorded for that page; a page
+/// the capture did not ask about is not provided.
+pub fn is_valid_code_page(e: &mut Engine, page: u32) -> u32 {
+    match adapter(e).valid_code_pages.get(&page) {
+        Some(&answer) => answer,
+        None => panic!(
+            "IsValidCodePage({page}) is not in the machine table: {CODE_PAGE_HINT}: {CAPTURE_HINT}"
+        ),
+    }
+}
+
+// Platform: replaces KERNEL32.DLL GetCPInfo (import)
+/// `GetCPInfo(code page, info)`: the answer and the 20 `CPINFO` bytes the machine table recorded
+/// for that page (written only when it answered true); a page the capture did not ask about is
+/// not provided.
+pub fn get_cp_info(e: &mut Engine, page: u32, info: Ptr) -> u32 {
+    let Some((answer, bytes)) = adapter(e).code_page_info.get(&page).cloned() else {
+        panic!("GetCPInfo({page}) is not in the machine table: {CODE_PAGE_HINT}: {CAPTURE_HINT}");
+    };
+    if answer != 0 {
+        e.mem.write(info.addr(), &bytes);
+    }
+    answer
+}
+
 pub fn cpuid(e: &mut Engine, leaf: u32, out: Ptr) {
     let Some(r) = adapter(e).cpuid.get(&leaf).copied() else {
         panic!("CPUID leaf {leaf:#x} is not in the machine table: run `d3d9-capture cpu` and add the lines: {CAPTURE_HINT}");
@@ -730,6 +790,33 @@ mod tests {
             "CheckDeviceMultiSampleType\t0 1 16 0\t0/1\t4=8876086a/0\td1".to_string(),
         ]
         .join("\n")
+    }
+
+    #[test]
+    fn code_pages_answer_from_the_table() {
+        let mut e = Engine::new();
+        load_adapter_table(
+            &mut e,
+            "GetACP		4e4
+GetOEMCP		1b5
+IsValidCodePage	4e4	1
+GetCPInfo	4e4	1	010000003f000000000000000000000000000000
+",
+        );
+        assert_eq!(get_acp(&mut e), 1252);
+        assert_eq!(get_oemcp(&mut e), 437);
+        assert_eq!(is_valid_code_page(&mut e, 1252), 1);
+        let info = e.mem.alloc(20);
+        assert_eq!(get_cp_info(&mut e, 1252, Ptr::new(info)), 1);
+        assert_eq!(e.mem.u32(info), 1, "MaxCharSize");
+        assert_eq!(e.mem.u8(info + 4), b'?', "DefaultChar");
+        let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            get_cp_info(&mut e, 932, Ptr::new(info));
+        }));
+        assert!(
+            missing.is_err(),
+            "a page the capture did not ask about stops"
+        );
     }
 
     fn d3d() -> (Engine, u32) {

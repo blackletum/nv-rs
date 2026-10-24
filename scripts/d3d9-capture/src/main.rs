@@ -45,6 +45,10 @@ extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
     fn GetWindowsDirectoryA(buffer: *mut u8, size: u32) -> u32;
     fn GetTimeZoneInformation(info: *mut u8) -> u32;
+    fn GetACP() -> u32;
+    fn GetOEMCP() -> u32;
+    fn IsValidCodePage(code_page: u32) -> i32;
+    fn GetCPInfo(code_page: u32, info: *mut u8) -> i32;
 }
 #[link(name = "shell32")]
 extern "system" {
@@ -222,9 +226,35 @@ fn processor(o: &mut impl Write) {
     }
 }
 
+/// The code pages the C runtime asks about (`GetACP`, `GetOEMCP`; `IsValidCodePage` and
+/// `GetCPInfo` for those two and the common pages 1252, 437 and 65001): each answer and the
+/// `CPINFO` bytes (20: `MaxCharSize`, `DefaultChar`, `LeadByte`).
+fn code_pages(o: &mut impl Write) {
+    // SAFETY: plain queries; `info` is a 20-byte buffer as `CPINFO` is.
+    unsafe {
+        let (ansi, oem) = (GetACP(), GetOEMCP());
+        writeln!(o, "GetACP		{ansi:x}").unwrap();
+        writeln!(o, "GetOEMCP		{oem:x}").unwrap();
+        let mut pages = vec![ansi, oem, 1252, 437, 65001];
+        pages.dedup();
+        for page in pages {
+            writeln!(o, "IsValidCodePage	{page:x}	{:x}", IsValidCodePage(page) as u32).unwrap();
+            let mut info = [0u8; 20];
+            let r = GetCPInfo(page, info.as_mut_ptr());
+            let hex: String = info.iter().map(|b| format!("{b:02x}")).collect();
+            writeln!(o, "GetCPInfo	{page:x}	{:x}	{hex}", r as u32).unwrap();
+        }
+    }
+}
+
 fn main() {
     let out = std::io::stdout();
     let mut o = out.lock();
+    // `d3d9-capture codepages`: the code-page lines alone.
+    if std::env::args().nth(1).as_deref() == Some("codepages") {
+        code_pages(&mut o);
+        return;
+    }
     // `d3d9-capture cpu`: the processor lines alone (to add them to a table made before them).
     processor(&mut o);
     if std::env::args().nth(1).as_deref() == Some("cpu") {
@@ -238,6 +268,7 @@ fn main() {
         windows(&mut o);
         folders(&mut o);
         time_zone(&mut o);
+        code_pages(&mut o);
         display_devices(&mut o);
         let d3d = Direct3DCreate9(32);
         assert!(!d3d.is_null());

@@ -2361,6 +2361,14 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "GetTimeZoneInformation",
             entry!(0, time::get_time_zone_information(Ptr) -> u32).1,
         ),
+        (k, "GetACP", entry!(0, d3d9::get_acp() -> u32).1),
+        (k, "GetOEMCP", entry!(0, d3d9::get_oemcp() -> u32).1),
+        (
+            k,
+            "IsValidCodePage",
+            entry!(0, d3d9::is_valid_code_page(u32) -> u32).1,
+        ),
+        (k, "GetCPInfo", entry!(0, d3d9::get_cp_info(u32, Ptr) -> u32).1),
         (
             k,
             "FileTimeToLocalFileTime",
