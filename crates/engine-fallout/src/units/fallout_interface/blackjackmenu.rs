@@ -3044,9 +3044,11 @@ fn idle_hit(e: &mut Engine, this: Ptr, ebp: u32) {
     let flag = |e: &mut Engine, mask: u32| fn_00734d30(e, this, mask);
     let state = if flag(e, 0x4000) {
         3
-    } else if flag(e, 0x1000) || (flag(e, 8) && flag(e, 0x400) && flag(e, 0x800)) {
-        8
-    } else if !flag(e, 8) && flag(e, 0x400) {
+    } else if flag(e, 0x1000)
+        || (flag(e, 8) && flag(e, 0x400) && flag(e, 0x800))
+        || (!flag(e, 8) && flag(e, 0x400))
+    {
+        // The exe tests these in this order (two branches to the same store).
         8
     } else {
         4
@@ -3094,16 +3096,12 @@ fn idle_play(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     let flag = |e: &mut Engine, mask: u32| fn_00734d30(e, this, mask);
     if e.mem.u32(base + 0x2c) != 0 {
-        if !flag(e, 8) {
-            e.mem.set_u32(base + 0x28, 8);
-        } else if e.mem.u32(base + 0x30) != 0 {
+        if !flag(e, 8) || e.mem.u32(base + 0x30) != 0 {
             e.mem.set_u32(base + 0x28, 8);
         }
     }
     if flag(e, 0x400) {
-        if !flag(e, 8) {
-            e.mem.set_u32(base + 0x28, 8);
-        } else if flag(e, 0x800) {
+        if !flag(e, 8) || flag(e, 0x800) {
             e.mem.set_u32(base + 0x28, 8);
         }
     }
