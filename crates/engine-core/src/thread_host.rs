@@ -401,7 +401,23 @@ fn spawn(id: u32, start: u32, parameter: u32) -> Link {
             }));
             let reply = match out {
                 Ok(code) => Yield::Finished(code),
-                Err(payload) => Yield::Stopped(panic_line(payload)),
+                Err(payload) => {
+                    // The functions the thread was in when it stopped, innermost first, as
+                    // for the main thread below.
+                    let path: Vec<String> = e
+                        .call_stack
+                        .iter()
+                        .rev()
+                        .take(6)
+                        .map(|a| format!("{a:08x}"))
+                        .collect();
+                    let first = panic_line(payload);
+                    if path.is_empty() {
+                        Yield::Stopped(first)
+                    } else {
+                        Yield::Stopped(format!("{first} (in {})", path.join(" < ")))
+                    }
+                }
             };
             let _ = yields.send(reply);
         })
