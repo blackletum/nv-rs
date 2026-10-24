@@ -167,7 +167,7 @@ pub fn fn_005807f0(e: &mut Engine, this: Ptr) -> Ptr {
     e.mem.set_u32(base + 0x18, 0x0103_1674);
     e.call(
         0x00ec_782f,
-        &args![this, base + 0x34, 0xc, 0x4, 0x0051_b9b0, 0x0040_2c40],
+        &args![base + 0x34, 0xc, 0x4, 0x0051_b9b0, 0x0040_2c40],
     );
     e.call(0x0048_8f50, &args![base + 0xc8]);
     e.call(0x0068_0890, &args![base + 0x1f8]);
@@ -432,7 +432,6 @@ mod tests {
                 (
                     0x00ec_782f,
                     &[
-                        A::T(0x0),
                         A::T(0x34),
                         A::V(0xc),
                         A::V(0x4),

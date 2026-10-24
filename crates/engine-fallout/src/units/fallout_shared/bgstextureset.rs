@@ -17,7 +17,7 @@ pub fn bgstextureset_bgstextureset(e: &mut Engine, this: Ptr) -> Ptr {
     e.mem.set_u32(base + 0x30, 0x0103_3c7c);
     e.call(
         0x00ec_782f,
-        &args![this, base + 0x38, 0xc, 0x6, 0x0048_e270, 0x0048_e2e0],
+        &args![base + 0x38, 0xc, 0x6, 0x0048_e270, 0x0048_e2e0],
     );
     e.call(0x0059_2450, &args![this]);
     e.call(0x004f_15a0, &args![this, 0x4]);
@@ -641,7 +641,6 @@ mod tests {
                 (
                     0x00ec_782f,
                     &[
-                        A::T(0x0),
                         A::T(0x38),
                         A::V(0xc),
                         A::V(0x6),
@@ -808,7 +807,7 @@ mod texture_set_tests {
         e.register(0x0f02_2100, |_, _| Ret::default());
         e.register_double(0x00ec_782f, |e, a| {
             for index in 0..6u32 {
-                e.mem.set_u32(a[1] + index * 0xc, 0x0f02_2000);
+                e.mem.set_u32(a[0] + index * 0xc, 0x0f02_2000);
             }
             Ret::default()
         });
