@@ -60,9 +60,15 @@ pub struct Engine {
     /// translation called.
     pub call_log: Option<Vec<(u32, Vec<u32>)>>,
     tls: u32,
-    /// Milliseconds since start, as `GetTickCount`/`timeGetTime` report
-    /// them. The frame driver advances it; nothing else does.
+    /// Milliseconds since start: the one clock `GetTickCount`, `timeGetTime` and
+    /// `QueryPerformanceCounter` report ([`Engine::clock_now_ms`]). `Sleep(n)` moves it on by
+    /// `n`; with the real clock on ([`Engine::start_real_clock`], the running game) the time
+    /// that really passed is added at each reading. Tests set it directly.
     pub clock_ms: u32,
+    /// The microseconds past `clock_ms` (the counter's finer part).
+    pub clock_us: u32,
+    /// When the real clock is on: the instant the clock was last brought up to date.
+    pub real_clock: Option<std::time::Instant>,
     /// The Windows kernel objects the platform imports hand out (events,
     /// semaphores, threads, `VirtualAlloc` regions; `units/platform.rs`).
     pub kernel: crate::units::platform::Kernel,
@@ -131,6 +137,8 @@ impl Engine {
             call_log: None,
             tls: 0,
             clock_ms: 0,
+            clock_us: 0,
+            real_clock: None,
             kernel: Default::default(),
             call_stack: Vec::new(),
             on_open: None,
@@ -208,6 +216,41 @@ impl Engine {
     /// the replacement of it: the thread host's switch.
     pub(crate) fn swap_tls(&mut self, block: u32) -> u32 {
         std::mem::replace(&mut self.tls, block)
+    }
+
+    /// Turns the real clock on: from now each reading of the clock adds the time that really
+    /// passed since the last one (the running game; tests leave it off).
+    pub fn start_real_clock(&mut self) {
+        self.real_clock = Some(std::time::Instant::now());
+    }
+
+    /// Brings the clock up to date with the real time that passed (real clock on only).
+    fn catch_up_clock(&mut self) {
+        if let Some(last) = self.real_clock {
+            let now = std::time::Instant::now();
+            let passed = now.duration_since(last).as_micros() as u64;
+            self.real_clock = Some(now);
+            self.advance_clock_us(passed);
+        }
+    }
+
+    /// Moves the clock on by `us` microseconds (milliseconds wrap as a `DWORD` does).
+    pub fn advance_clock_us(&mut self, us: u64) {
+        let total = u64::from(self.clock_us) + us;
+        self.clock_ms = self.clock_ms.wrapping_add((total / 1000) as u32);
+        self.clock_us = (total % 1000) as u32;
+    }
+
+    /// The clock in milliseconds now (what `GetTickCount` and `timeGetTime` answer).
+    pub fn clock_now_ms(&mut self) -> u32 {
+        self.catch_up_clock();
+        self.clock_ms
+    }
+
+    /// The clock in microseconds now (what `QueryPerformanceCounter` answers at 1 MHz).
+    pub fn clock_now_us(&mut self) -> u64 {
+        self.catch_up_clock();
+        u64::from(self.clock_ms) * 1000 + u64::from(self.clock_us)
     }
 
     /// Number of registered functions.

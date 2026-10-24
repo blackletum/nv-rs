@@ -72,8 +72,8 @@ pub const OPEN_DIRECT_SOUND_SLOT: u32 = 0x00fd_f3b4;
 pub const STATE_PAGE: u32 = 0x7e14_0000;
 
 /// After how many `BinkWait` calls in a row that answer "wait" at the same platform clock the
-/// run stops: the clock (`Engine::clock_ms`) moves only with the frame driver, so a movie the
-/// game waits on without drawing would otherwise loop for ever.
+/// run stops: with the real clock off (tests) the clock (`Engine::clock_now_ms`) moves only with
+/// `Sleep` and the test, so a movie the game waits on without sleeping would loop for ever.
 pub const WAITS_WITHOUT_TIME: u32 = 100_000;
 
 /// A movie this layer has open.
@@ -273,7 +273,7 @@ pub fn do_frame(e: &mut Engine, bink: u32) -> i32 {
     movie.decoded = Some(index);
     movie.pixels = None;
     if movie.start.is_none() {
-        movie.start = Some(e.clock_ms);
+        movie.start = Some(e.clock_now_ms());
         movie.base = index;
     }
     let num = e.mem.u32(bink + FRAME_NUM);
@@ -314,7 +314,7 @@ fn due(movie: &Playing, index: u32) -> u64 {
 
 // Platform: replaces binkw32.dll _BinkWait@4 (import)
 /// `BinkWait(bink)`: 1 while the frame `FrameNum` names is not due yet, 0 once it is, against
-/// the platform clock (`Engine::clock_ms`, which `GetTickCount`, `timeGetTime` and
+/// the platform clock (`Engine::clock_now_ms`, which `GetTickCount`, `timeGetTime` and
 /// `QueryPerformanceCounter` answer). Measured with the DLL timing the intro without sound
 /// (`bink-wait*-2026-10-23`, ticks of a 1 ms clock):
 /// - before the first `BinkDoFrame` it answers 0 (also 500 ms after `BinkOpen`);
@@ -336,7 +336,7 @@ pub fn wait(e: &mut Engine, bink: u32) -> i32 {
         !movie.wrapped,
         "BinkWait on a movie past its last frame is not provided"
     );
-    let now = e.clock_ms;
+    let now = e.clock_now_ms();
     let answer = match (movie.paused, movie.start) {
         (Some(_), _) => 1,
         (None, None) => 0,
@@ -383,7 +383,7 @@ pub fn wait(e: &mut Engine, bink: u32) -> i32 {
 /// not provided.
 pub fn pause(e: &mut Engine, bink: u32, pause: i32) -> i32 {
     let mut movie = take(e, bink, "BinkPause");
-    let now = e.clock_ms;
+    let now = e.clock_now_ms();
     let answer = if pause != 0 {
         assert!(
             movie.paused.is_none(),

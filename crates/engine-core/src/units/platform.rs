@@ -470,9 +470,11 @@ fn get_current_thread_id(e: &mut Engine) -> u32 {
 }
 
 // Platform: replaces KERNEL32.DLL Sleep (import)
-/// A switch point: the running thread gives the others a turn (the time
-/// asked for is not waited; the clock moves only with the frame).
-fn sleep(e: &mut Engine, _ms: u32) {
+/// A switch point: the running thread gives the others a turn, and the clock
+/// (`Engine::clock_now_ms`) moves on by the time asked for (nothing is really waited).
+fn sleep(e: &mut Engine, ms: u32) {
+    e.clock_now_us();
+    e.advance_clock_us(u64::from(ms) * 1000);
     crate::thread_host::host().sleep(e, signalled);
 }
 
@@ -822,7 +824,7 @@ fn d3dperf_set_options(_e: &mut Engine, _options: u32) {}
 
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
-    e.clock_ms
+    e.clock_now_ms()
 }
 
 // Platform: replaces KERNEL32.DLL QueryPerformanceFrequency (import): 1 MHz.
@@ -832,9 +834,10 @@ fn query_performance_frequency(e: &mut Engine, out: Ptr) -> i32 {
 }
 
 // Platform: replaces KERNEL32.DLL QueryPerformanceCounter (import): the
-// engine clock in microseconds.
+// engine clock in microseconds (`Engine::clock_now_us`).
 fn query_performance_counter(e: &mut Engine, out: Ptr) -> i32 {
-    e.mem.set_u64(out.addr(), e.clock_ms as u64 * 1000);
+    let now = e.clock_now_us();
+    e.mem.set_u64(out.addr(), now);
     1
 }
 
@@ -3008,6 +3011,32 @@ mod tests {
         // Its handle is signalled now (it ended).
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 0]), WAIT_OBJECT_0);
         assert!(e.call_stack.is_empty() || e.call_stack.iter().all(|&a| a != 0x00ab_0200));
+    }
+
+    #[test]
+    fn one_clock_sleep_moves_it_and_the_real_clock_adds_passed_time() {
+        let mut e = thread_engine();
+        e.clock_ms = 1000;
+        assert_eq!(tick_count(&mut e), 1000);
+        call(&mut e, SLEEP, &[25]);
+        assert_eq!(
+            tick_count(&mut e),
+            1025,
+            "Sleep moves the clock by its time"
+        );
+        let out = e.mem.alloc(8);
+        query_performance_counter(&mut e, Ptr::new(out));
+        assert_eq!(
+            e.mem.u64(out),
+            1_025_000,
+            "the counter reads the same clock"
+        );
+        e.start_real_clock();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let later = tick_count(&mut e);
+        assert!(later >= 1030, "real time passed: {later}");
+        query_performance_counter(&mut e, Ptr::new(out));
+        assert!(e.mem.u64(out) >= u64::from(later) * 1000);
     }
 
     #[test]

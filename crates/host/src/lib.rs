@@ -65,6 +65,9 @@ impl Host {
             ));
         }
         let mut engine = Engine::with_exe(&exe)?;
+        // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
+        // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
+        engine.start_real_clock();
         let mut movement = player_move::PlayerMovement::default();
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
         // runs too (they go on past misses with zero results and record them all).
