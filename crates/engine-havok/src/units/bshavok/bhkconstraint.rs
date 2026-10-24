@@ -1889,14 +1889,14 @@ mod tests {
         ] {
             e.mem.set_u32(reader + 0x10, kind);
             e.call_log = Some(vec![]);
-            let motor = e.call(0x00c8a330, &args![stream]).u32();
+            let motor = e.call(0x00c8a330, &args![0u32, stream]).u32();
             assert_eq!(e.mem.block_size(motor), Some(size.div_ceil(8) * 8));
             assert_eq!(e.mem.u16(motor + 4), size as u16);
             assert_eq!(calls_to(&e, construct), vec![vec![motor]]);
             assert_eq!(calls_to(&e, load), vec![vec![motor, stream]]);
         }
         e.mem.set_u32(reader + 0x10, 4);
-        assert_eq!(e.call(0x00c8a330, &args![stream]).u32(), 0);
+        assert_eq!(e.call(0x00c8a330, &args![0u32, stream]).u32(), 0);
         assert_eq!(scope(&mut e), 0x77);
     }
 
