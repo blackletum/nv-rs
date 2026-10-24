@@ -15,6 +15,7 @@ pub fn bgstextureset_bgstextureset(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(0x0051_d190, &args![base + 0x30]);
     e.mem.set_u32(base, 0x0103_3d1c);
     e.mem.set_u32(base + 0x30, 0x0103_3c7c);
+    // `eh vector constructor iterator` is stdcall with five words (`RET 0x14`): no `this`.
     e.call(
         0x00ec_782f,
         &args![base + 0x38, 0xc, 0x6, 0x0048_e270, 0x0048_e2e0],

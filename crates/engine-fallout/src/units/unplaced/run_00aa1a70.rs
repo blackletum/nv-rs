@@ -21,23 +21,11 @@ pub fn fn_00aa1a70(e: &mut Engine, callback: u32) {
     }
 }
 
-/// The word `00aa1a90` passes as the second argument (`010a2484`, 1 in the exe's data).
-const SECOND_WORD: u32 = 0x010a_2484;
-
-// Translated from 00aa1a90 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map (no unit; a vtable slot of several stream classes, `thiscall`,
-/// `RET 4`): calls `this`'s own slot `0x14` with its one word and the word at `010a2484`
-/// (`this` stays in `ECX`) and answers what that answers.
-pub fn fn_00aa1a90(e: &mut Engine, this: Ptr, word: u32) -> u32 {
-    let second = e.mem.u32(SECOND_WORD);
-    e.vcall(this.addr(), 0x14, &args![word, second]).u32()
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa_1a70, fn_00aa1a70(u32)),
-        entry!(0x00aa_1a90, fn_00aa1a90(Ptr, u32) -> u32),
+        entry!(0x00aa_1a90, fn_00aa1a90(u32, u32) -> u32),
     ]
 }
 
@@ -54,21 +42,38 @@ mod tests {
         e.call(0x00aa_1a70, &args![0u32]);
         assert_eq!(e.global::<u32>(CALLBACK_SLOT), DEFAULT_CALLBACK);
     }
+}
+
+/// The seek origin `00aa1a90` passes (the word at `010a2484`, 1 in the exe).
+const SEEK_ORIGIN_010A2484: u32 = 0x010a_2484;
+
+// Translated from 00aa1a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A stream's one-argument seek (slot +8 of the vtables of `NiFile`,
+/// `SaveGameFile`, `Archive`, `ArchiveFile`, `CompressedArchiveFile` and
+/// `BSFile`, by their RTTI; the Xbox PDB's `NiBinaryStream` names slot +8
+/// `Seek`): calls the object's slot +0x14 with `offset` and the word at
+/// `010a2484`, and passes its EAX on.
+pub fn fn_00aa1a90(e: &mut Engine, this: u32, offset: u32) -> u32 {
+    let origin = e.mem.u32(SEEK_ORIGIN_010A2484);
+    e.vcall(this, 0x14, &[offset, origin]).u32()
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
 
     #[test]
-    fn the_slot_calls_slot_0x14_with_the_word_and_the_global() {
+    fn seek_passes_the_origin() {
+        const SEEK2: u32 = 0x00de_ad14;
         let mut e = Engine::new();
         e.map(0x010a_2000, 0x1000);
-        e.mem.set_u32(SECOND_WORD, 1);
-        e.put_vtable(0x0e00_0000, &[0x0e10_0000; 8]);
-        e.register(0x0e10_0000, |_, a| (a[1] + a[2] * 0x100).into_ret());
-        let this = e.mem.alloc(4);
-        e.mem.set_u32(this, 0x0e00_0000);
+        e.mem.set_u32(SEEK_ORIGIN_010A2484, 1);
+        e.put_vtable(0x0070_0000, &[0, 0, 0, 0, 0, SEEK2]);
+        e.register(SEEK2, |_, a| (a[1] + a[2]).into_ret());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0x0070_0000);
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x00aa_1a90, &args![this, 7u32]).u32(), 0x107);
-        let log = e.call_log.take().unwrap();
-        assert!(log
-            .iter()
-            .any(|(a, w)| *a == 0x0e10_0000 && *w == vec![this, 7, 1]));
+        assert_eq!(e.call(0x00aa_1a90, &[this, 40]).u32(), 41);
+        assert_eq!(e.call_log.take().unwrap()[1], (SEEK2, vec![this, 40, 1]));
     }
 }

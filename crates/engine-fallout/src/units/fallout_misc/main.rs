@@ -2076,13 +2076,6 @@ pub fn fn_0086d500(e: &mut Engine, this: Ptr) {
     }
 }
 
-// Translated from 0086d580 (disassembled, FalloutNV.exe 1.4.0.525)
-/// Unnamed (`cdecl`, no words; `fn_0086d500`'s failure text): answers the address of the
-/// renderer's error text buffer `011c6fc8`.
-pub fn fn_0086d580(_e: &mut Engine) -> u32 {
-    0x011c_6fc8
-}
-
 // Translated from 0086d590 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Main::InitSceneGraph` (Xbox PDB): builds the world's scene graph.
 ///
@@ -3792,7 +3785,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0086d480, fn_0086d480() -> u32),
         entry!(0x0086d4c0, fn_0086d4c0(Ptr, u32)),
         entry!(0x0086d500, fn_0086d500(Ptr)),
-        entry!(0x0086_d580, fn_0086d580() -> u32),
         entry!(0x0086d590, main_init_scene_graph(Ptr)),
         entry!(0x0086e3f0, fn_0086e3f0(Ptr, u16, u16, u32) -> u32),
         entry!(0x0086e420, fn_0086e420(Ptr, u32, f32, f32, f32, f32) -> u32),

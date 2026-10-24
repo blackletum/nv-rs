@@ -80,6 +80,33 @@ pub fn fn_00ee6df8(e: &mut Engine, word_0: Ptr, word_1: Ptr, word_2: Ptr) -> Ptr
         .ptr()
 }
 
+/// The import slot `00ee6de6` jumps through.
+const IMPORT_SLOT_00EE6DE6: u32 = 0x00fd_f3d0;
+
+// Translated from 00ee6de6 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Import thunk `JMP dword ptr [0x00fdf3d0]` (Ghidra labels the import
+/// `D3DXLoadSurfaceFromSurface`, unconfirmed beyond that label). stdcall: the 8
+/// stack words go unchanged to the import and its result comes back. Argument
+/// count from the caller at 00b6bd75 (eight pushes).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ee6de6(
+    e: &mut Engine,
+    word_0: u32,
+    word_1: u32,
+    word_2: u32,
+    word_3: u32,
+    word_4: u32,
+    word_5: u32,
+    word_6: u32,
+    word_7: u32,
+) -> u32 {
+    e.call(
+        IMPORT_SLOT_00EE6DE6,
+        &args![word_0, word_1, word_2, word_3, word_4, word_5, word_6, word_7],
+    )
+    .u32()
+}
+
 /// The import slot `00ee6dfe` jumps through.
 const IMPORT_SLOT_00EE6DFE: u32 = 0x00fd_f410;
 
@@ -96,13 +123,17 @@ pub fn fn_00ee6dfe(e: &mut Engine, word_0: Ptr, word_1: Ptr, word_2: Ptr) -> Ptr
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ee_6dfe, fn_00ee6dfe(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6dd4, fn_00ee6dd4(Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6dda, fn_00ee6dda(Ptr, u32, Ptr) -> Ptr),
         entry!(0x00ee_6de0, fn_00ee6de0(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6dec, fn_00ee6dec(Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6df2, fn_00ee6df2(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6df8, fn_00ee6df8(Ptr, Ptr, Ptr) -> Ptr),
-        entry!(0x00ee_6dfe, fn_00ee6dfe(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00ee_6de6,
+            fn_00ee6de6(u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
     ]
 }
 
@@ -128,13 +159,13 @@ mod tests {
     }
 
     #[test]
-    fn thunk_00ee6dd4() {
-        import(0x00ee_6dd4, IMPORT_SLOT_00EE6DD4, &[0x1001, 0x1002]);
+    fn thunk_00ee6dfe() {
+        import(0x00ee_6dfe, IMPORT_SLOT_00EE6DFE, &[0x1001, 0x1002, 0x1003]);
     }
 
     #[test]
-    fn thunk_00ee6dfe() {
-        import(0x00ee_6dfe, IMPORT_SLOT_00EE6DFE, &[0x1001, 0x1002, 0x1003]);
+    fn thunk_00ee6dd4() {
+        import(0x00ee_6dd4, IMPORT_SLOT_00EE6DD4, &[0x1001, 0x1002]);
     }
 
     #[test]
@@ -160,5 +191,14 @@ mod tests {
     #[test]
     fn thunk_00ee6df8() {
         import(0x00ee_6df8, IMPORT_SLOT_00EE6DF8, &[0x1001, 0x1002, 0x1003]);
+    }
+
+    #[test]
+    fn thunk_00ee6de6() {
+        import(
+            0x00ee_6de6,
+            IMPORT_SLOT_00EE6DE6,
+            &[0x1001, 0, 0, 0x1004, 0, 0, 0xffff_ffff, 0],
+        );
     }
 }

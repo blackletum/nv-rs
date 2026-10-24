@@ -61,52 +61,87 @@ pub fn deallocate(e: &mut Engine, _this: Ptr, memory: Ptr, kind: u32, _unused_3:
     e.call(0x00aa_4060, &args![0x011f_6238u32, memory]);
 }
 
-/// The memory manager (`011f6238`) and its free (`00aa4060`, `thiscall`, one word), aligned
-/// reallocate (`00aa4150`, two words) and reallocate (`00aa4200`, five words).
+/// The memory manager singleton and its functions (thiscall on `011f6238`): `Allocate`
+/// (`00aa3e40`: size), `Deallocate` (`00aa4060`: block), the reallocation (`00aa4150`:
+/// block, size), the tracked allocation (`00aa4030`: size and three context words) and the
+/// tracked reallocation (`00aa4200`: block, size and three context words).
 const MEMORY_MANAGER: u32 = 0x011f_6238;
-const MM_FREE: u32 = 0x00aa_4060;
-const MM_REALLOCATE_RAW: u32 = 0x00aa_4150;
-const MM_REALLOCATE: u32 = 0x00aa_4200;
-/// The vtable the deleting destructor leaves (`010a24d0`).
-const BASE_VTABLE: u32 = 0x010a_24d0;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+const MEMORY_REALLOCATE: u32 = 0x00aa_4150;
+const MEMORY_ALLOCATE_TRACKED: u32 = 0x00aa_4030;
+const MEMORY_REALLOCATE_TRACKED: u32 = 0x00aa_4200;
+/// `memset` (`00ec61c0`, cdecl).
+const MEMSET: u32 = 0x00ec_61c0;
 
-/// The shape of `Deallocate` and `DeallocateExternal`: for the aligned kind `aligned_kind`
-/// the block's adjustment byte (`block - 1`) is taken off before freeing and a null block is
-/// not freed; any other kind frees the block as it is (null included).
-fn free_by_kind(e: &mut Engine, block: u32, kind: u32, aligned_kind: u32) {
-    if kind == aligned_kind {
-        if block == 0 {
-            return;
-        }
-        let adjustment = e.mem.u8(block.wrapping_sub(1)) as u32;
-        e.call(
-            MM_FREE,
-            &args![MEMORY_MANAGER, block.wrapping_sub(adjustment)],
-        );
-    } else {
-        e.call(MM_FREE, &args![MEMORY_MANAGER, block]);
+/// The aligned block of `raw`: it moves up by `alignment - ((alignment - 1) & raw)` (byte
+/// arithmetic), and that adjustment is stored in the byte before it.
+fn align_block(e: &mut Engine, raw: u32, alignment: u8) -> u32 {
+    let adjustment = alignment.wrapping_sub(alignment.wrapping_sub(1) & raw as u8);
+    let aligned = raw.wrapping_add(u32::from(adjustment));
+    e.mem.set_u8(aligned.wrapping_sub(1), adjustment);
+    aligned
+}
+
+/// The reallocation `Reallocate` (kind 8) and `ReallocateExternal` (kind 0xE) share: for the
+/// aligned kind, a null `memory` answers 0, otherwise the block (`memory` less its stored
+/// adjustment) is reallocated (`00aa4150`) to `size + alignment` bytes and aligned again;
+/// other kinds go to the tracked reallocation (`00aa4200`) with `*size` and the three
+/// context words, whose answer is passed on.
+#[allow(clippy::too_many_arguments)] // The block, its sizes, the kind and three context words.
+fn reallocate_kind(
+    e: &mut Engine,
+    aligned_kind: u32,
+    memory: u32,
+    size: Ptr<u32>,
+    alignment: Ptr<u8>,
+    kind: u32,
+    context: [u32; 3],
+) -> u32 {
+    if kind != aligned_kind {
+        let bytes = e.mem.u32(size.addr());
+        return e
+            .call(
+                MEMORY_REALLOCATE_TRACKED,
+                &args![
+                    MEMORY_MANAGER,
+                    memory,
+                    bytes,
+                    context[0],
+                    context[1],
+                    context[2]
+                ],
+            )
+            .u32();
     }
+    let bytes = e.mem.u32(size.addr());
+    let alignment = e.mem.u8(alignment.addr());
+    if memory == 0 {
+        return 0;
+    }
+    let block = memory.wrapping_sub(u32::from(e.mem.u8(memory.wrapping_sub(1))));
+    let raw = e
+        .call(
+            MEMORY_REALLOCATE,
+            &args![
+                MEMORY_MANAGER,
+                block,
+                u32::from(alignment).wrapping_add(bytes)
+            ],
+        )
+        .u32();
+    align_block(e, raw, alignment)
 }
 
-// Translated from 00aa23e0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// `BSNiAllocator::DeallocateExternal` (engine map; `thiscall`, `ECX` unused, three stack
-/// words, `RET 0xc`): as `Deallocate` with the aligned kind 0x10.
-pub fn deallocate_external(e: &mut Engine, _this: Ptr, block: u32, kind: u32, _size: u32) {
-    free_by_kind(e, block, kind, 0x10);
-}
-
-// Translated from 00aa22f0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// `BSNiAllocator::Reallocate` (engine map; `thiscall`, `ECX` unused, nine stack words,
-/// `RET 0x24`: block, size pointer, alignment pointer, kind, two unused words, three context
-/// words). Kind 8 (aligned): a null block answers 0; otherwise the raw start (block minus its
-/// adjustment byte) is reallocated to size + alignment (`00aa4150`) and aligned again as
-/// `Allocate` does, the new adjustment stored before the answer. Other kinds go to
-/// `00aa4200` with the block, the size and the three context words.
+// Translated from 00aa22f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSNiAllocator::Reallocate` (engine map; thiscall, nine stack words, `this` and the fifth
+/// and sixth unread): kind 8 is the aligned reallocation, other kinds the tracked one (see
+/// [`reallocate_kind`]).
 #[allow(clippy::too_many_arguments)] // Native receiver plus nine stack words.
-pub fn reallocate(
+pub fn bs_ni_allocator_reallocate(
     e: &mut Engine,
     _this: Ptr,
-    block: u32,
+    memory: u32,
     size: Ptr<u32>,
     alignment: Ptr<u8>,
     kind: u32,
@@ -116,67 +151,160 @@ pub fn reallocate(
     context_2: u32,
     context_3: u32,
 ) -> u32 {
-    if kind != 8 {
-        let bytes = e.mem.u32(size.addr());
-        return e
-            .call(
-                MM_REALLOCATE,
-                &args![
-                    MEMORY_MANAGER,
-                    block,
-                    bytes,
-                    context_1,
-                    context_2,
-                    context_3
-                ],
-            )
-            .u32();
-    }
-    let bytes = e.mem.u32(size.addr());
-    let align = e.mem.u8(alignment.addr());
-    if block == 0 {
-        return 0;
-    }
-    let adjustment = e.mem.u8(block.wrapping_sub(1)) as u32;
-    let raw = block.wrapping_sub(adjustment);
-    let moved = e
-        .call(
-            MM_REALLOCATE_RAW,
-            &args![MEMORY_MANAGER, raw, (align as u32).wrapping_add(bytes)],
-        )
-        .u32();
-    let new_adjustment = align.wrapping_sub(align.wrapping_sub(1) & moved as u8);
-    let aligned = moved.wrapping_add(new_adjustment as u32);
-    e.mem.set_u8(aligned.wrapping_sub(1), new_adjustment);
-    aligned
+    reallocate_kind(
+        e,
+        8,
+        memory,
+        size,
+        alignment,
+        kind,
+        [context_1, context_2, context_3],
+    )
 }
 
-// Translated from 00aa24a0 (disassembled, FalloutNV.exe 1.4.0.525)
-/// The allocator's scalar deleting destructor (vtable slot 0; `thiscall`, one stack word,
-/// `RET 4`): stores the vtable `010a24d0`, and with bit 0 of `flags` frees `this` through the
-/// memory manager (`00aa4060`). Answers `this`.
-pub fn deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
-    e.mem.set_u32(this.addr(), BASE_VTABLE);
-    if flags & 1 != 0 {
-        e.call(MM_FREE, &args![MEMORY_MANAGER, this]);
+// Translated from 00aa2370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSNiAllocator::AllocateExternal` (engine map; thiscall, seven stack words, `this` and the
+/// fourth unread): kind 0xD reserves the alignment besides the size (`Allocate`) and aligns
+/// the block (the adjustment in the byte before it); other kinds use the tracked allocation
+/// (`00aa4030`) with the last three words. Both clear `*size` bytes of the answer.
+#[allow(clippy::too_many_arguments)] // Native receiver plus seven stack words.
+pub fn bs_ni_allocator_allocate_external(
+    e: &mut Engine,
+    _this: Ptr,
+    size: Ptr<u32>,
+    alignment: Ptr<u8>,
+    kind: u32,
+    _unused_4: u32,
+    context_1: u32,
+    context_2: u32,
+    context_3: u32,
+) -> u32 {
+    let buffer = if kind == 0xd {
+        let alignment = e.mem.u8(alignment.addr());
+        let bytes = u32::from(alignment).wrapping_add(e.mem.u32(size.addr()));
+        let raw = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, bytes]).u32();
+        align_block(e, raw, alignment)
+    } else {
+        let bytes = e.mem.u32(size.addr());
+        e.call(
+            MEMORY_ALLOCATE_TRACKED,
+            &args![MEMORY_MANAGER, bytes, context_1, context_2, context_3],
+        )
+        .u32()
+    };
+    let bytes = e.mem.u32(size.addr());
+    e.call(MEMSET, &args![buffer, 0u32, bytes]);
+    buffer
+}
+
+// Translated from 00aa23e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSNiAllocator::DeallocateExternal` (engine map; thiscall, three stack words, `this` and
+/// the third unread): frees `memory` (`Deallocate`); for kind 0x10 the block starts the
+/// stored adjustment before it and a null `memory` frees nothing (answering it). The
+/// memory manager's answer is passed on.
+pub fn bs_ni_allocator_deallocate_external(
+    e: &mut Engine,
+    _this: Ptr,
+    memory: u32,
+    kind: u32,
+    _unused_3: u32,
+) -> u32 {
+    if kind == 0x10 {
+        if memory == 0 {
+            return memory;
+        }
+        let block = memory.wrapping_sub(u32::from(e.mem.u8(memory.wrapping_sub(1))));
+        return e
+            .call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, block])
+            .u32();
     }
-    this
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, memory])
+        .u32()
+}
+
+// Translated from 00aa2420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSNiAllocator::ReallocateExternal` (engine map; thiscall, nine stack words, `this` and
+/// the fifth and sixth unread): as [`bs_ni_allocator_reallocate`] with kind 0xE aligned.
+#[allow(clippy::too_many_arguments)] // Native receiver plus nine stack words.
+pub fn bs_ni_allocator_reallocate_external(
+    e: &mut Engine,
+    _this: Ptr,
+    memory: u32,
+    size: Ptr<u32>,
+    alignment: Ptr<u8>,
+    kind: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    context_1: u32,
+    context_2: u32,
+    context_3: u32,
+) -> u32 {
+    reallocate_kind(
+        e,
+        0xe,
+        memory,
+        size,
+        alignment,
+        kind,
+        [context_1, context_2, context_3],
+    )
 }
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
+            0x00aa_22f0,
+            bs_ni_allocator_reallocate(
+                Ptr,
+                u32,
+                Ptr<u32>,
+                Ptr<u8>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00aa_2370,
+            bs_ni_allocator_allocate_external(
+                Ptr,
+                Ptr<u32>,
+                Ptr<u8>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
+            0x00aa_23e0,
+            bs_ni_allocator_deallocate_external(Ptr, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00aa_2420,
+            bs_ni_allocator_reallocate_external(
+                Ptr,
+                u32,
+                Ptr<u32>,
+                Ptr<u8>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        ),
+        entry!(
             0x00aa2240,
             allocate(Ptr, Ptr<u32>, Ptr<u8>, u32, u32, u32, u32, u32) -> Ptr
         ),
         entry!(0x00aa_22b0, deallocate(Ptr, Ptr, u32, u32)),
-        entry!(0x00aa_23e0, deallocate_external(Ptr, u32, u32, u32)),
-        entry!(
-            0x00aa_22f0,
-            reallocate(Ptr, u32, Ptr<u32>, Ptr<u8>, u32, u32, u32, u32, u32, u32) -> u32
-        ),
-        entry!(0x00aa_24a0, deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -266,95 +394,127 @@ mod b004_tests {
 }
 
 #[cfg(test)]
-mod release_tests {
+mod n083_tests {
     use super::*;
 
-    fn engine() -> Engine {
-        let mut e = Engine::new();
-        e.map(0x0000_1000, 0x1000);
-        e.register(MM_FREE, |_, _| Ret::default());
-        e.register(MM_REALLOCATE_RAW, |_, a| (a[1] + 0x100).into_ret());
-        e.register(MM_REALLOCATE, |_, _| 0x1800u32.into_ret());
-        e.call_log = Some(vec![]);
-        e
-    }
-
-    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
         e.call_log
             .as_ref()
             .unwrap()
             .iter()
-            .filter(|(a, _)| *a == callee)
-            .map(|(_, w)| w.clone())
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
             .collect()
     }
 
-    /// The aligned kinds (10, and 0x10 for the external one) free from the raw start; other
-    /// kinds free the block itself, null included; a null aligned block frees nothing.
-    #[test]
-    fn deallocate_takes_the_adjustment_off_for_the_aligned_kind() {
-        let mut e = engine();
-        e.mem.set_u8(0x1103, 3);
-        e.call(0x00aa_22b0, &args![0u32, 0x1104u32, 10u32, 0u32]);
-        e.call(0x00aa_22b0, &args![0u32, 0x1104u32, 1u32, 0u32]);
-        e.call(0x00aa_22b0, &args![0u32, 0u32, 10u32, 0u32]);
-        e.call(0x00aa_22b0, &args![0u32, 0u32, 1u32, 0u32]);
-        e.call(0x00aa_23e0, &args![0u32, 0x1104u32, 0x10u32, 0u32]);
-        e.call(0x00aa_23e0, &args![0u32, 0x1104u32, 10u32, 0u32]);
-        assert_eq!(
-            calls(&e, MM_FREE),
-            [
-                vec![MEMORY_MANAGER, 0x1101],
-                vec![MEMORY_MANAGER, 0x1104],
-                vec![MEMORY_MANAGER, 0],
-                vec![MEMORY_MANAGER, 0x1101],
-                vec![MEMORY_MANAGER, 0x1104],
-            ]
-        );
-    }
-
-    /// Kind 8 reallocates the raw block to size + alignment and aligns the answer again;
-    /// other kinds go to `00aa4200` with the size and the three context words.
-    #[test]
-    fn reallocate_realigns_the_aligned_kind() {
-        let mut e = engine();
-        e.mem.set_u32(0x1000, 0x40);
-        e.mem.set_u8(0x1004, 0x10);
-        e.mem.set_u8(0x1103, 4);
-        // Raw 0x1100 moves to 0x1200 (the double adds 0x100): 0x10 - (0xf & 0x00) = 0x10.
-        let got = e.call(
-            0x00aa_22f0,
-            &args![0u32, 0x1104u32, 0x1000u32, 0x1004u32, 8u32, 0u32, 0u32, 1u32, 2u32, 3u32],
-        );
-        assert_eq!(got.u32(), 0x1210);
-        assert_eq!(e.mem.u8(0x120f), 0x10);
-        assert_eq!(
-            calls(&e, MM_REALLOCATE_RAW),
-            [vec![MEMORY_MANAGER, 0x1100, 0x50]]
-        );
-        let null = e.call(
-            0x00aa_22f0,
-            &args![0u32, 0u32, 0x1000u32, 0x1004u32, 8u32, 0u32, 0u32, 1u32, 2u32, 3u32],
-        );
-        assert_eq!(null.u32(), 0);
-        let other = e.call(
-            0x00aa_22f0,
-            &args![0u32, 0x1104u32, 0x1000u32, 0x1004u32, 2u32, 0u32, 0u32, 1u32, 2u32, 3u32],
-        );
-        assert_eq!(other.u32(), 0x1800);
-        assert_eq!(
-            calls(&e, MM_REALLOCATE),
-            [vec![MEMORY_MANAGER, 0x1104, 0x40, 1, 2, 3]]
-        );
+    fn words(e: &mut Engine, size: u32, alignment: u8) -> (u32, u32) {
+        let at = e.mem.alloc(8);
+        e.mem.set_u32(at, size);
+        e.mem.set_u8(at + 4, alignment);
+        (at, at + 4)
     }
 
     #[test]
-    fn the_deleting_destructor_frees_with_bit_0() {
-        let mut e = engine();
-        assert_eq!(e.call(0x00aa_24a0, &args![0x1000u32, 0u32]).u32(), 0x1000);
-        assert_eq!(e.mem.u32(0x1000), BASE_VTABLE);
-        assert!(calls(&e, MM_FREE).is_empty());
-        e.call(0x00aa_24a0, &args![0x1000u32, 1u32]);
-        assert_eq!(calls(&e, MM_FREE), [vec![MEMORY_MANAGER, 0x1000]]);
+    fn reallocations_align_their_kind_and_track_the_rest() {
+        for (addr, aligned) in [(0x00aa_22f0u32, 8u32), (0x00aa_2420, 0xe)] {
+            let mut e = Engine::new();
+            let raw = e.mem.alloc(0x80);
+            e.register_double(MEMORY_REALLOCATE, move |_, _| (raw + 3).into_ret());
+            e.register(MEMORY_REALLOCATE_TRACKED, |_, _| 0x7777u32.into_ret());
+            let (size, alignment) = words(&mut e, 0x20, 16);
+            let old = e.mem.alloc(0x40) + 8;
+            e.mem.set_u8(old - 1, 5);
+            e.call_log = Some(vec![]);
+            let r = e
+                .call(
+                    addr,
+                    &args![0u32, old, size, alignment, aligned, 0u32, 0u32, 1u32, 2u32, 3u32],
+                )
+                .u32();
+            assert_eq!(
+                calls_to(&e, MEMORY_REALLOCATE),
+                vec![vec![MEMORY_MANAGER, old - 5, 0x30]]
+            );
+            let up = 16 - (15 & (raw + 3) as u8);
+            assert_eq!(r, raw + 3 + u32::from(up));
+            assert_eq!(e.mem.u8(r - 1), up);
+            let none = e.call(
+                addr,
+                &args![0u32, 0u32, size, alignment, aligned, 0u32, 0u32, 1u32, 2u32, 3u32],
+            );
+            assert_eq!(none.u32(), 0);
+            let tracked = e.call(
+                addr,
+                &args![0u32, old, size, alignment, 7u32, 0u32, 0u32, 1u32, 2u32, 3u32],
+            );
+            assert_eq!(tracked.u32(), 0x7777);
+            assert_eq!(
+                calls_to(&e, MEMORY_REALLOCATE_TRACKED),
+                vec![vec![MEMORY_MANAGER, old, 0x20, 1, 2, 3]]
+            );
+        }
+    }
+
+    #[test]
+    fn external_allocation_aligns_kind_13_and_clears() {
+        let mut e = Engine::new();
+        let raw = e.mem.alloc(0x80);
+        e.register_double(MEMORY_ALLOCATE, move |_, _| (raw + 1).into_ret());
+        e.register(MEMORY_ALLOCATE_TRACKED, |_, _| 0x6000u32.into_ret());
+        e.register(MEMSET, |_, _| Ret::default());
+        let (size, alignment) = words(&mut e, 0x20, 4);
+        e.call_log = Some(vec![]);
+        let r = e
+            .call(
+                0x00aa_2370,
+                &args![0u32, size, alignment, 0xdu32, 0u32, 1u32, 2u32, 3u32],
+            )
+            .u32();
+        assert_eq!(
+            calls_to(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x24]]
+        );
+        let up = 4 - (3 & (raw + 1) as u8);
+        assert_eq!(r, raw + 1 + u32::from(up));
+        assert_eq!(e.mem.u8(r - 1), up);
+        assert_eq!(calls_to(&e, MEMSET), vec![vec![r, 0, 0x20]]);
+        let r = e
+            .call(
+                0x00aa_2370,
+                &args![0u32, size, alignment, 1u32, 0u32, 1u32, 2u32, 3u32],
+            )
+            .u32();
+        assert_eq!(r, 0x6000);
+        assert_eq!(
+            calls_to(&e, MEMORY_ALLOCATE_TRACKED),
+            vec![vec![MEMORY_MANAGER, 0x20, 1, 2, 3]]
+        );
+        assert_eq!(calls_to(&e, MEMSET)[1], [0x6000, 0, 0x20]);
+    }
+
+    #[test]
+    fn external_deallocation_undoes_the_alignment() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| 0x11u32.into_ret());
+        let block = e.mem.alloc(0x10) + 4;
+        e.mem.set_u8(block - 1, 4);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_23e0, &args![0u32, block, 0x10u32, 0u32])
+                .u32(),
+            0x11
+        );
+        assert_eq!(
+            e.call(0x00aa_23e0, &args![0u32, 0u32, 0x10u32, 0u32]).u32(),
+            0
+        );
+        assert_eq!(
+            e.call(0x00aa_23e0, &args![0u32, block, 2u32, 0u32]).u32(),
+            0x11
+        );
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, block - 4], vec![MEMORY_MANAGER, block]]
+        );
     }
 }

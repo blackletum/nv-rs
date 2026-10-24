@@ -165,6 +165,7 @@ pub fn fn_005807f0(e: &mut Engine, this: Ptr) -> Ptr {
     e.call(0x0058_1fd0, &args![base + 0x18]);
     e.mem.set_u32(base, 0x0103_168c);
     e.mem.set_u32(base + 0x18, 0x0103_1674);
+    // `eh vector constructor iterator` is stdcall with five words (`RET 0x14`): no `this`.
     e.call(
         0x00ec_782f,
         &args![base + 0x34, 0xc, 0x4, 0x0051_b9b0, 0x0040_2c40],
