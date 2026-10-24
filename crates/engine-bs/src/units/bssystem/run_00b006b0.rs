@@ -182,11 +182,35 @@ pub fn fn_00b00970(e: &mut Engine, value: u32) -> u32 {
     value
 }
 
+/// `FindClose` (KERNEL32 import slot).
+const FIND_CLOSE: u32 = 0x00fd_f064;
+
+// Translated from 00b007d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): closes the search handle at +0
+/// (`FindClose`) unless it is `INVALID_HANDLE_VALUE` (the word stays as it is) and answers the
+/// status word at +0x248.
+pub fn fn_00b007d0(e: &mut Engine, this: Ptr) -> u32 {
+    let handle = e.mem.u32(this.addr());
+    if handle != 0xffff_ffff {
+        e.call(FIND_CLOSE, &args![handle]);
+    }
+    e.mem.u32(this.addr() + STATUS)
+}
+
+// Translated from 00b00860 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): [`fn_00b007d0`] on `this`, its
+/// answer left in `EAX`.
+pub fn fn_00b00860(e: &mut Engine, this: Ptr) -> u32 {
+    fn_00b007d0(e, this)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00b0_06b0, fn_00b006b0(Ptr, u32) -> u32),
         entry!(0x00b0_0800, fn_00b00800(u32) -> u32),
+        entry!(0x00b0_07d0, fn_00b007d0(Ptr) -> u32),
+        entry!(0x00b0_0860, fn_00b00860(Ptr) -> u32),
         entry!(0x00b0_0880, fn_00b00880(Ptr) -> Ptr),
         entry!(0x00b0_08a0, fn_00b008a0(Ptr)),
         entry!(0x00b0_08b0, fn_00b008b0(Ptr, u32) -> Ptr),
@@ -383,5 +407,32 @@ mod n083_tests {
         e.map(STORED_VALUE_011F8250, 4);
         assert_eq!(e.call(0x00b0_0970, &args![0x1234u32]).u32(), 0x1234);
         assert_eq!(e.global::<u32>(STORED_VALUE_011F8250), 0x1234);
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn the_search_closes_unless_invalid_and_answers_the_status() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x250);
+        e.mem.set_u32(this, 0x44);
+        e.mem.set_u32(this + STATUS, 7);
+        e.register(FIND_CLOSE, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_0860, &args![this]).u32(), 7);
+        assert_eq!(e.mem.u32(this), 0x44, "the handle word stays");
+        e.mem.set_u32(this, 0xffff_ffff);
+        assert_eq!(e.call(0x00b0_07d0, &args![this]).u32(), 7);
+        let closes = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == FIND_CLOSE)
+            .count();
+        assert_eq!(closes, 1);
     }
 }
