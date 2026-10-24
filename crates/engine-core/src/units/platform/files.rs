@@ -499,12 +499,13 @@ pub const ERROR_NO_MORE_FILES: u32 = 18;
 /// as the directory stores it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Search {
-    pub rest: std::collections::VecDeque<(std::path::PathBuf, String)>,
+    pub rest: std::collections::VecDeque<Found>,
 }
 
 /// Whether `name` matches the wildcard `pattern` as Windows' file search matches a long name
 /// (both compared without case): `*` any run of characters, `?` one character or, at the end
 /// of the name or before a dot, none (`*.ES?` finds `e.es`, measured).
+#[cfg_attr(windows, allow(dead_code))] // the non-Windows search and the tests use it
 fn wild_match(pattern: &[u8], name: &[u8]) -> bool {
     match (pattern.first(), name.first()) {
         (None, None) => true,
@@ -526,6 +527,7 @@ fn wild_match(pattern: &[u8], name: &[u8]) -> bool {
 /// the extension of that short name: the first three characters of its last extension, upper
 /// case, with spaces left out (`d.esmx` is `D6104~1.ESM`, measured). The rest of a short name is
 /// a hash Windows makes, not provided here.
+#[cfg_attr(windows, allow(dead_code))] // the non-Windows search and the tests use it
 fn short_extension(name: &str) -> Option<String> {
     let dots = name.matches('.').count();
     let (base, extension) = match name.rfind('.') {
@@ -554,6 +556,7 @@ fn short_extension(name: &str) -> Option<String> {
 /// first character is the long name's first one other than a space or a dot, upper case (the
 /// rest may be a hash Windows makes: `D6104~1`). A pattern the known parts cannot decide stops the
 /// run as not provided.
+#[cfg_attr(windows, allow(dead_code))] // the non-Windows search and the tests use it
 fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
     if wild_match(pattern, name.as_bytes()) {
         return true;
@@ -595,12 +598,10 @@ fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
     panic!("FindFirstFileA(\"{shown}\"): matching the short name of \"{name}\" is not provided")
 }
 
-/// `FindFirstFileA` with wildcards in the last part of the name, measured on scratch files
-/// (`build43-scratch/measure/findfile-2026-10-23.txt`, `findfile.ps1`): every entry of the
-/// player's directory the pattern finds ([`search_finds`]; `.` and `..` too, directories as
-/// well as files), in the order of their upper-case names compared byte by byte (`10.esm`,
-/// `2.esm`, `a b.esm`, `A.esm`, `aa.esm`, `Ab.esm`, ..., `Z_...`, `_under.esm`), the first
-/// written as [`find_first_file_a`] writes one; the last error stays as it was. Nothing found:
+/// `FindFirstFileA` with wildcards in the last part of the name: every entry of the player's
+/// directory the pattern finds, in Windows' order ([`listing`]; `.` and `..` too, directories
+/// as well as files), the first written as [`find_first_file_a`] writes one with its short
+/// name; the last error stays as it was (measured). Nothing found:
 /// `INVALID_HANDLE_VALUE` with `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` for a missing
 /// directory. Wildcards before the last part, a directory where the game made or deleted
 /// files in this run, and non-ASCII names stop the run.
@@ -629,18 +630,110 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         );
     }
     let real = real_path(directory);
-    let Ok(entries) = std::fs::read_dir(&real) else {
-        e.kernel.last_error = if real.exists() {
+    let found = match listing(&real, pattern, &shown) {
+        Ok(found) => found,
+        Err(code) => {
+            e.kernel.last_error = code;
+            return INVALID_HANDLE_VALUE;
+        }
+    };
+    let mut rest: std::collections::VecDeque<_> = found.into();
+    let Some(first) = rest.pop_front() else {
+        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+        return INVALID_HANDLE_VALUE;
+    };
+    write_found(e, data, &first, &shown);
+    e.kernel.insert(KernelObject::FindFile(Search { rest }))
+}
+
+/// One entry a search found: its full path, its name and its 8.3 short name as the directory
+/// stores them (the short name empty when it has none).
+pub type Found = (std::path::PathBuf, String, String);
+
+/// Writes a found entry as `FindFirstFileA` does, `cAlternateFileName` (+0x130, 14 bytes) its
+/// short name and a zero byte.
+fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) {
+    let meta = std::fs::metadata(&found.0).expect("the found entry's metadata");
+    write_find_data(e, data, &meta, &found.1, shown);
+    let alternate = data.addr() + 0x130;
+    e.mem.write(alternate, found.2.as_bytes());
+    e.mem.set_u8(alternate + found.2.len() as u32, 0);
+}
+
+/// The entries of `directory` that `pattern` finds, in the order Windows answers them, or the
+/// error code of a search that finds nothing. On Windows the host's own `FindFirstFileW` /
+/// `FindNextFileW` answer, read only on the player's directory: the matching against long and
+/// 8.3 short names and the order are the file system's (measured on scratch files,
+/// `build43-scratch/measure/findfile-2026-10-23.txt`: upper-case byte order, `.` and `..`, `?`
+/// matching nothing before a dot or at the end, `*.esm` finding `d.esmx` by `D6104~1.ESM`).
+#[cfg(windows)]
+fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    #[repr(C)]
+    struct FindDataW {
+        attributes: u32,
+        times: [u32; 6],
+        size: [u32; 2],
+        reserved: [u32; 2],
+        name: [u16; 260],
+        alternate: [u16; 14],
+    }
+    extern "system" {
+        fn FindFirstFileW(name: *const u16, data: *mut FindDataW) -> isize;
+        fn FindNextFileW(handle: isize, data: *mut FindDataW) -> i32;
+        fn FindClose(handle: isize) -> i32;
+    }
+    let text = |units: &[u16]| {
+        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+        let name = std::ffi::OsString::from_wide(&units[..end])
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            name.is_ascii(),
+            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
+        );
+        name
+    };
+    let mut query: Vec<u16> = directory
+        .join(String::from_utf8_lossy(pattern).as_ref())
+        .as_os_str()
+        .encode_wide()
+        .collect();
+    query.push(0);
+    // SAFETY: `query` is a terminated wide string and `data` a buffer of the documented
+    // `WIN32_FIND_DATAW` layout; the handle is closed before returning.
+    let mut data: FindDataW = unsafe { std::mem::zeroed() };
+    let handle = unsafe { FindFirstFileW(query.as_ptr(), &mut data) };
+    if handle == -1 {
+        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(2) as u32);
+    }
+    let mut found = Vec::new();
+    loop {
+        let name = text(&data.name);
+        found.push((directory.join(&name), name, text(&data.alternate)));
+        if unsafe { FindNextFileW(handle, &mut data) } == 0 {
+            break;
+        }
+    }
+    unsafe { FindClose(handle) };
+    Ok(found)
+}
+
+/// The entries of `directory` that `pattern` finds, elsewhere than on Windows: matched with
+/// [`search_finds`] and ordered by upper-case name as measured; no short names.
+#[cfg(not(windows))]
+fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Err(if directory.exists() {
             ERROR_FILE_NOT_FOUND
         } else {
             ERROR_PATH_NOT_FOUND
-        };
-        return INVALID_HANDLE_VALUE;
+        });
     };
-    let mut found: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut found: Vec<Found> = Vec::new();
     for special in [".", ".."] {
-        if search_finds(pattern, special, &shown) {
-            found.push((real.join(special), special.to_string()));
+        if search_finds(pattern, special, shown) {
+            found.push((directory.join(special), special.to_string(), String::new()));
         }
     }
     for entry in entries.filter_map(Result::ok) {
@@ -649,19 +742,12 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
             name.is_ascii(),
             "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
         );
-        if search_finds(pattern, &name, &shown) {
-            found.push((entry.path(), name));
+        if search_finds(pattern, &name, shown) {
+            found.push((entry.path(), name, String::new()));
         }
     }
     found.sort_by(|a, b| a.1.to_ascii_uppercase().cmp(&b.1.to_ascii_uppercase()));
-    let mut rest: std::collections::VecDeque<_> = found.into();
-    let Some((first, name)) = rest.pop_front() else {
-        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
-        return INVALID_HANDLE_VALUE;
-    };
-    let meta = std::fs::metadata(&first).expect("the found entry's metadata");
-    write_find_data(e, data, &meta, &name, &shown);
-    e.kernel.insert(KernelObject::FindFile(Search { rest }))
+    Ok(found)
 }
 
 // Platform: replaces KERNEL32.DLL FindNextFileA (import)
@@ -673,16 +759,14 @@ pub fn find_next_file_a(e: &mut Engine, handle: u32, data: Ptr) -> u32 {
         Some(KernelObject::FindFile(search)) => search.rest.pop_front(),
         _ => panic!("FindNextFileA({handle:#x}): not a search handle; not provided"),
     };
-    let Some((path, name)) = next else {
+    let Some(found) = next else {
         e.kernel.last_error = ERROR_NO_MORE_FILES;
         return 0;
     };
-    let shown = path.to_string_lossy().into_owned();
-    let meta = std::fs::metadata(&path).expect("the found entry's metadata");
-    write_find_data(e, data, &meta, &name, &shown);
+    let shown = found.0.to_string_lossy().into_owned();
+    write_found(e, data, &found, &shown);
     1
 }
-
 // Platform: replaces KERNEL32.DLL CompareFileTime (import)
 /// `CompareFileTime(a, b)`: -1, 0 or 1 as the 64-bit time at `a` is less than, equal to or
 /// greater than the one at `b`.
