@@ -208,10 +208,9 @@ pub fn bhk_tri_sampled_height_field_bv_tree_shape_copy_members(
 }
 
 // Translated from 00cb0020 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map; a virtual function only (vtables `010c82d8` and others, among
-/// them `hkSystemMemoryBlockServer`'s slot +4), so `thiscall` with `ECX` unused: clears the
-/// byte at `flag` (one stack word, `RET 4`) and answers `flag` (`EAX`), the `hkBool` it
-/// returns through that pointer.
+/// Unnamed in the engine map: clears the byte at `flag` (one stack word; `ECX` unused) and answers `flag`
+/// (it is still in `EAX` from the load).
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
 pub fn fn_00cb0020(e: &mut Engine, _this: Ptr, flag: Ptr) -> Ptr {
     e.mem.set_u8(flag.addr(), 0);
     flag
@@ -756,10 +755,8 @@ mod tests {
         let mut e = Engine::new();
         let byte = e.mem.alloc(4);
         e.mem.set_u8(byte, 5);
-        // Through the vtable, as the large block allocator calls it: `this` first.
-        let answer = e.call(0x00cb_0020, &args![0x1234u32, byte]).u32();
+        assert_eq!(e.call(0x00cb_0020, &args![0x5555u32, byte]).u32(), byte);
         assert_eq!(e.mem.u8(byte), 0);
-        assert_eq!(answer, byte);
     }
 
     #[test]
