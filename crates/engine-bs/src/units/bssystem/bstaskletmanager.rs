@@ -193,6 +193,36 @@ pub fn fn_00b00df0(e: &mut Engine, this: Ptr) {
     e.vcall(this.addr(), 0x24, &args![]);
 }
 
+/// `EnterCriticalSection`, `LeaveCriticalSection` and `WaitForSingleObject` (KERNEL32).
+const IMPORT_ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const IMPORT_LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+const IMPORT_WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+
+// Translated from 00b020a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`; `this` is not read): under the group's
+/// lock (+0x14), a group not yet started (byte +0x2C clear) polls its semaphore (+0xC,
+/// `WaitForSingleObject` with no wait), is marked started (+0x2C 1), its byte +4 cleared,
+/// +0x2D set and +0x2E cleared and its words +0x34 and +0x38 cleared: answers 1; an already
+/// started group answers 0.
+pub fn fn_00b020a0(e: &mut Engine, _this: Ptr, group: u32) -> u8 {
+    e.call(IMPORT_ENTER_CRITICAL_SECTION, &args![group + 0x14]);
+    let started = if e.mem.u8(group + 0x2c) == 0 {
+        let semaphore = e.mem.u32(group + 0xc);
+        e.call(IMPORT_WAIT_FOR_SINGLE_OBJECT, &args![semaphore, 0u32]);
+        e.mem.set_u8(group + 0x2c, 1);
+        e.mem.set_u8(group + 4, 0);
+        e.mem.set_u8(group + 0x2d, 1);
+        e.mem.set_u8(group + 0x2e, 0);
+        e.mem.set_u32(group + 0x34, 0);
+        e.mem.set_u32(group + 0x38, 0);
+        1
+    } else {
+        0
+    };
+    e.call(IMPORT_LEAVE_CRITICAL_SECTION, &args![group + 0x14]);
+    started
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -202,6 +232,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b0_0c90, fn_00b00c90(Ptr)),
         entry!(0x00b0_0cf0, fn_00b00cf0(Ptr)),
         entry!(0x00b0_0ae0, fn_00b00ae0(Ptr, u32) -> u8),
+        entry!(0x00b0_20a0, fn_00b020a0(Ptr, u32) -> u8),
         entry!(0x00b0_0b40, fn_00b00b40(Ptr, u32, u32, u8) -> u8),
         entry!(0x00b0_0bc0, fn_00b00bc0(Ptr, u32) -> u8),
         entry!(0x00b0_0c20, bs_tasklet_manager_destroy_task_group(Ptr, u32)),
@@ -435,5 +466,46 @@ mod hook_tests {
         assert_eq!(e.mem.u32(0x1008), 3);
         assert_eq!(e.mem.u8(0x1005), 1);
         assert_eq!(calls(&e, 0x00ab_0024), vec![vec![0x1000]]);
+    }
+}
+
+#[cfg(test)]
+mod start_tests {
+    use super::*;
+
+    #[test]
+    fn a_group_starts_once_under_its_lock() {
+        let mut e = Engine::new();
+        for slot in [
+            IMPORT_ENTER_CRITICAL_SECTION,
+            IMPORT_LEAVE_CRITICAL_SECTION,
+            IMPORT_WAIT_FOR_SINGLE_OBJECT,
+        ] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let group = e.mem.alloc(0x40);
+        e.mem.set_u32(group + 0xc, 0x99);
+        e.mem.set_u8(group + 4, 7);
+        e.mem.set_u32(group + 0x34, 5);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b0_20a0, &args![0u32, group]).u8(), 1);
+        assert_eq!(
+            [
+                e.mem.u8(group + 0x2c),
+                e.mem.u8(group + 4),
+                e.mem.u8(group + 0x2d)
+            ],
+            [1, 0, 1]
+        );
+        assert_eq!(e.mem.u32(group + 0x34), 0);
+        let log = e.call_log.take().unwrap();
+        assert!(log
+            .iter()
+            .any(|c| c.0 == IMPORT_WAIT_FOR_SINGLE_OBJECT && c.1 == vec![0x99, 0]));
+        assert_eq!(
+            e.call(0x00b0_20a0, &args![0u32, group]).u8(),
+            0,
+            "already started"
+        );
     }
 }
