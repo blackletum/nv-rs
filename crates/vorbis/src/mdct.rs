@@ -31,7 +31,8 @@ impl Mdct {
         let log2n = n.trailing_zeros();
         let n2 = n >> 1;
         let mut t = vec![0f32; n + n / 4];
-        let pi = std::f64::consts::PI;
+        // The library's `M_PI` is a `float` (3.14159274...), read as such by the x87 unit.
+        let pi = f64::from(std::f32::consts::PI);
         let nf = n as f64;
         let t24 = fpu.trig_24();
         let r = |x: f64| if t24 { f64::from(x as f32) } else { x };

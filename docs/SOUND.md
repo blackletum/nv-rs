@@ -11,7 +11,7 @@ in `scripts/`.
 | Wave files | `platform/mmio.rs` | `mmio*` | `scripts/mmio-measure` | Edge cases as measured |
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
 | Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
-| Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit x87; 53-bit not provided |
+| Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
 | Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | Not done: answers 0 (no sound), but the DLL answers 1 (see below) |
 
 ## Mixer (DirectSound 8 to the device)
@@ -39,8 +39,8 @@ These were measured on a device without audio enhancements (Virtual Desktop Audi
 
 `scripts/vorbis-record` drives the player's `libvorbisfile.dll` the way the game
 does (`00af1e00`, `00af2100`). It reads every `.ogg` in the archives (63,575 files)
-and records the decoded bytes. At 24-bit x87 precision, `crates/vorbis` gives the
-same bytes and the same `ov_pcm_total` for all of them. It follows the public
+and records the decoded bytes. At 24-bit and at 53-bit x87 precision, `crates/vorbis`
+gives the same bytes and the same `ov_pcm_total` for all of them. It follows the public
 libvorbis 1.2.0 source's order of operations (BSD, see `LEGAL.md`).
 
 The library computes on the x87 unit, so its output depends on the decoding
@@ -54,7 +54,7 @@ source's order.
 so they probably run on a task-manager thread. Such a thread starts at
 `0x027F` (53-bit) unless something on it changes the control word.
 
-### What was ruled out for 53 bits
+### 53 bits: how the match was found
 
 The recorder's `--blocks` mode calls `libvorbis.dll`'s public API
 (`vorbis_synthesis`) and records every block after the inverse MDCT.
@@ -62,29 +62,32 @@ The recorder's `--blocks` mode calls `libvorbis.dll`'s public API
 a floor of 1.0 and exact spectra (impulses, random values), so its blocks are
 the DLL's inverse MDCT of a known input.
 
-**At 24 bits:** the crafted blocks match exactly, as the game files do.
+Measurement alone did not find the 53-bit model. None of these came close:
+rounding at each C assignment to `float`, with `float` locals rounded or kept;
+angles at 24 or 53 bits; 486 per-stage combinations.
 
-**At 53 bits:** none of these models of the transform comes close:
-- operations at 53 bits with each C assignment to `float` memory rounded;
-- the same with `float` locals also rounded, or kept unrounded (as in registers);
-- the trig tables' angles computed at 24 or at 53 bits;
-- every combination of 24-bit, 53-bit-with-rounded-locals and 53-bit-with-register-locals
-  for the five stages separately (rotation in, first and generic butterflies, 32-point
-  butterflies, bit reversal, rotation out): 486 combinations.
+With the maintainer's leave (2026-10-24), the DLL's transform was then read as
+instructions: its own Ghidra project in the agent's scratch folder, not the
+shared servers.
 
-The best of these still differs from the DLL in 12,980 of 16,384 values (256-sample
-blocks). That is about as far as the DLL's own 24-bit output is from its 53-bit output.
+**The 53-bit path follows the DLL's instruction order.** That order is the C
+source's, statement for statement:
+- every `float` local of the transform is stored to the stack, so it is rounded to
+  `f32`;
+- each expression is evaluated in registers at the thread's precision and rounded
+  to `f32` when stored.
 
-The rest of the decode does not depend on precision: codebook values, floor and
-residue are single operations on `f32`.
+The one difference from the public source is the trig tables' `M_PI`: the DLL
+uses `pi` rounded to `f32` (3.14159274...). At 24 bits that makes no difference,
+because `pi / n` rounds to the same value. At 53 bits it changes every angle.
+With that constant, the crafted blocks and all 63,575 game files match at
+53 bits as well.
 
-So the difference is likely the compiler keeping values in x87 registers
-across statements, including values it has already stored to memory. Where it
-does that is in the DLL's code, which the project does not read.
+No bytes from the DLL are in the repository. The constant is the `f32` value of
+`pi`, computed in the code.
 
-Until the decoding thread is measured, or a measurement-only route to the model is
-found, `platform/vorbisfile.rs` stops with "not provided" on a thread whose
-precision control is not 24 bits.
+`platform/vorbisfile.rs` decodes at the calling thread's precision: 24 or 53
+bits. 64-bit precision is not provided (not measured).
 
 ## Bink with sound
 

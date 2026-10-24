@@ -15,8 +15,8 @@
 //!
 //! The player's library computes on the x87 unit, so its output depends on the decoding
 //! thread's precision control (62,819 of the 63,575 files differ between 24 and 53 bits). This
-//! decoder takes the precision as a parameter and does the library's arithmetic at it (see
-//! `fpu`).
+//! decoder takes the precision (24 or 53 bits) as a parameter and does the library's arithmetic
+//! at it (see `fpu`); at both it gives the same bytes as the library for every game file.
 
 mod bits;
 mod codebook;

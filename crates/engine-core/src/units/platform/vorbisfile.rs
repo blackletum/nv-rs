@@ -2,8 +2,12 @@
 //! `ov_info`, `ov_seekable`, `ov_pcm_total`, `ov_read`, `ov_clear`), answered by our own Vorbis
 //! decoder (`crates/vorbis`), which gives the same samples as the player's library (libVorbis
 //! 1.2.0): on all 63,575 `.ogg` files in the game's archives, every byte `ov_read` returns, and
-//! `ov_pcm_total`, agree with the library's run at 24-bit x87 precision
-//! (`scripts/vorbis-record`, 2026-10-24).
+//! `ov_pcm_total`, agree with the library's run at 24-bit and at 53-bit x87 precision
+//! (`scripts/vorbis-record`, 2026-10-24). The library computes on the x87 unit, so its output
+//! depends on the decoding thread's precision control (62,819 of the files differ between the
+//! two); the decoder is run at the calling thread's. Which game thread decodes
+//! (`AudioLoadTask::Run`, `00ae7050`, queued to the IO manager `01202d98`) and its control
+//! word are not measured yet.
 //!
 //! The game opens a sound (`00af1e00`) with `ov_open_callbacks(file, this, NULL, 0, {read
 //! 00af2180, seek 00af2200, close NULL, tell 00af2290})` on its own `OggVorbis_File` (0x2d0
@@ -12,11 +16,7 @@
 //! `ov_read(.., 0, 2, 1, ..)`.
 //!
 //! Where this layer stops with "not provided":
-//! - Decoding at an x87 precision other than 24 bits. The library's arithmetic is x87, so its
-//!   output depends on the decoding thread's precision control (62,819 of the files differ
-//!   between 24 and 53 bits), and no model of the 53-bit arithmetic reproduces it yet. Which
-//!   game thread decodes (`AudioLoadTask::Run`, `00ae7050`, queued to the IO manager
-//!   `01202d98`) and its control word are not measured yet.
+//! - Decoding at 64-bit x87 precision (not measured).
 //! - Initial bytes, a stream that cannot seek, other `ov_read` formats.
 //!
 //! The file is read whole through the game's callbacks when it is opened (the seek test, then
@@ -53,14 +53,15 @@ impl std::fmt::Debug for Files {
     }
 }
 
-/// The decoding thread's precision; another than 24 bits is not provided (module documentation).
+/// The decoding thread's precision; 64 bits is not provided (module documentation).
 fn precision(e: &mut Engine, call: &str) -> Precision {
     let word = crate::units::crt::x87_control_word(e);
     match (word >> 8) & 3 {
         0 => Precision::Bits24,
+        2 => Precision::Bits53,
         pc => panic!(
             "{call} at x87 precision control {pc} (control word {word:#06x}) is not provided: the \
-             player's libvorbis computes on the x87 unit and only its 24-bit results are matched"
+             player's libvorbis computes on the x87 unit and only its 24- and 53-bit results are matched"
         ),
     }
 }
@@ -287,9 +288,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "is not provided: the player's libvorbis computes on the x87 unit")]
-    fn decoding_at_53_bits_stops() {
+    fn decoding_at_64_bits_stops() {
         let mut e = Engine::new();
-        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+        crate::units::crt::set_x87_control_word(&mut e, 0x037f);
         open(&mut e, b"OggS");
     }
 }
