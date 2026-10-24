@@ -504,8 +504,8 @@ impl Engine {
     /// is usually written with the `args!` macro; this is the one-argument
     /// form.
     pub fn call1<A: Arg, R: RetVal>(&mut self, addr: u32, a: A) -> R {
-        let mut w = Vec::with_capacity(A::WORDS);
-        a.put(&mut w);
+        let mut w = crate::abi::Words::new();
+        a.put_words(&mut w);
         self.call_as(addr, &w)
     }
 }
