@@ -105,6 +105,8 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00a4_8d70, &args![]).u32(), 0);
         let log = e.call_log.take().unwrap();
-        assert!(log.iter().all(|(a, _)| *a != KEY_BASED_INTERPOLATOR_CONSTRUCT));
+        assert!(log
+            .iter()
+            .all(|(a, _)| *a != KEY_BASED_INTERPOLATOR_CONSTRUCT));
     }
 }

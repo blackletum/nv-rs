@@ -40,7 +40,10 @@ pub fn fn_00a9aea0(e: &mut Engine) -> u32 {
     e.mem.set_u32(object, BSP_NODE_VTABLE);
     e.call(PLANE_CONSTRUCT, &args![object + PLANE_AC]);
     e.call(PLANE_CONSTRUCT, &args![object + PLANE_BC]);
-    e.call(POINTER_ARRAY_SET_SIZE, &args![object + CHILDREN, CHILD_COUNT]);
+    e.call(
+        POINTER_ARRAY_SET_SIZE,
+        &args![object + CHILDREN, CHILD_COUNT],
+    );
     e.mem.set_u16(object + SHORT_AA, 0);
     object
 }
@@ -84,9 +87,7 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let calls: Vec<_> = log
             .into_iter()
-            .filter(|(a, _)| {
-                [NODE_CONSTRUCT, PLANE_CONSTRUCT, POINTER_ARRAY_SET_SIZE].contains(a)
-            })
+            .filter(|(a, _)| [NODE_CONSTRUCT, PLANE_CONSTRUCT, POINTER_ARRAY_SET_SIZE].contains(a))
             .collect();
         assert_eq!(
             calls,
