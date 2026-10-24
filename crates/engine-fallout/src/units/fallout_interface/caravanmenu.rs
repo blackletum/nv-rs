@@ -6240,6 +6240,2237 @@ pub fn caravan_menu_render_scene(e: &mut Engine) {
     });
 }
 
+/// `CaravanMenu::DoIdle`'s timer (`float` at `011d9208`): seconds the
+/// current game state has run; and the game state it was counted for
+/// (`011d9204`).
+const IDLE_TIME: u32 = 0x011d_9208;
+const IDLE_TIME_STATE: u32 = 0x011d_9204;
+/// The object whose word +0x14 (`00825c00`) `DoIdle` reads as its tick
+/// (`011f6394`).
+const IDLE_TICK_SOURCE: u32 = 0x011f_6394;
+/// The word at +0x14 of an object (`00825c00`, `this` only).
+const WORD_AT_0X14: u32 = 0x0082_5c00;
+/// The word at +0xc of an object (`0084e3a0`, `this` only).
+const WORD_AT_0XC: u32 = 0x0084_e3a0;
+/// The word at +0x10 of an object (`0044edb0`, `this` only).
+const WORD_AT_0X10: u32 = 0x0044_edb0;
+/// Stores a word at +0xc (`0041fd00`) and at +0x10 (`00437730`) of an
+/// object (`this`, word).
+const SET_WORD_AT_0XC: u32 = 0x0041_fd00;
+const SET_WORD_AT_0X10: u32 = 0x0043_7730;
+/// The word at +0x28 of an object (`0045cd60`, `this` only): the tile of
+/// the interface manager whose trait `0xfa9` `DoIdle` sets.
+const WORD_AT_0X28: u32 = 0x0045_cd60;
+/// The address +0x8c of an object (`0045bb80`, `this` only).
+const PLUS_0X8C: u32 = 0x0045_bb80;
+/// The float at +0x30 of a controller sequence, in ST0 (`00508100`, `this`
+/// only): compared with the idle timer to end an animation state.
+const SEQUENCE_TIME_00508100: u32 = 0x0050_8100;
+/// The float at +0x48 of the interface manager, in ST0 (`00639aa0`, `this`
+/// only).
+const INTERFACE_FLOAT_00639AA0: u32 = 0x0063_9aa0;
+/// `00a23390` (`this` = controls, two words): a controller axis value.
+const CONTROLS_AXIS_00A23390: u32 = 0x00a2_3390;
+/// `00a23a50` (`this` = controls, two words): a controller button test.
+const CONTROLS_BUTTON_00A23A50: u32 = 0x00a2_3a50;
+/// The absolute value of a `float` (cdecl, result in ST0): `00408820`
+/// (forwards to `00408840`) and `00408840`.
+const FLOAT_MAGNITUDE_00408820: u32 = 0x0040_8820;
+const FLOAT_MAGNITUDE_00408840: u32 = 0x0040_8840;
+/// The absolute value of an integer (cdecl): `00ec7d40`.
+const INTEGER_MAGNITUDE: u32 = 0x00ec_7d40;
+/// `0043b4a0` (`this`, word): the node the idle animations update through
+/// (`this` = the word at `011d91e4`).
+const MODEL_NODE_0043B4A0: u32 = 0x0043_b4a0;
+/// `0047b220` (`this` = manager, sequence, `float`): stops a sequence.
+const DEACTIVATE_SEQUENCE: u32 = 0x0047_b220;
+/// `Menu::StartFadeOut` and `Menu::InstantFadeOut` (`this` only).
+const MENU_START_FADE_OUT: u32 = 0x00a1_d910;
+const MENU_INSTANT_FADE_OUT: u32 = 0x00a1_d9e0;
+/// A byte global `DoIdle` sets when the menu fades out on closing; when it
+/// was already set the fade is instant (`011d9200`).
+const CLOSE_FADED_BYTE: u32 = 0x011d_9200;
+/// `NiCamera::WorldPtToScreenPt` (`this` = camera, point, x out, y out,
+/// tolerance).
+const WORLD_POINT_TO_SCREEN: u32 = 0x00a6_fc50;
+/// The divisor of the elapsed ticks (`double` 1000.0 at `01017b70`).
+const TICKS_PER_SECOND: u32 = 0x0101_7b70;
+/// The stick dead zone and range (`double` 7849.0 at `010718f0`, 32767.0 at
+/// `01029790`).
+const STICK_DEAD_ZONE: u32 = 0x0107_18f0;
+const STICK_RANGE: u32 = 0x0102_9790;
+/// `double` 1.0 (`01012070`).
+const ONE_DOUBLE: u32 = 0x0101_2070;
+/// The repeat delay of the pad and key selection (`double` 0.25 at
+/// `010290b0`) and the stick threshold of the game menu (`double` 0.01 at
+/// `01031148`).
+const SELECTION_REPEAT: u32 = 0x0102_90b0;
+const STICK_THRESHOLD: u32 = 0x0103_1148;
+/// `float` -1.0 (`01012054`).
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// The deal intro's screen layout: the tolerance of the screen projection
+/// (`float` at `010718c0`), the left edge offset (`double` 120.0 at
+/// `010718b8`) and the step between the track rectangles (`double` 265.0 at
+/// `010718b0`).
+const PROJECTION_TOLERANCE: u32 = 0x0107_18c0;
+const TRACK_RECT_LEFT: u32 = 0x0107_18b8;
+const TRACK_RECT_STEP: u32 = 0x0107_18b0;
+/// The node name the track rectangles are placed by (`Select1_01:0`) and
+/// the two track rectangle tiles (`CGM_NPCTrackRect`,
+/// `CGM_PlayerTrackRect`).
+const FIRST_SELECT_NAME: u32 = 0x0107_18c4;
+const NPC_TRACK_RECT_NAME: u32 = 0x0107_189c;
+const PLAYER_TRACK_RECT_NAME: u32 = 0x0107_1888;
+/// The opponent's deck objects hidden when it plays its last card
+/// (`Opponent-Deck_06:5`, `Opponent-Deck_Back:0` and their shadows).
+const NPC_DECK_OBJECTS: [u32; 4] = [0x0107_17a8, 0x0107_1790, 0x0107_1774, 0x0107_1758];
+/// The sounds of the idle states (`GAMECaravanStartMatch`, `FundsDrop`,
+/// `Navigate`, `ChangeDeck`, `AddRemove`, `ConfirmAddtoDeck`,
+/// `RemoveCard`, `ConfirmAddToTrack`, `AddRemoveCard`, `SwitchCard`).
+const START_MATCH_SOUND: u32 = 0x0107_18d4;
+const FUNDS_DROP_SOUND: u32 = 0x0107_1870;
+const NAVIGATE_SOUND: u32 = 0x0107_185c;
+const CHANGE_DECK_SOUND: u32 = 0x0107_1844;
+const ADD_REMOVE_SOUND: u32 = 0x0107_182c;
+const CONFIRM_ADD_TO_DECK_SOUND: u32 = 0x0107_1810;
+const REMOVE_CARD_SOUND: u32 = 0x0107_17f8;
+const CONFIRM_ADD_TO_TRACK_SOUND: u32 = 0x0107_17d8;
+const ADD_REMOVE_CARD_SOUND: u32 = 0x0107_17bc;
+const SWITCH_CARD_SOUND: u32 = 0x0107_1740;
+/// The help messages' editor IDs (`HelpCaravanDeckBuilding`,
+/// `HelpCaravanStartingCaravans`, `HelpCaravanContractWar`).
+const HELP_DECK_BUILDING: u32 = 0x0101_8dd4;
+const HELP_STARTING_CARAVANS: u32 = 0x0101_8db8;
+const HELP_CONTRACT_WAR: u32 = 0x0101_8da0;
+/// The setting whose string the results menu's caption (tile 35) gets.
+const RESULTS_CAPTION_SETTING: u32 = 0x011d_372c;
+/// The `fSelectionDelay` field (Xbox PDB, `float` at +0xe3c).
+const SELECTION_DELAY: u32 = 0xe3c;
+/// The keys `DoKey` leaves in `PENDING_KEY` (up, down, right, left).
+const KEY_UP: u32 = 0x8000_0003;
+const KEY_DOWN: u32 = 0x8000_0004;
+const KEY_RIGHT: u32 = 0x8000_0002;
+const KEY_LEFT: u32 = 0x8000_0001;
+/// `CaravanMenu::enumFlags` (Xbox PDB enum).
+const CAF_JOKER: u32 = 0x8000;
+/// `CaravanMenu`'s frame size below `EBP` (`SUB ESP,0x56c` under the three
+/// words of the exception frame).
+const DO_IDLE_FRAME: u32 = 0x578;
+
+/// The idle timer as `FLD float` loads it.
+fn idle_time(e: &Engine) -> f64 {
+    x87_load32(e.global::<u32>(IDLE_TIME))
+}
+
+/// The idle timer's bits as an `FLD`/`FSTP` pair pushes them.
+fn idle_time_bits(e: &Engine) -> u32 {
+    x87_quiet_bits(e.global::<u32>(IDLE_TIME))
+}
+
+/// `FLD [idle timer]; FCOMP 0.0; TEST AH,0x44; JP`: the timer is 0.0.
+fn idle_time_is_zero(e: &Engine) -> bool {
+    idle_time(e) == e.global::<f64>(ZERO_DOUBLE)
+}
+
+/// `FLDZ; FSTP [idle timer]`.
+fn reset_idle_time(e: &mut Engine) {
+    e.set_global::<u32>(IDLE_TIME, 0);
+}
+
+/// `0047aab0(manager, sequence, 0, 0, 1.0, 0.0, 0)`.
+fn idle_activate(e: &mut Engine, manager: u32, sequence: u32) {
+    e.call(
+        ACTIVATE_SEQUENCE,
+        &args![
+            manager,
+            sequence,
+            0u32,
+            0u32,
+            1.0f32.to_bits(),
+            0.0f32.to_bits(),
+            0u32
+        ],
+    );
+}
+
+/// `0047b220(manager, sequence, 0.0)`.
+fn idle_deactivate(e: &mut Engine, manager: u32, sequence: u32) {
+    e.call(DEACTIVATE_SEQUENCE, &args![manager, sequence, 0u32]);
+}
+
+/// `0043d410(block, time, 1, 0)`: an update-data block; answers the block.
+fn idle_update_data(e: &mut Engine, block: u32, time_bits: u32) -> u32 {
+    e.call(UPDATE_DATA_INIT, &args![block, time_bits, 1u32, 0u32])
+        .u32()
+}
+
+/// `00a59c60(object, block)`.
+fn idle_update(e: &mut Engine, object: u32, block: u32) {
+    e.call(OBJECT_UPDATE, &args![object, block]);
+}
+
+/// `00a59c60(0043b4a0(00559450(011d91e4), 0), block)`.
+fn idle_update_model(e: &mut Engine, block: u32) {
+    let root = e.call(FIRST_WORD, &args![MONEY_ROOT]).u32();
+    let node = e.call(MODEL_NODE_0043B4A0, &args![root, 0u32]).u32();
+    e.call(OBJECT_UPDATE, &args![node, block]);
+}
+
+/// `00508100(sequence)`, then `FLD [idle timer]; FCOMPP; TEST AH,1`: the
+/// timer has reached the sequence's float (ordered, not below).
+fn idle_sequence_reached(e: &mut Engine, sequence: u32) -> bool {
+    let end = e.call(SEQUENCE_TIME_00508100, &args![sequence]).f64();
+    idle_time(e) >= end
+}
+
+/// The same with `TEST AH,0x41`: the timer is past the sequence's float.
+fn idle_sequence_passed(e: &mut Engine, sequence: u32) -> bool {
+    let end = e.call(SEQUENCE_TIME_00508100, &args![sequence]).f64();
+    idle_time(e) > end
+}
+
+/// Shows the tutorial `index` with the message of `editor_id` unless the
+/// interface manager's tutorials (+0x4d4) have shown it (`00718840`):
+/// `TutorialMenu::Create` of the message (`__RTDynamicCast` of the form),
+/// its result in `bTutorial`, marks it shown (`007185e0`) and keeps the
+/// index in `iTutorial`.
+fn idle_tutorial(e: &mut Engine, this: Ptr<CaravanMenu>, index: u32, editor_id: u32) {
+    let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+    if e.call(TUTORIAL_SHOWN, &args![interface.wrapping_add(0x4d4), index])
+        .bool()
+    {
+        return;
+    }
+    let form = e.call(FORM_BY_EDITOR_ID, &args![editor_id]).u32();
+    let message = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, CAST_SOURCE_TYPE, CAST_TARGET_TYPE, 0u32],
+        )
+        .u32();
+    if message == 0 {
+        return;
+    }
+    let shown = e.call(TUTORIAL_MENU_CREATE, &args![message, 0u32]).u8();
+    e.set(this, CaravanMenu::bTutorial, shown);
+    let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+    e.call(TUTORIAL_MARK, &args![interface.wrapping_add(0x4d4), index]);
+    e.mem.set_u32(this.addr() + TUTORIAL_INDEX, index);
+}
+
+/// `00a012d0(interface tile, 0xfa9, 255.0, 1)`: the trait of the interface
+/// manager's tile (`004b7210`, its word +0x28).
+fn idle_reset_interface_tile(e: &mut Engine) {
+    let full = x87_quiet_bits(e.global::<u32>(TRACK_ALPHA));
+    let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+    let target = e.call(WORD_AT_0X28, &args![interface]).u32();
+    e.call(SET_FLOAT_TRAIT, &args![target, 0xfa9u32, full, 1u32]);
+}
+
+/// Sets the deck meter (tile 15) to `index` (`00a012d0` with flag 0) and
+/// pokes its `_SetInCode` trait with 1.0.
+fn idle_set_meter(e: &mut Engine, this: Ptr<CaravanMenu>, index: i32) {
+    let value = x87_store32(f64::from(index));
+    let trait_id = e.global::<u32>(UT_CURRENT_VALUE);
+    let meter = tile(e, this, 0xf);
+    e.call(SET_FLOAT_TRAIT, &args![meter, trait_id, value, 0u32]);
+    let set_in_code = e
+        .call(TILE_TEXT_TO_TRAIT, &args![SET_IN_CODE_TRAIT_NAME])
+        .u32();
+    let meter = tile(e, this, 0xf);
+    e.call(TILE_POKE, &args![meter, set_in_code, 1.0f32.to_bits()]);
+}
+
+/// The deck meter's `_current_value` (tile 15), in ST0.
+fn idle_meter_value(e: &mut Engine, this: Ptr<CaravanMenu>) -> f64 {
+    let trait_id = e.global::<u32>(UT_CURRENT_VALUE);
+    let meter = tile(e, this, 0xf);
+    float_trait(e, meter, trait_id)
+}
+
+/// `pStartAnimations[player][index]` (+0x2c4, 8 per side).
+fn start_animation(menu: u32, side: u32, index: u32) -> u32 {
+    menu.wrapping_add(side.wrapping_mul(0x20))
+        .wrapping_add(0x2c4)
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+/// `pHandAnimations[player][index]` (+0x294, 6 per side).
+fn hand_animation(menu: u32, side: u32, index: u32) -> u32 {
+    menu.wrapping_add(side.wrapping_mul(0x18))
+        .wrapping_add(0x294)
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+/// `pTrackAnimations[track][row][column][which]` (+0x3ac).
+fn track_animation(menu: u32, track: u32, row: u32, column: u32, which: u32) -> u32 {
+    menu.wrapping_add(track.wrapping_mul(0xe0))
+        .wrapping_add(0x3ac)
+        .wrapping_add(row << 5)
+        .wrapping_add(column.wrapping_mul(8))
+        .wrapping_add(which.wrapping_mul(4))
+}
+
+/// `pTrackAnimManager[track][row]` (+0x304).
+fn track_manager(e: &Engine, menu: u32, track: u32, row: u32) -> u32 {
+    let base = menu
+        .wrapping_add(track.wrapping_mul(0x1c))
+        .wrapping_add(0x304);
+    e.mem.u32(base.wrapping_add(row.wrapping_mul(4)))
+}
+
+/// `pHandAnimManager[side]` (+0x28c) and `pHandGeometry[side]` (+0x190).
+fn hand_manager(e: &Engine, menu: u32, side: u32) -> u32 {
+    e.mem
+        .u32(menu.wrapping_add(side.wrapping_mul(4)).wrapping_add(0x28c))
+}
+
+fn hand_geometry(e: &Engine, menu: u32, side: u32) -> u32 {
+    e.mem.u32(
+        menu.wrapping_add(side.wrapping_mul(4))
+            .wrapping_add(HAND_GEOMETRY),
+    )
+}
+
+/// The selected track card's sequence (`pTrackAnimations[iSelectedTrack]
+/// [iSelectedRow][iSelectedColumn][0]`).
+fn selected_track_animation(e: &Engine, menu: u32) -> u32 {
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let column = e.mem.u32(menu + 0xe38);
+    e.mem.u32(track_animation(menu, track, row, column, 0))
+}
+
+/// `pTrackAnimManager[iSelectedTrack][iSelectedRow]`.
+fn selected_track_manager(e: &Engine, menu: u32) -> u32 {
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    track_manager(e, menu, track, row)
+}
+
+/// Pokes tile 29 + `side` with `_Value` 1.0 and sets its `_Value` from the
+/// size of the side's deck (`00715c60`).
+fn idle_show_deck_count(e: &mut Engine, this: Ptr<CaravanMenu>, side: u32) {
+    let menu = this.addr();
+    let value_trait = e.global::<u32>(UT_VALUE);
+    let target = e.mem.u32(menu.wrapping_add(side.wrapping_mul(4)) + 0xa4);
+    e.call(TILE_POKE, &args![target, value_trait, 1.0f32.to_bits()]);
+    let count = if side == 0 {
+        array_size(e, menu + PLAYER_DECK)
+    } else {
+        array_size(e, menu + NPC_DECK)
+    };
+    let value_trait = e.global::<u32>(UT_VALUE);
+    let target = e.mem.u32(menu.wrapping_add(side.wrapping_mul(4)) + 0xa4);
+    e.call(SET_TRAIT_FROM_UNSIGNED, &args![target, value_trait, count]);
+}
+
+/// Selects the player's last hand card (`SelectDeckCard(0)` with
+/// `iSelectedDeckCard` the hand's size - 1).
+fn idle_select_last_hand_card(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    let menu = this.addr();
+    let size = array_size(e, menu + PLAYER_HAND);
+    e.mem.set_u32(menu + 0xe2c, size.wrapping_sub(1));
+    caravan_menu_select_deck_card(e, this, 0);
+}
+
+/// With `CAF_TRACK_SETUP`, sets `CAF_DISABLE_A` when the selected hand
+/// card's word +0xb4 is over 10.
+fn idle_check_hand_card(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    let menu = this.addr();
+    if caravan_menu_has_flag(e, this, CAF_TRACK_SETUP) {
+        let selected = e.mem.u32(menu + 0xe2c);
+        if card_b4(e, menu + PLAYER_HAND, selected) as i32 > 10 {
+            caravan_menu_set_flag(e, this, CAF_DISABLE_A, 1);
+        }
+    }
+}
+
+/// `UpdateCaravanFlags`, then `UpdateTileAlpha(-1)`.
+fn idle_refresh(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    caravan_menu_update_caravan_flags(e, this);
+    caravan_menu_update_tile_alpha(e, this, -1);
+}
+
+/// The stick and key input of one `DoIdle` call (`[EBP-0x14]`,
+/// `[EBP-0x28]` and their floats `[EBP-0x24]`, `[EBP-0x20]`).
+struct IdleInput {
+    x: i32,
+    y: i32,
+    x_bits: u32,
+    y_bits: u32,
+}
+
+/// `0043d410` on three blocks (with the idle timer, or 0.0), then the
+/// model with the first, the active deck (+0x18c) with the second and the
+/// inactive deck (+0x188) with the third.
+fn idle_update_decks(e: &mut Engine, this: Ptr<CaravanMenu>, blocks: [u32; 3], timed: bool) {
+    for block in blocks {
+        let bits = if timed { idle_time_bits(e) } else { 0 };
+        idle_update_data(e, block, bits);
+    }
+    idle_update_model(e, blocks[0]);
+    let active = e.mem.u32(this.addr() + ACTIVE_DECK_GEOMETRY);
+    idle_update(e, active, blocks[1]);
+    let inactive = e.mem.u32(this.addr() + INACTIVE_DECK_GEOMETRY);
+    idle_update(e, inactive, blocks[2]);
+}
+
+/// `pActiveDeckAnimations[slot]` or `pInactiveDeckAnimations[slot]` is set.
+fn idle_decks_present(e: &Engine, menu: u32, slot: u32) -> bool {
+    e.mem.u32(menu + ACTIVE_DECK_ANIMATIONS + 4 * slot) != 0
+        || e.mem.u32(menu + INACTIVE_DECK_ANIMATIONS + 4 * slot) != 0
+}
+
+/// Activates the two deck sequences of `slot` (active, then inactive).
+fn idle_activate_decks(e: &mut Engine, menu: u32, slot: u32) {
+    let manager = e.mem.u32(menu + ACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + ACTIVE_DECK_ANIMATIONS + 4 * slot);
+    idle_activate(e, manager, sequence);
+    let manager = e.mem.u32(menu + INACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + INACTIVE_DECK_ANIMATIONS + 4 * slot);
+    idle_activate(e, manager, sequence);
+}
+
+/// Stops the two deck sequences of `slot` (active, then inactive).
+fn idle_deactivate_decks(e: &mut Engine, menu: u32, slot: u32) {
+    let manager = e.mem.u32(menu + ACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + ACTIVE_DECK_ANIMATIONS + 4 * slot);
+    idle_deactivate(e, manager, sequence);
+    let manager = e.mem.u32(menu + INACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + INACTIVE_DECK_ANIMATIONS + 4 * slot);
+    idle_deactivate(e, manager, sequence);
+}
+
+/// The active deck sequence of `slot` has run.
+fn idle_decks_reached(e: &mut Engine, menu: u32, slot: u32) -> bool {
+    let sequence = e.mem.u32(menu + ACTIVE_DECK_ANIMATIONS + 4 * slot);
+    idle_sequence_reached(e, sequence)
+}
+
+/// `SwapDeckBuildingTextures(ftol(meter value + offset), 0)`.
+fn idle_swap_deck_textures(e: &mut Engine, this: Ptr<CaravanMenu>, value: f64) {
+    let index = e.call(FTOL, &args![value]).i32();
+    caravan_menu_swap_deck_building_textures(e, this, index, 0);
+}
+
+/// The deck building states' end: state 0, both deck sequences of `slot`
+/// stopped, `CAF_DISABLE_ALLCONTROLS` cleared, flags and alpha refreshed.
+fn idle_finish_decks(e: &mut Engine, this: Ptr<CaravanMenu>, slot: u32) {
+    e.set(this, CaravanMenu::eGameState, 0);
+    idle_deactivate_decks(e, this.addr(), slot);
+    caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    idle_refresh(e, this);
+}
+
+/// The deck building states' start: both sequences of `slot` activated,
+/// `CAF_DISABLE_ALLCONTROLS` set, alpha refreshed.
+fn idle_start_decks(e: &mut Engine, this: Ptr<CaravanMenu>, slot: u32) {
+    idle_activate_decks(e, this.addr(), slot);
+    caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+    caravan_menu_update_tile_alpha(e, this, -1);
+}
+
+/// Decrements `iNumSteps`.
+fn idle_step_down(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    let steps = e.get(this, CaravanMenu::iNumSteps);
+    e.set(this, CaravanMenu::iNumSteps, steps.wrapping_sub(1));
+}
+
+// Translated from 00741500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CaravanMenu::DoIdle` (vtable slot +0x2c, Xbox PDB): the menu's frame.
+///
+/// While a tutorial message is up (`bTutorial`) nothing runs unless the
+/// menu is on top and the tutorial (`iTutorial`) has been shown, which
+/// clears it. The idle timer (`011d9208`) adds the ticks since
+/// `uiPrevIdleTick` (the word +0x14 of `011f6394`) over 1000.0 while the
+/// game state stays the one it was counted for (`011d9204`), else restarts
+/// at 0.0; off top the menu clears `CAF_ISONTOP` and stops (on top it sets
+/// it). When the controls are read (`004b71d0`), the stick (controls
+/// `00a23390` with 7 and 8) gives the x and y steps, zero within 7849.0, as
+/// floats over 32767.0 (y negated). Off top or in the deck menu the
+/// interface tile's trait `0xfa9` is set to 255.0. `CAF_MARKFORCLOSE`
+/// moves an on-top menu to state 0x16 and stops; in the results menu a
+/// timer past 1.0 in state 0 clears `CAF_DISABLE_ALLCONTROLS`.
+///
+/// Then each `eGameState` runs its step: 0 the input of the active menu
+/// (deck meter steps, the hand card and track selection by keys and stick,
+/// the results menu's buttons), 1 to 3 the camera intros (deck, game with
+/// the track rectangles placed on screen, results), 4 the money drop, 5 to
+/// 10 the deck building animations (navigate, add and remove, change deck,
+/// wipe into the game), 11 to 14 dealing, discarding and placing cards,
+/// 15, 17 and 18 track discards and jokers, 19 the next joker, 21 the turn
+/// change (the opponent's move from `0074fdc0`), 22 the results, 23 the
+/// closing fade. Each animation state starts its sequences when the timer
+/// is 0.0, updates the animated objects with the timer, and ends when the
+/// timer reaches the sequence's float (`00508100`).
+///
+/// The compiler left one block that never runs in state 0's deck meter
+/// (behind `XOR EDX,EDX; JZ`); it is translated behind a constant
+/// condition.
+// Translation incomplete: 00741500 - the C++ exception-unwinding frame (FS:[0]) that releases the sound handles is not translated
+pub fn caravan_menu_do_idle(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    e.with_stack(DO_IDLE_FRAME, |e, frame| {
+        do_idle_frame(e, this, frame.addr() + DO_IDLE_FRAME);
+    });
+}
+
+/// `DoIdle`'s body; `ebp` is the frame base its stack locals sit under.
+fn do_idle_frame(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let on_top = is_top_menu(e, this);
+    if e.get(this, CaravanMenu::bTutorial) != 0 {
+        if !on_top {
+            return;
+        }
+        let index = e.mem.u32(menu + TUTORIAL_INDEX);
+        let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+        if !e
+            .call(TUTORIAL_SHOWN, &args![interface.wrapping_add(0x4d4), index])
+            .bool()
+        {
+            return;
+        }
+        e.set(this, CaravanMenu::bTutorial, 0);
+    }
+    if e.get(this, CaravanMenu::uiPrevIdleTick) == 0 {
+        reset_idle_time(e);
+        e.set_global::<u32>(IDLE_TIME_STATE, 0);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+    } else if on_top {
+        caravan_menu_set_flag(e, this, CAF_ISONTOP, 1);
+        let tick = e.call(WORD_AT_0X14, &args![IDLE_TICK_SOURCE]).u32();
+        let elapsed = tick.wrapping_sub(e.get(this, CaravanMenu::uiPrevIdleTick)) as i32;
+        if e.global::<u32>(IDLE_TIME_STATE) == e.get(this, CaravanMenu::eGameState) as u32 {
+            let seconds = x87_div(f64::from(elapsed), e.global::<f64>(TICKS_PER_SECOND));
+            let time = x87_add(seconds, x87_m32(e.global::<u32>(IDLE_TIME)));
+            e.set_global::<u32>(IDLE_TIME, x87_store32(time));
+        } else {
+            reset_idle_time(e);
+        }
+    } else {
+        caravan_menu_set_flag(e, this, CAF_ISONTOP, 0);
+        return;
+    }
+    let mut input = IdleInput {
+        x: 0,
+        y: 0,
+        x_bits: 0,
+        y_bits: 0,
+    };
+    e.call(INTERFACE_SINGLETON, &args![]);
+    if e.call(KEYS_BLOCKED_004B71D0, &args![]).bool() {
+        let owner = e.global::<u32>(CONTROLS_OWNER);
+        let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();
+        input.x = e
+            .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, 7u32])
+            .i32();
+        let owner = e.global::<u32>(CONTROLS_OWNER);
+        let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();
+        input.y = e
+            .call(CONTROLS_AXIS_00A23390, &args![controls, 0u32, 8u32])
+            .i32();
+        let x_float = x87_store32(f64::from(input.x));
+        let magnitude = e.call(FLOAT_MAGNITUDE_00408820, &args![x_float]).f64();
+        if magnitude <= e.global::<f64>(STICK_DEAD_ZONE) {
+            input.x = 0;
+        }
+        let range = e.global::<f64>(STICK_RANGE);
+        input.x_bits = x87_store32(x87_div(f64::from(input.x), range));
+        let y_float = x87_store32(f64::from(input.y));
+        let magnitude = e.call(FLOAT_MAGNITUDE_00408820, &args![y_float]).f64();
+        if magnitude <= e.global::<f64>(STICK_DEAD_ZONE) {
+            input.y = 0;
+        }
+        let range = e.global::<f64>(STICK_RANGE);
+        input.y_bits = x87_store32(x87_div(f64::from(input.y.wrapping_neg()), range));
+    }
+    let tick = e.call(WORD_AT_0X14, &args![IDLE_TICK_SOURCE]).u32();
+    e.set(this, CaravanMenu::uiPrevIdleTick, tick);
+    let state = e.get(this, CaravanMenu::eGameState);
+    e.set_global::<u32>(IDLE_TIME_STATE, state as u32);
+    if !on_top || e.get(this, CaravanMenu::eActiveMenu) == 1 {
+        idle_reset_interface_tile(e);
+    }
+    if caravan_menu_has_flag(e, this, CAF_MARKFORCLOSE) {
+        if on_top {
+            caravan_menu_set_flag(e, this, CAF_MARKFORCLOSE, 0);
+            e.set(this, CaravanMenu::eGameState, 0x16);
+        }
+        return;
+    }
+    if e.get(this, CaravanMenu::eActiveMenu) == 3
+        && e.get(this, CaravanMenu::eGameState) == 0
+        && idle_time(e) > e.global::<f64>(ONE_DOUBLE)
+    {
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    }
+    match e.get(this, CaravanMenu::eGameState) as u32 {
+        0 => idle_input(e, this, &mut input),
+        1 => idle_deck_intro(e, this, ebp),
+        2 => idle_game_intro(e, this, ebp),
+        3 => idle_results_intro(e, this, ebp),
+        4 => idle_money_drop(e, this, ebp),
+        5 => idle_navigate_forward(e, this, ebp),
+        6 => idle_navigate_back(e, this, ebp),
+        7 => idle_add_remove(e, this, ebp),
+        8 => idle_change_deck_forward(e, this, ebp),
+        9 => idle_change_deck_back(e, this, ebp),
+        0xa => idle_deck_wipe(e, this, ebp),
+        0xb => idle_intro_deal(e, this, ebp),
+        0xc => idle_discard_card(e, this, ebp),
+        0xd => idle_place_card(e, this, ebp),
+        0xe => idle_redraw_card(e, this, ebp),
+        0xf => idle_discard_track(e, this, ebp),
+        0x11 => idle_remove_row(e, this, ebp),
+        0x12 => idle_restore_row(e, this, ebp),
+        0x13 => idle_next_joker(e, this),
+        0x15 => idle_next_turn(e, this, ebp),
+        0x16 => {
+            caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+            caravan_menu_prepare_results_menu(e, this);
+            e.set(this, CaravanMenu::eGameState, 3);
+        }
+        0x17 => idle_closing(e, this),
+        _ => {}
+    }
+}
+
+/// State 0x17 (`CA_CLOSING_MENU`): unless the fade state (`0059bb30`, the
+/// word +0x24) is 2, sets the interface tile's trait `0xfa9` to 255.0, the
+/// menu tile's trait `0x1772` to 1 (`00700320`), starts the fade-out,
+/// clears `pMe`, fades out at once when `011d9200` was set, and sets it.
+fn idle_closing(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    if e.call(WORD_AT_0X24, &args![this]).u32() == 2 {
+        return;
+    }
+    idle_reset_interface_tile(e);
+    let menu_tile = e.call(WORD_AT_FOUR, &args![this]).u32();
+    e.call(SET_TRAIT_FROM_INT, &args![menu_tile, 0x1772u32, 1u32]);
+    e.call(MENU_START_FADE_OUT, &args![this]);
+    e.set_global::<u32>(CARAVAN_MENU, 0);
+    if e.global::<u8>(CLOSE_FADED_BYTE) != 0 {
+        e.call(MENU_INSTANT_FADE_OUT, &args![this]);
+    }
+    e.set_global::<u8>(CLOSE_FADED_BYTE, 1);
+}
+
+/// State 1: the deck menu's camera intro (`pCameraAnimations[0]`), then
+/// state 0 and the deck building help (tutorial 0x1f).
+fn idle_deck_intro(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if e.mem.u32(menu + CAMERA_ANIMATIONS) == 0 {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+        let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS);
+        idle_activate(e, manager, sequence);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        caravan_menu_update_tile_alpha(e, this, -1);
+    }
+    let block = ebp - 0x38;
+    let bits = idle_time_bits(e);
+    idle_update_data(e, block, bits);
+    idle_update_model(e, block);
+    let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    e.set(this, CaravanMenu::eGameState, 0);
+    let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS);
+    idle_deactivate(e, manager, sequence);
+    caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    caravan_menu_update_tile_alpha(e, this, -1);
+    idle_tutorial(e, this, 0x1f, HELP_DECK_BUILDING);
+}
+
+/// Sets trait `0xfa1` of tile `index` to the float at `slot` (flag 1).
+fn idle_place_track_rect(e: &mut Engine, this: Ptr<CaravanMenu>, index: u32, slot: u32) {
+    let bits = x87_quiet_bits(e.mem.u32(slot));
+    let target = tile(e, this, index);
+    set_float_bits(e, target, 0xfa1, bits);
+}
+
+/// State 2: the game menu's intro (`pCameraAnimations[1]` with the two
+/// hands' first sequences). At its start the flags are cleared, the
+/// selection delay zeroed and the match sound played. At its end the
+/// sequences stop, `CAF_TRACK_SETUP` is set and the six track value tiles
+/// (23 to 28) are placed at the screen position of `Select1_01:0` of
+/// `pTrackGrids[0]` (`WorldPtToScreenPt` on `sp3DCamera`) times the menu's
+/// trait `0xfb1` (truncated) less 120.0, 265.0 apart; the track rectangles
+/// get trait `0xfa3` 1, then state 0x15 and the starting caravans help
+/// (tutorial 0x20).
+fn idle_game_intro(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if e.mem.u32(menu + CAMERA_ANIMATIONS + 4) == 0
+        || e.mem.u32(menu + 0x294) == 0
+        || e.mem.u32(menu + 0x2ac) == 0
+    {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+        let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 4);
+        idle_activate(e, manager, sequence);
+        caravan_menu_clear_flags(e, this);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        let manager = e.mem.u32(menu + HAND_ANIM_MANAGER);
+        let sequence = e.mem.u32(menu + 0x294);
+        idle_activate(e, manager, sequence);
+        let manager = e.mem.u32(menu + HAND_ANIM_MANAGER + 4);
+        let sequence = e.mem.u32(menu + 0x2ac);
+        idle_activate(e, manager, sequence);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+        play_sound(e, START_MATCH_SOUND);
+        caravan_menu_update_tile_alpha(e, this, -1);
+    }
+    let blocks = [ebp - 0x54, ebp - 0x48, ebp - 0x60];
+    for block in blocks {
+        let bits = idle_time_bits(e);
+        idle_update_data(e, block, bits);
+    }
+    let hand = e.mem.u32(menu + HAND_GEOMETRY);
+    idle_update(e, hand, blocks[1]);
+    let hand = e.mem.u32(menu + HAND_GEOMETRY + 4);
+    idle_update(e, hand, blocks[2]);
+    idle_update_model(e, blocks[0]);
+    let camera_sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 4);
+    if !idle_sequence_reached(e, camera_sequence) {
+        return;
+    }
+    let sequence = e.mem.u32(menu + 0x294);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let sequence = e.mem.u32(menu + 0x2ac);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 4);
+    idle_deactivate(e, manager, sequence);
+    let manager = e.mem.u32(menu + HAND_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + 0x294);
+    idle_deactivate(e, manager, sequence);
+    let manager = e.mem.u32(menu + HAND_ANIM_MANAGER + 4);
+    let sequence = e.mem.u32(menu + 0x2ac);
+    idle_deactivate(e, manager, sequence);
+    caravan_menu_set_flag(e, this, CAF_TRACK_SETUP, 1);
+    let x_slot = ebp - 0x68;
+    let y_slot = ebp - 0x64;
+    e.mem.set_u32(x_slot, 0);
+    e.mem.set_u32(y_slot, 0);
+    let root = tile(e, this, 2);
+    let width = float_trait(e, root, 0xfb1);
+    let width = e.call(FTOL, &args![width]).i32();
+    let grids = e.mem.u32(menu + TRACK_GRIDS);
+    let node = e
+        .call(OBJECT_BY_NAME, &args![grids, FIRST_SELECT_NAME])
+        .u32();
+    let tolerance = x87_quiet_bits(e.global::<u32>(PROJECTION_TOLERANCE));
+    let point = e.call(PLUS_0X8C, &args![node]).u32();
+    let camera = e.call(FIRST_WORD, &args![CAMERA_POINTER]).u32();
+    e.call(
+        WORLD_POINT_TO_SCREEN,
+        &args![camera, point, x_slot, y_slot, tolerance],
+    );
+    let left = x87_sub(
+        x87_mul(f64::from(width), x87_m32(e.mem.u32(x_slot))),
+        e.global::<f64>(TRACK_RECT_LEFT),
+    );
+    e.mem.set_u32(x_slot, x87_store32(left));
+    idle_place_track_rect(e, this, 0x17, x_slot);
+    idle_place_track_rect(e, this, 0x1c, x_slot);
+    let next = x87_add(x87_m32(e.mem.u32(x_slot)), e.global::<f64>(TRACK_RECT_STEP));
+    e.mem.set_u32(x_slot, x87_store32(next));
+    idle_place_track_rect(e, this, 0x18, x_slot);
+    idle_place_track_rect(e, this, 0x1b, x_slot);
+    let next = x87_add(x87_m32(e.mem.u32(x_slot)), e.global::<f64>(TRACK_RECT_STEP));
+    e.mem.set_u32(x_slot, x87_store32(next));
+    idle_place_track_rect(e, this, 0x19, x_slot);
+    idle_place_track_rect(e, this, 0x1a, x_slot);
+    for name in [NPC_TRACK_RECT_NAME, PLAYER_TRACK_RECT_NAME] {
+        let root = tile(e, this, 2);
+        let rect = e.call(TILE_CHILD_NAMED, &args![root, name]).u32();
+        e.call(SET_TRAIT_FROM_INT, &args![rect, 0xfa3u32, 1u32]);
+    }
+    idle_refresh(e, this);
+    e.set(this, CaravanMenu::eGameState, 0x15);
+    idle_tutorial(e, this, 0x20, HELP_STARTING_CARAVANS);
+}
+
+/// State 3: the results menu's camera intro (`pCameraAnimations[2]`),
+/// then state 0 in the results menu (`eActiveMenu` 3) with `CAF_AI`
+/// cleared and tile 35's caption from setting `011d372c`.
+fn idle_results_intro(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if e.mem.u32(menu + CAMERA_ANIMATIONS + 8) == 0 {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+        let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 8);
+        idle_activate(e, manager, sequence);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        caravan_menu_update_tile_alpha(e, this, -1);
+    }
+    let block = ebp - 0x80;
+    let bits = idle_time_bits(e);
+    idle_update_data(e, block, bits);
+    idle_update_model(e, block);
+    let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 8);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    e.set(this, CaravanMenu::eGameState, 0);
+    e.set(this, CaravanMenu::eActiveMenu, 3);
+    let manager = e.mem.u32(menu + CAMERA_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + CAMERA_ANIMATIONS + 8);
+    idle_deactivate(e, manager, sequence);
+    caravan_menu_set_flag(e, this, CAF_AI, 0);
+    set_caption(e, this, 0x23, RESULTS_CAPTION_SETTING);
+    idle_refresh(e, this);
+}
+
+/// State 4: the money drop. At its start the funds sound plays; the bills
+/// and coins from `iBillIndexToAnim` and `iCoinIndexToAnim` on are updated
+/// with the timer; past 1.0 the indexes move to the lists' ends and the
+/// state returns to 0.
+fn idle_money_drop(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if idle_time_is_zero(e) {
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        play_sound(e, FUNDS_DROP_SOUND);
+    }
+    let mut index = e.mem.u32(menu + BILL_INDEX_TO_ANIM);
+    while index < array_size(e, menu + LIST_OF_BILLS) {
+        let bits = idle_time_bits(e);
+        let block = idle_update_data(e, ebp - 0x3c0, bits);
+        let bill = array_element(e, menu + LIST_OF_BILLS, index);
+        idle_update(e, bill, block);
+        index = index.wrapping_add(1);
+    }
+    let mut index = e.mem.u32(menu + COIN_INDEX_TO_ANIM);
+    while index < array_size(e, menu + LIST_OF_COINS) {
+        let bits = idle_time_bits(e);
+        let block = idle_update_data(e, ebp - 0x3cc, bits);
+        let coin = array_element(e, menu + LIST_OF_COINS, index);
+        idle_update(e, coin, block);
+        index = index.wrapping_add(1);
+    }
+    if idle_time(e) > e.global::<f64>(ONE_DOUBLE) {
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+        let bills = array_size(e, menu + LIST_OF_BILLS);
+        e.mem.set_u32(menu + BILL_INDEX_TO_ANIM, bills);
+        let coins = array_size(e, menu + LIST_OF_COINS);
+        e.mem.set_u32(menu + COIN_INDEX_TO_ANIM, coins);
+        e.set(this, CaravanMenu::eGameState, 0);
+    }
+}
+
+/// State 5: the deck navigates forward (`iNumSteps` steps, deck slot 0).
+fn idle_navigate_forward(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 0) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        idle_start_decks(e, this, 0);
+        idle_step_down(e, this);
+        play_sound(e, NAVIGATE_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0xa0, ebp - 0x94, ebp - 0xac], true);
+    if !idle_decks_reached(e, menu, 0) {
+        return;
+    }
+    let value = idle_meter_value(e, this);
+    let steps = e.get(this, CaravanMenu::iNumSteps);
+    idle_swap_deck_textures(e, this, x87_sub(value, f64::from(steps)));
+    idle_update_decks(e, this, [ebp - 0xc4, ebp - 0xb8, ebp - 0xd0], false);
+    if e.get(this, CaravanMenu::iNumSteps) <= 0 {
+        idle_finish_decks(e, this, 0);
+    } else {
+        reset_idle_time(e);
+        idle_step_down(e, this);
+    }
+    e.mem.set_u32(menu + PENDING_KEY, 0);
+}
+
+/// State 6: the deck navigates back (deck slot 1).
+fn idle_navigate_back(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 1) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        idle_start_decks(e, this, 1);
+        idle_step_down(e, this);
+        let value = idle_meter_value(e, this);
+        let steps = e.get(this, CaravanMenu::iNumSteps);
+        idle_swap_deck_textures(e, this, x87_add(value, f64::from(steps)));
+        play_sound(e, NAVIGATE_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0xe8, ebp - 0xdc, ebp - 0xf4], true);
+    if !idle_decks_reached(e, menu, 1) {
+        return;
+    }
+    if e.get(this, CaravanMenu::iNumSteps) <= 0 {
+        idle_finish_decks(e, this, 1);
+    } else {
+        reset_idle_time(e);
+        // The exe tests iNumSteps again (unchanged, so above 0 here): the
+        // first branch, which would stop the forward deck sequences,
+        // cannot run.
+        if e.get(this, CaravanMenu::iNumSteps) <= 0 {
+            idle_finish_decks(e, this, 0);
+        } else {
+            reset_idle_time(e);
+            idle_step_down(e, this);
+        }
+    }
+    e.mem.set_u32(menu + PENDING_KEY, 0);
+}
+
+/// State 7: a card is added to or removed from the deck (deck slot 2);
+/// at the end `0074af70(0xb)` and the objects updated at 0.0.
+fn idle_add_remove(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 2) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        idle_start_decks(e, this, 2);
+        play_sound(e, ADD_REMOVE_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0x154, ebp - 0x148, ebp - 0x160], true);
+    if !idle_decks_reached(e, menu, 2) {
+        return;
+    }
+    e.set(this, CaravanMenu::eGameState, 0);
+    fn_0074af70(e, this, 0xb);
+    idle_update_decks(e, this, [ebp - 0x178, ebp - 0x16c, ebp - 0x184], false);
+    idle_deactivate_decks(e, menu, 2);
+    caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    idle_refresh(e, this);
+}
+
+/// State 8: the deck changes forward (deck slot 3; the textures swap at
+/// the start).
+fn idle_change_deck_forward(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 3) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let value = idle_meter_value(e, this);
+        idle_swap_deck_textures(e, this, value);
+        idle_start_decks(e, this, 3);
+        play_sound(e, CHANGE_DECK_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0x10c, ebp - 0x100, ebp - 0x118], true);
+    if !idle_decks_reached(e, menu, 3) {
+        return;
+    }
+    idle_finish_decks(e, this, 3);
+    e.mem.set_u32(menu + PENDING_KEY, 0);
+}
+
+/// State 9: the deck changes back (deck slot 4; the textures swap at the
+/// end).
+fn idle_change_deck_back(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 4) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        idle_start_decks(e, this, 4);
+        play_sound(e, CHANGE_DECK_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0x130, ebp - 0x124, ebp - 0x13c], true);
+    if !idle_decks_reached(e, menu, 4) {
+        return;
+    }
+    e.set(this, CaravanMenu::eGameState, 0);
+    let value = idle_meter_value(e, this);
+    idle_swap_deck_textures(e, this, value);
+    idle_deactivate_decks(e, menu, 4);
+    caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    idle_refresh(e, this);
+    e.mem.set_u32(menu + PENDING_KEY, 0);
+}
+
+/// State 10: the deck wipes into the game (deck slot 5); at the end
+/// `0074af70(0xb)`, the byte +0xe86 set, `CAF_AI` set and
+/// `PrepareGameMenu`.
+fn idle_deck_wipe(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    if !idle_decks_present(e, menu, 5) {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        idle_start_decks(e, this, 5);
+        play_sound(e, CHANGE_DECK_SOUND);
+    }
+    idle_update_decks(e, this, [ebp - 0x19c, ebp - 0x190, ebp - 0x1a8], true);
+    if !idle_decks_reached(e, menu, 5) {
+        return;
+    }
+    e.set(this, CaravanMenu::eGameState, 0);
+    fn_0074af70(e, this, 0xb);
+    idle_update_decks(e, this, [ebp - 0x1c0, ebp - 0x1b4, ebp - 0x1cc], true);
+    let manager = e.mem.u32(menu + ACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + ACTIVE_DECK_ANIMATIONS + 0x14);
+    idle_deactivate(e, manager, sequence);
+    let manager = e.mem.u32(menu + INACTIVE_DECK_ANIM_MANAGER);
+    let sequence = e.mem.u32(menu + INACTIVE_DECK_ANIMATIONS + 0x14);
+    idle_deactivate(e, manager, sequence);
+    e.mem.set_u8(menu + BYTE_E86, 1);
+    caravan_menu_set_flag(e, this, CAF_AI, 1);
+    idle_refresh(e, this);
+    caravan_menu_prepare_game_menu(e, this);
+}
+
+/// `CAF_AI` as the side index (0 the player, 1 the opponent).
+fn idle_side(e: &mut Engine, this: Ptr<CaravanMenu>) -> u32 {
+    u32::from(caravan_menu_has_flag(e, this, CAF_AI))
+}
+
+/// The hand cards' redraw after a deal, discard or placement: when the
+/// side's track 2 (player) or track 3 (opponent) list is filled
+/// (`(size(+0xc24) != 0 && !CAF_AI) || (size(+0xc94) != 0 && CAF_AI)`)
+/// the hand textures are updated with `CAF_TRACK_SETUP` and the side's
+/// hand sequence 1 is run to 0.0 (and, from the deal, with both lists
+/// filled on the player's side `CAF_TRACK_SETUP` is cleared and the
+/// contract war help shown, tutorial 0x21); otherwise the textures are
+/// updated with 1 and the side's start sequence 0 is run to 0.0. Then all
+/// the side's hand sequences stop.
+fn idle_redraw_hand(
+    e: &mut Engine,
+    this: Ptr<CaravanMenu>,
+    side: u32,
+    blocks: [u32; 2],
+    from_deal: bool,
+) {
+    let menu = this.addr();
+    let filled = if array_size(e, menu + 0xc24) != 0 && !caravan_menu_has_flag(e, this, CAF_AI) {
+        true
+    } else {
+        array_size(e, menu + 0xc94) != 0 && caravan_menu_has_flag(e, this, CAF_AI)
+    };
+    if filled {
+        let setup = u32::from(caravan_menu_has_flag(e, this, CAF_TRACK_SETUP));
+        let player = u8::from(!caravan_menu_has_flag(e, this, CAF_AI));
+        caravan_menu_update_game_hand_textures(e, this, player, setup);
+        let manager = hand_manager(e, menu, side);
+        let sequence = e.mem.u32(hand_animation(menu, side, 1));
+        idle_activate(e, manager, sequence);
+        idle_update_data(e, blocks[0], 0);
+        let hand = hand_geometry(e, menu, side);
+        idle_update(e, hand, blocks[0]);
+        let manager = hand_manager(e, menu, side);
+        let sequence = e.mem.u32(hand_animation(menu, side, 1));
+        idle_deactivate(e, manager, sequence);
+        if from_deal
+            && !caravan_menu_has_flag(e, this, CAF_AI)
+            && array_size(e, menu + 0xc24) != 0
+            && array_size(e, menu + 0xc94) != 0
+        {
+            caravan_menu_set_flag(e, this, CAF_TRACK_SETUP, 0);
+            idle_tutorial(e, this, 0x21, HELP_CONTRACT_WAR);
+        }
+    } else {
+        let player = u8::from(!caravan_menu_has_flag(e, this, CAF_AI));
+        caravan_menu_update_game_hand_textures(e, this, player, 1);
+        let manager = hand_manager(e, menu, side);
+        let sequence = e.mem.u32(start_animation(menu, side, 0));
+        idle_activate(e, manager, sequence);
+        idle_update_data(e, blocks[1], 0);
+        let hand = hand_geometry(e, menu, side);
+        idle_update(e, hand, blocks[1]);
+        let manager = hand_manager(e, menu, side);
+        let sequence = e.mem.u32(start_animation(menu, side, 0));
+        idle_deactivate(e, manager, sequence);
+    }
+    let manager = hand_manager(e, menu, side);
+    e.call(DEACTIVATE_ALL, &args![manager, 0u32]);
+}
+
+/// State 11 (`CA_GAME_INTRO_DEAL_ANIM`): the selected start card is dealt
+/// onto the selected track card (`0074df90` first, the player's selection
+/// cleared, the confirm sound). At the end the hand is redrawn, the
+/// opponent's last hand card selected, the deck count shown, state 0x15.
+fn idle_intro_deal(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let side = idle_side(e, this);
+    let selected = e.mem.u32(menu + 0xe2c);
+    if e.mem.u32(start_animation(menu, side, selected)) == 0
+        || selected_track_animation(e, menu) == 0
+    {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        fn_0074df90(e, this);
+        let manager = hand_manager(e, menu, side);
+        let selected = e.mem.u32(menu + 0xe2c);
+        let sequence = e.mem.u32(start_animation(menu, side, selected));
+        idle_activate(e, manager, sequence);
+        let manager = selected_track_manager(e, menu);
+        let sequence = selected_track_animation(e, menu);
+        idle_activate(e, manager, sequence);
+        if side == 0 {
+            caravan_menu_select_deck_card(e, this, 1);
+        }
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+        play_sound(e, CONFIRM_ADD_TO_DECK_SOUND);
+    }
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x1e8, bits);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x1e8);
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x1dc, bits);
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let geometry = track_geometry(e, menu, track, row);
+    idle_update(e, geometry, ebp - 0x1dc);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(start_animation(menu, side, selected));
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let sequence = selected_track_animation(e, menu);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let manager = hand_manager(e, menu, side);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(start_animation(menu, side, selected));
+    idle_deactivate(e, manager, sequence);
+    let manager = selected_track_manager(e, menu);
+    let sequence = selected_track_animation(e, menu);
+    idle_deactivate(e, manager, sequence);
+    idle_redraw_hand(e, this, side, [ebp - 0x1f4, ebp - 0x204], true);
+    if side == 1 {
+        idle_select_last_hand_card(e, this);
+        idle_check_hand_card(e, this);
+    }
+    idle_show_deck_count(e, this, side);
+    idle_refresh(e, this);
+    e.set(this, CaravanMenu::eGameState, 0x15);
+}
+
+/// State 12: the selected start card is discarded (the remove sound). At
+/// the end the hand is redrawn, the player's last hand card selected
+/// (player side), the deck count shown; on the opponent's side state 0x15,
+/// else state 0 with `CAF_DISABLE_ALLCONTROLS` cleared.
+fn idle_discard_card(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let side = idle_side(e, this);
+    let selected = e.mem.u32(menu + 0xe2c);
+    if e.mem.u32(start_animation(menu, side, selected)) == 0 {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let manager = hand_manager(e, menu, side);
+        let selected = e.mem.u32(menu + 0xe2c);
+        let sequence = e.mem.u32(start_animation(menu, side, selected));
+        idle_activate(e, manager, sequence);
+        if side == 0 {
+            caravan_menu_select_deck_card(e, this, 1);
+        }
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+        play_sound(e, REMOVE_CARD_SOUND);
+    }
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x214, bits);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x214);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(start_animation(menu, side, selected));
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let manager = hand_manager(e, menu, side);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(start_animation(menu, side, selected));
+    idle_deactivate(e, manager, sequence);
+    idle_redraw_hand(e, this, side, [ebp - 0x220, ebp - 0x22c], false);
+    if side == 0 {
+        idle_select_last_hand_card(e, this);
+        idle_check_hand_card(e, this);
+    }
+    idle_show_deck_count(e, this, side);
+    idle_refresh(e, this);
+    if caravan_menu_has_flag(e, this, CAF_AI) {
+        e.set(this, CaravanMenu::eGameState, 0x15);
+    } else {
+        e.set(this, CaravanMenu::eGameState, 0);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+    }
+}
+
+/// The word +0xb4 of `pSelectedCard` (`008d80e0`).
+fn selected_card_b4(e: &mut Engine, menu: u32) -> u32 {
+    let card = e.mem.u32(menu + SELECTED_CARD);
+    e.call(CARD_WORD_B4, &args![card]).u32()
+}
+
+/// State 13 (`CA_GAME_PLACECARD_ANIM`): the selected hand card (or, with
+/// no next card for the side, the start card) is placed onto the selected
+/// track card. At the end the hand textures are updated and the side's
+/// hand sequence 1 run to 0.0; on the opponent's side, unless the placed
+/// card's word +0xb4 is 12 or 15, the player's last hand card is selected.
+/// A placed 12 or 15 shows the deck count and moves to state 0x11 (12) or
+/// 0x13 (15): for 0x13 every other track card (rows until an empty one)
+/// whose word +0xb4 matches the track's first card (or, when that is 1,
+/// whose word +0xb8 matches) has its row appended to the track's
+/// `jokerLocations`, and `iSelectedTrack` is cleared. Otherwise the deck
+/// count is shown and state 0x15 follows.
+fn idle_place_card(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let side = idle_side(e, this);
+    let selected = e.mem.u32(menu + 0xe2c);
+    if e.mem
+        .u32(hand_animation(menu, side, selected).wrapping_add(4))
+        == 0
+        || selected_track_animation(e, menu) == 0
+    {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        fn_0074df90(e, this);
+        let next = if side == 0 {
+            e.mem.u32(menu + NEXT_PLAYER_CARD)
+        } else {
+            e.mem.u32(menu + NEXT_NPC_CARD)
+        };
+        let manager = hand_manager(e, menu, side);
+        let selected = e.mem.u32(menu + 0xe2c);
+        let sequence = if next == u32::MAX {
+            e.mem.u32(start_animation(menu, side, selected))
+        } else {
+            e.mem
+                .u32(hand_animation(menu, side, selected).wrapping_add(4))
+        };
+        idle_activate(e, manager, sequence);
+        let manager = selected_track_manager(e, menu);
+        let sequence = selected_track_animation(e, menu);
+        idle_activate(e, manager, sequence);
+        if side == 0 {
+            caravan_menu_select_deck_card(e, this, 1);
+        }
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+        play_sound(e, CONFIRM_ADD_TO_TRACK_SOUND);
+    }
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x248, bits);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x248);
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x23c, bits);
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let geometry = track_geometry(e, menu, track, row);
+    idle_update(e, geometry, ebp - 0x23c);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(hand_animation(menu, side, selected));
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let sequence = selected_track_animation(e, menu);
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    let manager = hand_manager(e, menu, side);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e
+        .mem
+        .u32(hand_animation(menu, side, selected).wrapping_add(4));
+    idle_deactivate(e, manager, sequence);
+    let manager = selected_track_manager(e, menu);
+    let sequence = selected_track_animation(e, menu);
+    idle_deactivate(e, manager, sequence);
+    let setup = u32::from(caravan_menu_has_flag(e, this, CAF_TRACK_SETUP));
+    let player = u8::from(!caravan_menu_has_flag(e, this, CAF_AI));
+    caravan_menu_update_game_hand_textures(e, this, player, setup);
+    let manager = hand_manager(e, menu, side);
+    let sequence = e.mem.u32(hand_animation(menu, side, 1));
+    idle_activate(e, manager, sequence);
+    idle_update_data(e, ebp - 0x254, 0);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x254);
+    let manager = hand_manager(e, menu, side);
+    let sequence = e.mem.u32(hand_animation(menu, side, 1));
+    idle_deactivate(e, manager, sequence);
+    if side == 1 && selected_card_b4(e, menu) != 0xc && selected_card_b4(e, menu) != 0xf {
+        idle_select_last_hand_card(e, this);
+        idle_check_hand_card(e, this);
+    } else if selected_card_b4(e, menu) == 0xc || selected_card_b4(e, menu) == 0xf {
+        idle_show_deck_count(e, this, side);
+        let next = if selected_card_b4(e, menu) != 0xc {
+            0x13
+        } else {
+            0x11
+        };
+        e.set(this, CaravanMenu::eGameState, next);
+        if e.get(this, CaravanMenu::eGameState) == 0x13 {
+            idle_collect_jokers(e, this, ebp);
+        }
+        return;
+    }
+    idle_show_deck_count(e, this, side);
+    idle_refresh(e, this);
+    e.set(this, CaravanMenu::eGameState, 0x15);
+}
+
+/// State 13's joker search: the first card of the selected track row
+/// gives a suit (its word +0xb4) and a value (+0xb8); for each track and
+/// row up to the first empty row, a card other than the selected one whose
+/// +0xb4 matches (or, for suit 1, whose +0xb8 matches) has its row (the
+/// stack local at `EBP-0x264`) appended to the track's `jokerLocations`.
+/// Clears `iSelectedTrack`.
+fn idle_collect_jokers(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let suit = card_b4(e, card_track(menu, track, row), 0);
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let value = card_b8(e, card_track(menu, track, row), 0);
+    let row_slot = ebp - 0x264;
+    for track in 0..6u32 {
+        e.mem.set_u32(row_slot, 0);
+        while e.mem.i32(row_slot) < 7 {
+            let row = e.mem.u32(row_slot);
+            let cards = card_track(menu, track, row);
+            if array_size(e, cards) == 0 {
+                break;
+            }
+            let matches = if suit != 1 {
+                card_b4(e, cards, 0) == suit
+            } else {
+                card_b8(e, cards, 0) == value
+            };
+            if matches && (track != e.mem.u32(menu + 0xe30) || row != e.mem.u32(menu + 0xe34)) {
+                let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+                e.call(ARRAY_APPEND, &args![locations, row_slot]);
+            }
+            let row = e.mem.u32(row_slot);
+            e.mem.set_u32(row_slot, row.wrapping_add(1));
+        }
+    }
+    e.mem.set_u32(menu + 0xe30, 0);
+}
+
+/// State 14: the selected hand card is redrawn (with no next card for the
+/// side the start card, with the remove sound; else the hand card, with
+/// the add-remove sound). At the end the hand textures are updated (player
+/// side for side 0, flag 0), the side's hand sequence 1 run to 0.0, the
+/// deck count shown, state 0x15, the player's last hand card made the
+/// selection (selected for the opponent without `CAF_TRACK_SETUP` or the
+/// player with it).
+fn idle_redraw_card(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let side = idle_side(e, this);
+    let selected = e.mem.u32(menu + 0xe2c);
+    if e.mem
+        .u32(hand_animation(menu, side, selected).wrapping_add(4))
+        == 0
+    {
+        return;
+    }
+    if idle_time_is_zero(e) {
+        let next = if side == 0 {
+            e.mem.u32(menu + NEXT_PLAYER_CARD)
+        } else {
+            e.mem.u32(menu + NEXT_NPC_CARD)
+        };
+        let manager = hand_manager(e, menu, side);
+        let selected = e.mem.u32(menu + 0xe2c);
+        if next == u32::MAX {
+            let sequence = e.mem.u32(start_animation(menu, side, selected));
+            idle_activate(e, manager, sequence);
+            play_sound(e, REMOVE_CARD_SOUND);
+        } else {
+            let sequence = e
+                .mem
+                .u32(hand_animation(menu, side, selected).wrapping_add(4));
+            idle_activate(e, manager, sequence);
+            play_sound(e, ADD_REMOVE_CARD_SOUND);
+        }
+        if side == 0 {
+            caravan_menu_select_deck_card(e, this, 1);
+        }
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+    }
+    let bits = idle_time_bits(e);
+    idle_update_data(e, ebp - 0x274, bits);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x274);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e.mem.u32(hand_animation(menu, side, selected));
+    if !idle_sequence_reached(e, sequence) {
+        return;
+    }
+    caravan_menu_update_game_hand_textures(e, this, u8::from(side == 0), 0);
+    let manager = hand_manager(e, menu, side);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let sequence = e
+        .mem
+        .u32(hand_animation(menu, side, selected).wrapping_add(4));
+    idle_deactivate(e, manager, sequence);
+    let manager = hand_manager(e, menu, side);
+    let sequence = e.mem.u32(hand_animation(menu, side, 1));
+    idle_activate(e, manager, sequence);
+    idle_update_data(e, ebp - 0x280, 0);
+    let hand = hand_geometry(e, menu, side);
+    idle_update(e, hand, ebp - 0x280);
+    let manager = hand_manager(e, menu, side);
+    let sequence = e.mem.u32(hand_animation(menu, side, 1));
+    idle_deactivate(e, manager, sequence);
+    idle_refresh(e, this);
+    idle_show_deck_count(e, this, side);
+    e.set(this, CaravanMenu::eGameState, 0x15);
+    let size = array_size(e, menu + PLAYER_HAND);
+    e.mem.set_u32(menu + 0xe2c, size.wrapping_sub(1));
+    idle_check_hand_card(e, this);
+    let opponent_side = side == 1 && !caravan_menu_has_flag(e, this, CAF_TRACK_SETUP);
+    if opponent_side || (side == 0 && caravan_menu_has_flag(e, this, CAF_TRACK_SETUP)) {
+        caravan_menu_select_deck_card(e, this, 0);
+    }
+}
+
+/// Activates sequence `which` of column `iSelectedColumn` on every row
+/// from `first` of the selected track whose card list holds more cards than
+/// the column; answers how many.
+fn idle_activate_column(e: &mut Engine, menu: u32, first: u32, which: u32) -> i32 {
+    let mut count = 0;
+    let mut row = first as i32;
+    while row < 7 {
+        let track = e.mem.u32(menu + 0xe30);
+        let cards = array_size(e, card_track(menu, track, row as u32)) as i32;
+        if cards > e.mem.i32(menu + 0xe38) {
+            let track = e.mem.u32(menu + 0xe30);
+            let column = e.mem.u32(menu + 0xe38);
+            let sequence = e
+                .mem
+                .u32(track_animation(menu, track, row as u32, column, which));
+            let manager = track_manager(e, menu, track, row as u32);
+            idle_activate(e, manager, sequence);
+            count += 1;
+        }
+        row += 1;
+    }
+    count
+}
+
+/// Stops sequence `which` of column `iSelectedColumn` on every row from
+/// `first` of the selected track.
+fn idle_deactivate_column(e: &mut Engine, menu: u32, first: u32, which: u32) {
+    let mut row = first as i32;
+    while row < 7 {
+        let track = e.mem.u32(menu + 0xe30);
+        let column = e.mem.u32(menu + 0xe38);
+        let sequence = e
+            .mem
+            .u32(track_animation(menu, track, row as u32, column, which));
+        let manager = track_manager(e, menu, track, row as u32);
+        idle_deactivate(e, manager, sequence);
+        row += 1;
+    }
+}
+
+/// Updates the selected track's geometry with the timer from row `first`
+/// until an empty row (`block` the stack block).
+fn idle_update_track_rows(e: &mut Engine, menu: u32, first: u32, block: u32) {
+    let mut row = first as i32;
+    while row < 7 {
+        let track = e.mem.u32(menu + 0xe30);
+        if array_size(e, card_track(menu, track, row as u32)) == 0 {
+            break;
+        }
+        let bits = idle_time_bits(e);
+        let data = idle_update_data(e, block, bits);
+        let track = e.mem.u32(menu + 0xe30);
+        let geometry = track_geometry(e, menu, track, row as u32);
+        idle_update(e, geometry, data);
+        row += 1;
+    }
+}
+
+/// While nothing was activated and `iSelectedColumn` is above 0: one column
+/// down, its sequence 1 activated from row `first`.
+fn idle_next_column_down(e: &mut Engine, menu: u32, first_row: u32, count: &mut i32) {
+    while *count == 0 && e.mem.i32(menu + 0xe38) > 0 {
+        let column = e.mem.i32(menu + 0xe38);
+        e.mem.set_u32(menu + 0xe38, column.wrapping_sub(1) as u32);
+        let first = if first_row == u32::MAX {
+            e.mem.u32(menu + 0xe34)
+        } else {
+            first_row
+        };
+        *count += idle_activate_column(e, menu, first, 1);
+    }
+}
+
+/// State 15 (`CA_GAME_DISCARDTRACK_ANIM`): the selected track's cards go,
+/// column by column from the top (sequence 1). When none is left the
+/// track's seven card lists are released (`008454f0`), state 0x15, the
+/// player's last hand card selected on the opponent's turn, the track's
+/// value updated and `CAF_DESTROY_TRACK` and `CAF_SELECT_TRACK` cleared.
+fn idle_discard_track(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let track = e.mem.u32(menu + 0xe30);
+    if e.mem.u32(track_animation(menu, track, 0, 0, 1)) == 0 {
+        return;
+    }
+    let mut count = 0;
+    if idle_time_is_zero(e) {
+        e.mem.set_u32(menu + 0xe38, 4);
+        idle_next_column_down(e, menu, 0, &mut count);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0);
+        play_sound(e, REMOVE_CARD_SOUND);
+    }
+    idle_update_track_rows(e, menu, 0, ebp - 0x468);
+    let track = e.mem.u32(menu + 0xe30);
+    let column = e.mem.u32(menu + 0xe38);
+    let sequence = e.mem.u32(track_animation(menu, track, 0, column, 1));
+    if !idle_sequence_passed(e, sequence) {
+        return;
+    }
+    idle_deactivate_column(e, menu, 0, 1);
+    idle_next_column_down(e, menu, 0, &mut count);
+    if count != 0 {
+        reset_idle_time(e);
+        return;
+    }
+    for row in 0..7 {
+        let track = e.mem.u32(menu + 0xe30);
+        e.call(
+            ARRAY_RELEASE_008454F0,
+            &args![card_track(menu, track, row), 1u32],
+        );
+    }
+    e.set(this, CaravanMenu::eGameState, 0x15);
+    if caravan_menu_has_flag(e, this, CAF_AI) {
+        idle_select_last_hand_card(e, this);
+    }
+    let track = e.mem.u32(menu + 0xe30);
+    caravan_menu_update_track_value(e, this, track);
+    caravan_menu_set_flag(e, this, CAF_DESTROY_TRACK, 0);
+    caravan_menu_set_flag(e, this, CAF_SELECT_TRACK, 0);
+}
+
+/// Moves the selected track's rows from `first` up by one (rows 0 to 5):
+/// each row's list is released and refilled from the next row's cards,
+/// `0074e220(track, row, index)` for each.
+fn idle_shift_rows(e: &mut Engine, this: Ptr<CaravanMenu>, first: i32) {
+    let menu = this.addr();
+    let mut row = first;
+    while row < 6 {
+        let track = e.mem.u32(menu + 0xe30);
+        e.call(
+            ARRAY_RELEASE_008454F0,
+            &args![card_track(menu, track, row as u32), 1u32],
+        );
+        let track = e.mem.u32(menu + 0xe30);
+        let source = card_track(menu, track, row.wrapping_add(1) as u32);
+        let mut index = 0u32;
+        while index < array_size(e, source) {
+            let slot = array_slot(e, source, index);
+            let track = e.mem.u32(menu + 0xe30);
+            e.call(
+                ARRAY_APPEND,
+                &args![card_track(menu, track, row as u32), slot],
+            );
+            let track = e.mem.u32(menu + 0xe30);
+            fn_0074e220(e, this, track, row as u32, index);
+            index = index.wrapping_add(1);
+        }
+        row += 1;
+    }
+}
+
+/// State 17: the selected row and the rows after it go (column by column,
+/// sequence 1). When none is left the rows move up: without `CAF_JOKER`
+/// once from the selected row (the last row released); with it from each
+/// joker location in turn (`jokerLocations` of the track, its first entry
+/// removed each round, one lower when past the previous start). Then
+/// state 0x12.
+fn idle_remove_row(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    if e.mem.u32(track_animation(menu, track, row, 0, 1)) == 0 {
+        return;
+    }
+    let mut count = 0;
+    if idle_time_is_zero(e) {
+        e.mem.set_u32(menu + 0xe38, 4);
+        idle_next_column_down(e, menu, u32::MAX, &mut count);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+    }
+    let first = e.mem.u32(menu + 0xe34);
+    idle_update_track_rows(e, menu, first, ebp - 0x474);
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let column = e.mem.u32(menu + 0xe38);
+    let sequence = e.mem.u32(track_animation(menu, track, row, column, 1));
+    if !idle_sequence_passed(e, sequence) {
+        return;
+    }
+    let first = e.mem.u32(menu + 0xe34);
+    idle_deactivate_column(e, menu, first, 1);
+    idle_next_column_down(e, menu, u32::MAX, &mut count);
+    if count != 0 {
+        reset_idle_time(e);
+        return;
+    }
+    if !caravan_menu_has_flag(e, this, CAF_JOKER) {
+        let first = e.mem.i32(menu + 0xe34);
+        idle_shift_rows(e, this, first);
+        let track = e.mem.u32(menu + 0xe30);
+        e.call(
+            ARRAY_RELEASE_008454F0,
+            &args![card_track(menu, track, 6), 1u32],
+        );
+    } else {
+        let mut more = true;
+        let mut start = e.mem.i32(menu + 0xe34);
+        while more {
+            idle_shift_rows(e, this, start);
+            let track = e.mem.u32(menu + 0xe30);
+            let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+            e.call(ARRAY_REMOVE_AT, &args![locations, 0u32, 1u32]);
+            let track = e.mem.u32(menu + 0xe30);
+            let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+            if array_size(e, locations) != 0 {
+                let previous = start;
+                let track = e.mem.u32(menu + 0xe30);
+                let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+                start = array_element(e, locations, 0) as i32;
+                if start > previous {
+                    start = start.wrapping_sub(1);
+                }
+            } else {
+                more = false;
+            }
+        }
+    }
+    e.set(this, CaravanMenu::eGameState, 0x12);
+}
+
+/// While nothing was activated and `iSelectedColumn` is below 4: one column
+/// up, its sequence 0 activated from the selected row.
+fn idle_next_column_up(e: &mut Engine, menu: u32, count: &mut i32) {
+    while *count == 0 && e.mem.i32(menu + 0xe38) < 4 {
+        let column = e.mem.i32(menu + 0xe38);
+        e.mem.set_u32(menu + 0xe38, column.wrapping_add(1) as u32);
+        let first = e.mem.u32(menu + 0xe34);
+        *count += idle_activate_column(e, menu, first, 0);
+    }
+}
+
+/// State 18: the moved rows come back, column by column from the bottom
+/// (sequence 0; nothing to show skips the animation). When done the
+/// track's value is updated and the state is 0x13 with `CAF_JOKER`, else
+/// 0x15. The caravan flags are updated each frame.
+fn idle_restore_row(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    if e.mem.u32(track_animation(menu, track, row, 0, 0)) == 0 {
+        return;
+    }
+    let mut count = 0;
+    let mut skip = false;
+    if idle_time_is_zero(e) {
+        e.mem.set_u32(menu + 0xe38, u32::MAX);
+        idle_next_column_up(e, menu, &mut count);
+        if count == 0 {
+            skip = true;
+        }
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 1);
+    }
+    if !skip {
+        let first = e.mem.u32(menu + 0xe34);
+        idle_update_track_rows(e, menu, first, ebp - 0x480);
+    }
+    let done = skip || {
+        let track = e.mem.u32(menu + 0xe30);
+        let row = e.mem.u32(menu + 0xe34);
+        let column = e.mem.u32(menu + 0xe38);
+        let sequence = e.mem.u32(track_animation(menu, track, row, column, 0));
+        idle_sequence_passed(e, sequence)
+    };
+    if done {
+        if !skip {
+            let first = e.mem.u32(menu + 0xe34);
+            idle_deactivate_column(e, menu, first, 0);
+            idle_next_column_up(e, menu, &mut count);
+        }
+        if count != 0 {
+            reset_idle_time(e);
+        } else {
+            let track = e.mem.u32(menu + 0xe30);
+            caravan_menu_update_track_value(e, this, track);
+            if caravan_menu_has_flag(e, this, CAF_JOKER) {
+                e.set(this, CaravanMenu::eGameState, 0x13);
+            } else {
+                e.set(this, CaravanMenu::eGameState, 0x15);
+            }
+        }
+    }
+    caravan_menu_update_caravan_flags(e, this);
+}
+
+/// State 19: the next track with joker locations (from `iSelectedTrack`)
+/// becomes the selection (its first location the row) and state 0x11;
+/// without one state 0x15 and `CAF_JOKER` cleared.
+fn idle_next_joker(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    let menu = this.addr();
+    caravan_menu_set_flag(e, this, CAF_JOKER, 1);
+    while e.mem.i32(menu + 0xe30) < 6 {
+        let track = e.mem.u32(menu + 0xe30);
+        let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+        if array_size(e, locations) != 0 {
+            break;
+        }
+        let track = e.mem.u32(menu + 0xe30);
+        e.mem.set_u32(menu + 0xe30, track.wrapping_add(1));
+    }
+    if e.mem.i32(menu + 0xe30) >= 6 {
+        e.set(this, CaravanMenu::eGameState, 0x15);
+        caravan_menu_set_flag(e, this, CAF_JOKER, 0);
+    } else {
+        let track = e.mem.u32(menu + 0xe30);
+        let locations = menu.wrapping_add(track << 4) + JOKER_LOCATIONS;
+        let row = array_element(e, locations, 0);
+        e.mem.set_u32(menu + 0xe34, row);
+        e.set(this, CaravanMenu::eGameState, 0x11);
+    }
+}
+
+/// The pending key `DoKey` left (`PENDING_KEY`) as a step: up and down
+/// set y to -1 and 1, right and left x to 1 and -1 (and, with `floats`,
+/// the float steps to the same; -1.0 from `01012054`), clearing the key.
+fn idle_pending_key(e: &mut Engine, menu: u32, input: &mut IdleInput, floats: bool) {
+    let key = e.mem.u32(menu + PENDING_KEY);
+    if key == KEY_UP {
+        e.mem.set_u32(menu + PENDING_KEY, 0);
+        input.y = -1;
+        if floats {
+            input.y_bits = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+        }
+    } else if key == KEY_DOWN {
+        e.mem.set_u32(menu + PENDING_KEY, 0);
+        input.y = 1;
+        if floats {
+            input.y_bits = 1.0f32.to_bits();
+        }
+    } else if key == KEY_RIGHT {
+        e.mem.set_u32(menu + PENDING_KEY, 0);
+        input.x = 1;
+        if floats {
+            input.x_bits = 1.0f32.to_bits();
+        }
+    } else if key == KEY_LEFT {
+        e.mem.set_u32(menu + PENDING_KEY, 0);
+        input.x = -1;
+        if floats {
+            input.x_bits = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+        }
+    }
+}
+
+/// State 0 (`DoIdle`'s input step) of the active menu, then
+/// `UpdateCaravanFlags` and `UpdateTileAlpha(-1)`.
+fn idle_input(e: &mut Engine, this: Ptr<CaravanMenu>, input: &mut IdleInput) {
+    match e.get(this, CaravanMenu::eActiveMenu) {
+        1 => idle_deck_input(e, this, input),
+        2 => idle_game_input(e, this, input),
+        3 => {
+            let owner = e.global::<u32>(CONTROLS_OWNER);
+            let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();
+            let mut pressed = e
+                .call(CONTROLS_BUTTON_00A23A50, &args![controls, 0u32, 1u32])
+                .u32()
+                != 0;
+            if !pressed {
+                let owner = e.global::<u32>(CONTROLS_OWNER);
+                let controls = e.call(CONTROLS_INSTANCE, &args![owner]).u32();
+                pressed = e
+                    .call(CONTROLS_BUTTON_00A23A50, &args![controls, 1u32, 1u32])
+                    .u32()
+                    != 0;
+            }
+            if pressed {
+                e.vcall(this.addr(), 0x38, &args![9u32, 0u32]);
+            }
+        }
+        _ => {}
+    }
+    idle_refresh(e, this);
+}
+
+/// The deck menu's input: the stick's x moves the deck meter by its sign
+/// (states 5 and 6 with one step); with the controls not read
+/// (`004b71d0`), a release of the meter (`pim`'s float +0x48 back to 0.0
+/// after a press, `iPrevValue` the value at the press) moves by the
+/// difference (states 5 or 6 for 1 to 4 steps, 8 or 9 for more), and a
+/// press records the value and `00747d00`'s position. In state 0 the
+/// pending key or stick steps the meter by x every 0.25 s.
+fn idle_deck_input(e: &mut Engine, this: Ptr<CaravanMenu>, input: &mut IdleInput) {
+    let menu = this.addr();
+    if input.x != 0 {
+        let value = idle_meter_value(e, this);
+        let magnitude = e
+            .call(
+                FLOAT_MAGNITUDE_00408840,
+                &args![x87_quiet_bits(input.x_bits)],
+            )
+            .f64();
+        let sum = x87_add(x87_div(x87_m32(input.x_bits), magnitude), value);
+        let index = e.call(FTOL, &args![sum]).i32();
+        if index >= 0 && (index as u32) < e.get(this, CaravanMenu::iTotalCards) {
+            e.set(this, CaravanMenu::iNumSteps, 1);
+            idle_set_meter(e, this, index);
+            let next = if x87_m32(input.x_bits) > e.global::<f64>(ZERO_DOUBLE) {
+                5
+            } else {
+                6
+            };
+            e.set(this, CaravanMenu::eGameState, next);
+        }
+    }
+    if !e.call(KEYS_BLOCKED_004B71D0, &args![]).bool() {
+        let interface = e.global::<u32>(CARAVAN_INTERFACE);
+        let level = e.call(INTERFACE_FLOAT_00639AA0, &args![interface]).f64();
+        if level == e.global::<f64>(ZERO_DOUBLE)
+            && e.mem.u8(menu + BYTE_E85) != 0
+            && e.get(this, CaravanMenu::eActiveMenu) == 1
+        {
+            e.set(this, CaravanMenu::iNumSteps, 0);
+            e.mem.set_u8(menu + BYTE_E85, 0);
+            let value = idle_meter_value(e, this);
+            let current = e.call(FTOL, &args![value]).i32();
+            let moved = current.wrapping_sub(e.get(this, CaravanMenu::iPrevValue));
+            // `XOR EDX,EDX; JZ`: the compiler's jump past this block is
+            // always taken, so the block never runs.
+            let folded = 0u32;
+            if moved == 0 && folded != 0 {
+                idle_meter_drag(e, this);
+            } else if moved <= -1 {
+                if moved > -5 {
+                    e.set(this, CaravanMenu::iNumSteps, moved.wrapping_neg());
+                    e.set(this, CaravanMenu::eGameState, 6);
+                } else {
+                    e.set(this, CaravanMenu::eGameState, 9);
+                }
+            } else if moved >= 1 {
+                if moved < 5 {
+                    e.set(this, CaravanMenu::iNumSteps, moved);
+                    e.set(this, CaravanMenu::eGameState, 5);
+                } else {
+                    e.set(this, CaravanMenu::eGameState, 8);
+                }
+            }
+            e.set(this, CaravanMenu::iPrevValue, current);
+        } else if e.mem.u8(menu + BYTE_E85) == 0 {
+            let interface = e.global::<u32>(CARAVAN_INTERFACE);
+            let level = e.call(INTERFACE_FLOAT_00639AA0, &args![interface]).f64();
+            if level > e.global::<f64>(ZERO_DOUBLE) {
+                let value = idle_meter_value(e, this);
+                let current = e.call(FTOL, &args![value]).i32();
+                e.set(this, CaravanMenu::iPrevValue, current);
+                e.mem.set_u8(menu + BYTE_E85, 1);
+                let interface = e.global::<u32>(CARAVAN_INTERFACE);
+                let position = fn_00747d00(e, Ptr::new(interface));
+                e.set(this, CaravanMenu::iPrevXLocation, position);
+            }
+        }
+    }
+    if e.get(this, CaravanMenu::eGameState) != 0 {
+        return;
+    }
+    idle_pending_key(e, menu, input, false);
+    if input.x == 0 && input.y == 0 {
+        return;
+    }
+    let tick = f64::from(e.get(this, CaravanMenu::uiPrevIdleTick));
+    let since = x87_sub(tick, x87_m32(e.mem.u32(menu + SELECTION_DELAY)));
+    if since <= e.global::<f64>(SELECTION_REPEAT) || since.is_nan() {
+        return;
+    }
+    let tick = f64::from(e.get(this, CaravanMenu::uiPrevIdleTick));
+    e.mem.set_u32(menu + SELECTION_DELAY, x87_store32(tick));
+    if e.get(this, CaravanMenu::eActiveMenu) != 1 || input.x == 0 {
+        return;
+    }
+    let value = idle_meter_value(e, this);
+    let index = e
+        .call(FTOL, &args![x87_add(value, f64::from(input.x))])
+        .i32();
+    if index >= 0 && (index as u32) < e.get(this, CaravanMenu::iTotalCards) {
+        idle_set_meter(e, this, index);
+        let next = i32::from(input.x <= 0) + 5;
+        e.set(this, CaravanMenu::eGameState, next);
+        e.set(this, CaravanMenu::iNumSteps, 1);
+    }
+}
+
+/// The block of the deck meter's release that the compiler made
+/// unreachable (`00747335` to `00747497`): the step is the screen width
+/// over `iTotalCards` (truncated); the drag since the press
+/// (`00747d00` less `iPrevXLocation`, the first call's result unused)
+/// over the negated step moves the meter, clamped to 0 and `iTotalCards`
+/// (states 5 or 6 with the steps for under 5, 8 or 9 otherwise).
+fn idle_meter_drag(e: &mut Engine, this: Ptr<CaravanMenu>) {
+    let width = e.call(SCREEN_WIDTH, &args![]).f64();
+    let total = f64::from(e.get(this, CaravanMenu::iTotalCards));
+    let step = e.call(FTOL, &args![x87_div(width, total)]).i32();
+    let interface = e.global::<u32>(CARAVAN_INTERFACE);
+    fn_00747d00(e, Ptr::new(interface));
+    let interface = e.global::<u32>(CARAVAN_INTERFACE);
+    let position = fn_00747d00(e, Ptr::new(interface));
+    let mut moved = position.wrapping_sub(e.get(this, CaravanMenu::iPrevXLocation));
+    moved = moved.wrapping_div(step.wrapping_neg());
+    if moved != 0 {
+        let total = e.get(this, CaravanMenu::iTotalCards);
+        let target = e.get(this, CaravanMenu::iPrevValue).wrapping_add(moved);
+        let raised = e.call(MAX_OF, &args![target, 0u32]).i32();
+        let clamped = e.call(MIN_OF, &args![raised, total]).i32();
+        idle_set_meter(e, this, clamped);
+        if e.call(INTEGER_MAGNITUDE, &args![moved]).i32() < 5 {
+            let steps = e.call(INTEGER_MAGNITUDE, &args![moved]).i32();
+            e.set(this, CaravanMenu::iNumSteps, steps);
+            e.set(this, CaravanMenu::eGameState, i32::from(moved <= 0) + 5);
+        } else {
+            e.set(this, CaravanMenu::eGameState, i32::from(moved <= 0) + 8);
+        }
+    }
+}
+
+/// The step of a stick float: 0.0 within 0.01 (`01031148`), else the
+/// float over its magnitude; truncated.
+fn idle_stick_step(e: &mut Engine, bits: u32) -> i32 {
+    let magnitude = e
+        .call(FLOAT_MAGNITUDE_00408840, &args![x87_quiet_bits(bits)])
+        .f64();
+    let step = if magnitude < e.global::<f64>(STICK_THRESHOLD) {
+        0.0
+    } else {
+        let magnitude = e
+            .call(FLOAT_MAGNITUDE_00408840, &args![x87_quiet_bits(bits)])
+            .f64();
+        x87_div(x87_m32(bits), magnitude)
+    };
+    e.call(FTOL, &args![step]).i32()
+}
+
+/// The game menu's input: in state 0 the pending key gives the steps; any
+/// step past the selection delay (0.25 s of the idle timer) moves, without
+/// `CAF_SELECT_TRACK`, the hand card selection by x (wrapping), with the
+/// switch sound, `SelectDeckCard(0)` and `CAF_DISABLE_A` from the card's
+/// word +0xb4 over 10 under `CAF_TRACK_SETUP`; with it and without
+/// `CAF_TRACK_SETUP`, the whole track selection by the stick's x (clamped
+/// to 0..2, with the toggle sound) under `CAF_DESTROY_TRACK`, else
+/// `HandleTrackSelection`.
+fn idle_game_input(e: &mut Engine, this: Ptr<CaravanMenu>, input: &mut IdleInput) {
+    let menu = this.addr();
+    if e.get(this, CaravanMenu::eGameState) == 0 {
+        idle_pending_key(e, menu, input, true);
+    }
+    if input.x == 0 && input.y == 0 {
+        return;
+    }
+    let since = x87_sub(idle_time(e), x87_m32(e.mem.u32(menu + SELECTION_DELAY)));
+    if since <= e.global::<f64>(SELECTION_REPEAT) || since.is_nan() {
+        return;
+    }
+    e.mem.set_u32(menu + SELECTION_DELAY, idle_time_bits(e));
+    if !caravan_menu_has_flag(e, this, CAF_SELECT_TRACK) {
+        let magnitude = e
+            .call(
+                FLOAT_MAGNITUDE_00408840,
+                &args![x87_quiet_bits(input.x_bits)],
+            )
+            .f64();
+        let selected = e.mem.i32(menu + 0xe2c);
+        let step = x87_add(
+            x87_div(x87_m32(input.x_bits), magnitude),
+            f64::from(selected),
+        );
+        let selected = e.call(FTOL, &args![step]).i32();
+        e.mem.set_u32(menu + 0xe2c, selected as u32);
+        let size = array_size(e, menu + PLAYER_HAND) as i32;
+        if e.mem.i32(menu + 0xe2c) > size.wrapping_sub(1) {
+            e.mem.set_u32(menu + 0xe2c, 0);
+        } else if e.mem.i32(menu + 0xe2c) < 0 {
+            e.mem.set_u32(menu + 0xe2c, size.wrapping_sub(1) as u32);
+        }
+        play_sound(e, SWITCH_CARD_SOUND);
+        caravan_menu_select_deck_card(e, this, 0);
+        let high = caravan_menu_has_flag(e, this, CAF_TRACK_SETUP) && {
+            let selected = e.mem.u32(menu + 0xe2c);
+            card_b4(e, menu + PLAYER_HAND, selected) as i32 > 10
+        };
+        caravan_menu_set_flag(e, this, CAF_DISABLE_A, u8::from(high));
+        caravan_menu_update_tile_alpha(e, this, -1);
+        return;
+    }
+    if caravan_menu_has_flag(e, this, CAF_TRACK_SETUP) {
+        return;
+    }
+    let x_step = idle_stick_step(e, input.x_bits);
+    let y_step = idle_stick_step(e, input.y_bits);
+    if caravan_menu_has_flag(e, this, CAF_DESTROY_TRACK) {
+        let track = e.mem.u32(menu + 0xe30);
+        caravan_menu_deselect_whole_track(e, this, track);
+        let track = e.mem.i32(menu + 0xe30).wrapping_add(x_step);
+        e.mem.set_u32(menu + 0xe30, track as u32);
+        let track = e.mem.i32(menu + 0xe30);
+        let clamped = clamp_calls(e, 0, track, 2);
+        e.mem.set_u32(menu + 0xe30, clamped as u32);
+        play_sound(e, TOGGLE_TRACK_SOUND);
+        let track = e.mem.u32(menu + 0xe30);
+        caravan_menu_select_whole_track(e, this, track);
+    } else {
+        caravan_menu_handle_track_selection(e, this, x_step, y_step);
+    }
+}
+
+/// State 0x15: the turn change. `CAF_AI` is set; a finished game moves to
+/// state 0x16. After the opponent's turn (the byte +0xe86 clear) the
+/// player's last hand card is selected (track and selected card and object
+/// cleared), the byte toggled and state 0 with the controls enabled and
+/// `CAF_AI` cleared. Otherwise the byte is cleared and the opponent's move
+/// (`0074fdc0` into the stack package at `EBP-0x31c`: count +8, hand card
+/// +0x14, track +0xc, row +0x10) is made: while setting up the tracks
+/// (`CAF_TRACK_SETUP`) a discard (count 6: the hand card swapped with the
+/// next deck card, a new random next card, state 0xc with the byte set) or
+/// the deal onto the highest free opponent track (5 down to 3, state 0xb);
+/// otherwise a discard (6: state 0xe, the hand card replaced by the next
+/// deck card when there is one), a track discard (5: state 0xf, the
+/// track's direction cleared) or a placement (state 0xd; without a next
+/// deck card the opponent's deck objects are hidden first). With the debug
+/// byte `011d9184` the package is printed.
+fn idle_next_turn(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
+    let menu = this.addr();
+    caravan_menu_set_flag(e, this, CAF_AI, 1);
+    if caravan_menu_is_game_over(e, this) {
+        e.set(this, CaravanMenu::eGameState, 0x16);
+        return;
+    }
+    if e.mem.u8(menu + BYTE_E86) == 0 {
+        let size = array_size(e, menu + PLAYER_HAND);
+        e.mem.set_u32(menu + 0xe2c, size.wrapping_sub(1));
+        e.mem.set_u32(menu + 0xe30, 0);
+        e.mem.set_u32(menu + SELECTED_CARD, 0);
+        e.mem.set_u32(menu + SELECTED_OBJECT, 0);
+        caravan_menu_select_deck_card(e, this, 0);
+        let toggled = u8::from(e.mem.u8(menu + BYTE_E86) == 0);
+        e.mem.set_u8(menu + BYTE_E86, toggled);
+        e.set(this, CaravanMenu::eGameState, 0);
+        caravan_menu_set_flag(e, this, CAF_DISABLE_ALLCONTROLS, 0);
+        idle_refresh(e, this);
+        caravan_menu_set_flag(e, this, CAF_AI, 0);
+        return;
+    }
+    e.mem.set_u8(menu + BYTE_E86, 0);
+    let package = ebp - 0x31c;
+    fn_0074fdc0(e, this, package);
+    if caravan_menu_has_flag(e, this, CAF_TRACK_SETUP) {
+        if array_size(e, package) == 6 {
+            let card = e.call(WORD_AT_0X14, &args![package]).u32();
+            e.mem.set_u32(menu + 0xe2c, card);
+            let selected = e.mem.u32(menu + 0xe2c);
+            let chosen = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(menu + SELECTED_CARD, chosen);
+            let next = e.mem.u32(menu + NEXT_NPC_CARD);
+            let drawn = array_element(e, menu + NPC_DECK, next);
+            e.mem.set_u32(ebp - 0x324, drawn);
+            let selected = e.mem.u32(menu + 0xe2c);
+            let discarded = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(ebp - 0x320, discarded);
+            let selected = e.mem.u32(menu + 0xe2c);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+            e.call(ARRAY_APPEND, &args![menu + NPC_HAND, ebp - 0x324]);
+            let next = e.mem.u32(menu + NEXT_NPC_CARD);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_DECK, next, 1u32]);
+            let remaining = array_size(e, menu + NPC_DECK);
+            let next = e.call(RANDOM_RANGE, &args![0u32, remaining]).u32();
+            e.mem.set_u32(menu + NEXT_NPC_CARD, next);
+            fn_0074d190(e, this, 0);
+            e.mem.set_u8(menu + BYTE_E86, 1);
+            e.set(this, CaravanMenu::eGameState, 0xc);
+        } else {
+            let mut track = 5i32;
+            while track > 2 {
+                if array_size(e, card_track(menu, track as u32, 0)) == 0 {
+                    break;
+                }
+                track -= 1;
+            }
+            e.mem.set_u32(menu + 0xe30, track as u32);
+            let card = e.call(WORD_AT_0X14, &args![package]).u32();
+            e.mem.set_u32(menu + 0xe2c, card);
+            e.mem.set_u32(menu + 0xe34, 0);
+            let row = e.mem.u32(menu + 0xe34);
+            let count = array_size(e, card_track(menu, track as u32, row));
+            e.mem.set_u32(menu + 0xe38, count);
+            let selected = e.mem.u32(menu + 0xe2c);
+            let chosen = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(menu + SELECTED_CARD, chosen);
+            e.call(SET_WORD_AT_0XC, &args![package, track as u32]);
+            e.call(SET_WORD_AT_0X10, &args![package, 0u32]);
+            if e.global::<u8>(CREATE_BYTE) != 0 {
+                caravan_ai_package_print_what_is_he_thinking(e, Ptr::new(package), menu + NPC_HAND);
+            }
+            let selected = e.mem.u32(menu + 0xe2c);
+            let placed = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(ebp - 0x328, placed);
+            let selected = e.mem.u32(menu + 0xe2c);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+            let row = e.mem.u32(menu + 0xe34);
+            e.call(
+                ARRAY_APPEND,
+                &args![card_track(menu, track as u32, row), ebp - 0x328],
+            );
+            e.set(this, CaravanMenu::eGameState, 0xb);
+        }
+        return;
+    }
+    if array_size(e, package) == 6 {
+        if e.mem.u32(menu + NEXT_NPC_CARD) != u32::MAX {
+            let card = e.call(WORD_AT_0X14, &args![package]).u32();
+            e.mem.set_u32(menu + 0xe2c, card);
+            let next = e.mem.u32(menu + NEXT_NPC_CARD);
+            let drawn = array_element(e, menu + NPC_DECK, next);
+            e.mem.set_u32(ebp - 0x334, drawn);
+            let selected = e.mem.u32(menu + 0xe2c);
+            let discarded = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(ebp - 0x330, discarded);
+            let selected = e.mem.u32(menu + 0xe2c);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+            e.call(ARRAY_APPEND, &args![menu + NPC_HAND, ebp - 0x334]);
+            let next = e.mem.u32(menu + NEXT_NPC_CARD);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_DECK, next, 1u32]);
+            idle_draw_next_npc_card(e, menu);
+            fn_0074d190(e, this, 0);
+        } else {
+            let card = e.call(WORD_AT_0X14, &args![package]).u32();
+            e.mem.set_u32(menu + 0xe2c, card);
+            let selected = e.mem.u32(menu + 0xe2c);
+            let discarded = array_element(e, menu + NPC_HAND, selected);
+            e.mem.set_u32(ebp - 0x338, discarded);
+            let selected = e.mem.u32(menu + 0xe2c);
+            e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+            fn_0074d190(e, this, 0);
+        }
+        e.set(this, CaravanMenu::eGameState, 0xe);
+        return;
+    }
+    if array_size(e, package) == 5 {
+        let track = e.call(WORD_AT_0XC, &args![package]).u32();
+        e.mem.set_u32(menu + 0xe30, track);
+        let track = e.mem.u32(menu + 0xe30);
+        e.mem.set_u32(track_info(menu, track) + 8, 0);
+        e.set(this, CaravanMenu::eGameState, 0xf);
+        return;
+    }
+    if e.mem.u32(menu + NEXT_NPC_CARD) != u32::MAX {
+        idle_select_package_target(e, this, package);
+        let next = e.mem.u32(menu + NEXT_NPC_CARD);
+        let drawn = array_element(e, menu + NPC_DECK, next);
+        e.mem.set_u32(ebp - 0x340, drawn);
+        let selected = e.mem.u32(menu + 0xe2c);
+        let placed = array_element(e, menu + NPC_HAND, selected);
+        e.mem.set_u32(ebp - 0x33c, placed);
+        let selected = e.mem.u32(menu + 0xe2c);
+        e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+        e.call(ARRAY_APPEND, &args![menu + NPC_HAND, ebp - 0x340]);
+        if e.global::<u8>(CREATE_BYTE) != 0 {
+            caravan_ai_package_print_what_is_he_thinking(e, Ptr::new(package), menu + NPC_HAND);
+        }
+        let next = e.mem.u32(menu + NEXT_NPC_CARD);
+        e.call(ARRAY_REMOVE_AT, &args![menu + NPC_DECK, next, 1u32]);
+        idle_draw_next_npc_card(e, menu);
+        let track = e.mem.u32(menu + 0xe30);
+        let row = e.mem.u32(menu + 0xe34);
+        e.call(
+            ARRAY_APPEND,
+            &args![card_track(menu, track, row), ebp - 0x33c],
+        );
+        fn_0074d190(e, this, 0);
+    } else {
+        let blocks = [ebp - 0x354, ebp - 0x360, ebp - 0x36c, ebp - 0x378];
+        for (name, block) in NPC_DECK_OBJECTS.into_iter().zip(blocks) {
+            let root = e.mem.u32(menu + HAND_GEOMETRY + 4);
+            let object = e.call(OBJECT_BY_NAME, &args![root, name]).u32();
+            if object != 0 {
+                e.call(SET_CULLED, &args![object, 1u32]);
+                e.call(UPDATE_DATA_INIT, &args![block, 0u32, 0u32, 0u32]);
+                idle_update(e, object, block);
+            }
+        }
+        idle_select_package_target(e, this, package);
+        let selected = e.mem.u32(menu + 0xe2c);
+        let placed = array_element(e, menu + NPC_HAND, selected);
+        e.mem.set_u32(ebp - 0x348, placed);
+        let selected = e.mem.u32(menu + 0xe2c);
+        e.call(ARRAY_REMOVE_AT, &args![menu + NPC_HAND, selected, 1u32]);
+        if e.global::<u8>(CREATE_BYTE) != 0 {
+            caravan_ai_package_print_what_is_he_thinking(e, Ptr::new(package), menu + NPC_HAND);
+        }
+        let track = e.mem.u32(menu + 0xe30);
+        let row = e.mem.u32(menu + 0xe34);
+        e.call(
+            ARRAY_APPEND,
+            &args![card_track(menu, track, row), ebp - 0x348],
+        );
+    }
+    e.set(this, CaravanMenu::eGameState, 0xd);
+}
+
+/// `iNextNPCCard`: -1 for an empty opponent deck, else a random index
+/// (`00944460(0, size)`).
+fn idle_draw_next_npc_card(e: &mut Engine, menu: u32) {
+    if array_size(e, menu + NPC_DECK) == 0 {
+        e.mem.set_u32(menu + NEXT_NPC_CARD, u32::MAX);
+    } else {
+        let remaining = array_size(e, menu + NPC_DECK);
+        let next = e.call(RANDOM_RANGE, &args![0u32, remaining]).u32();
+        e.mem.set_u32(menu + NEXT_NPC_CARD, next);
+    }
+}
+
+/// The package's placement as the selection: track (+0xc), row (+0x10),
+/// column the row's card count, hand card (+0x14) and `pSelectedCard`.
+fn idle_select_package_target(e: &mut Engine, this: Ptr<CaravanMenu>, package: u32) {
+    let menu = this.addr();
+    let track = e.call(WORD_AT_0XC, &args![package]).u32();
+    e.mem.set_u32(menu + 0xe30, track);
+    let row = e.call(WORD_AT_0X10, &args![package]).u32();
+    e.mem.set_u32(menu + 0xe34, row);
+    let track = e.mem.u32(menu + 0xe30);
+    let row = e.mem.u32(menu + 0xe34);
+    let count = array_size(e, card_track(menu, track, row));
+    e.mem.set_u32(menu + 0xe38, count);
+    let card = e.call(WORD_AT_0X14, &args![package]).u32();
+    e.mem.set_u32(menu + 0xe2c, card);
+    let selected = e.mem.u32(menu + 0xe2c);
+    let chosen = array_element(e, menu + NPC_HAND, selected);
+    e.mem.set_u32(menu + SELECTED_CARD, chosen);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -6425,6 +8656,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             caravan_menu_prepare_game_menu(Ptr<CaravanMenu>)
         ),
         entry!(0x0074_fdc0, fn_0074fdc0(Ptr<CaravanMenu>, u32) -> u32),
+        entry!(0x0074_1500, caravan_menu_do_idle(Ptr<CaravanMenu>)),
     ]
 }
 
@@ -8789,5 +11021,373 @@ mod n052_tests {
             vec![vec![0xcafe, 0x6a, 0x5ce]]
         );
         assert_eq!(calls_to(&e, RENDER_TO_TEXTURE_00709D50)[0][0], 0);
+    }
+
+    /// An engine for `DoIdle`: the n052 doubles plus its own outside
+    /// callees answering 0, the constants it reads, and the singleton on
+    /// top of the menus (`GetClass` through a vtable).
+    fn idle_engine() -> (Engine, Ptr<CaravanMenu>) {
+        let mut e = engine();
+        e.map(0x0102_9000, 0x1000);
+        e.map(0x0103_1000, 0x1000);
+        for address in [
+            WORD_AT_0X14,
+            CONTROLS_AXIS_00A23390,
+            CONTROLS_BUTTON_00A23A50,
+            WORD_AT_0X28,
+            MODEL_NODE_0043B4A0,
+            DEACTIVATE_SEQUENCE,
+            SEQUENCE_TIME_00508100,
+            PLUS_0X8C,
+            WORLD_POINT_TO_SCREEN,
+            WORD_AT_0XC,
+            WORD_AT_0X10,
+            SET_WORD_AT_0XC,
+            SET_WORD_AT_0X10,
+            INTERFACE_FLOAT_00639AA0,
+            INTEGER_MAGNITUDE,
+            MENU_START_FADE_OUT,
+            MENU_INSTANT_FADE_OUT,
+            FLOAT_MAGNITUDE_00408820,
+            FLOAT_MAGNITUDE_00408840,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.set_global::<f64>(ZERO_DOUBLE, 0.0);
+        e.set_global::<f64>(ONE_DOUBLE, 1.0);
+        e.set_global::<f64>(TICKS_PER_SECOND, 1000.0);
+        e.set_global::<f64>(STICK_DEAD_ZONE, 7849.0);
+        e.set_global::<f64>(STICK_RANGE, 32767.0);
+        e.set_global::<f64>(SELECTION_REPEAT, 0.25);
+        e.set_global::<f64>(STICK_THRESHOLD, 0.01);
+        e.set_global::<f32>(MINUS_ONE_FLOAT, -1.0);
+        e.set_global::<f32>(TRACK_ALPHA, 255.0);
+        let (this, _) = setup(&mut e);
+        let object = object_with_vtable(&mut e);
+        let vtable = e.mem.u32(object);
+        e.mem.set_u32(this.addr(), vtable);
+        e.register(0x00d0_0034, |_, _| ret(0x43b));
+        e.register(IS_TOP_MENU_ID, |_, _| ret(1));
+        (e, this)
+    }
+
+    /// The idle timer at `time` for `state`, with no ticks elapsing (the
+    /// tick source answers the menu's previous tick, 1000).
+    fn idle_at(e: &mut Engine, this: Ptr<CaravanMenu>, state: i32, time: f32) {
+        e.set(this, CaravanMenu::eGameState, state);
+        e.set(this, CaravanMenu::uiPrevIdleTick, 1000);
+        e.register(WORD_AT_0X14, |_, _| ret(1000));
+        e.set_global::<u32>(IDLE_TIME_STATE, state as u32);
+        e.set_global::<f32>(IDLE_TIME, time);
+    }
+
+    fn do_idle(e: &mut Engine, this: Ptr<CaravanMenu>) {
+        e.call_log = Some(vec![]);
+        e.call(0x0074_1500, &args![this]);
+    }
+
+    #[test]
+    fn do_idle_waits_for_the_tutorial_and_off_top_clears_ison_top() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        e.set(this, CaravanMenu::uiPrevIdleTick, 5);
+        e.set(this, CaravanMenu::iFlags, CAF_ISONTOP);
+        // A tutorial up and not yet shown: nothing runs.
+        e.set(this, CaravanMenu::bTutorial, 1);
+        e.mem.set_u32(menu + TUTORIAL_INDEX, 0x1f);
+        do_idle(&mut e, this);
+        assert_eq!(calls_to(&e, TUTORIAL_SHOWN)[0][1], 0x1f);
+        assert_eq!(count(&e, WORD_AT_0X14), 0);
+        assert_eq!(e.get(this, CaravanMenu::bTutorial), 1);
+        // Shown: the tutorial byte clears; off top the menu stops after
+        // clearing `CAF_ISONTOP`.
+        e.register(TUTORIAL_SHOWN, |_, _| ret(1));
+        do_idle(&mut e, this);
+        assert_eq!(e.get(this, CaravanMenu::bTutorial), 0);
+        e.register(IS_TOP_MENU_ID, |_, _| ret(0));
+        e.set(this, CaravanMenu::bTutorial, 0);
+        e.set(this, CaravanMenu::uiPrevIdleTick, 5);
+        do_idle(&mut e, this);
+        assert_eq!(e.get(this, CaravanMenu::iFlags) & CAF_ISONTOP, 0);
+        assert_eq!(count(&e, WORD_AT_0X14), 0);
+        assert_eq!(e.get(this, CaravanMenu::uiPrevIdleTick), 5);
+    }
+
+    #[test]
+    fn do_idle_counts_the_timer_and_ends_the_deck_intro() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        e.set(this, CaravanMenu::eActiveMenu, 1);
+        idle_at(&mut e, this, 1, 0.5);
+        e.register(WORD_AT_0X14, |_, _| ret(1250));
+        e.mem.set_u32(menu + CAMERA_ANIM_MANAGER, 0x600);
+        e.mem.set_u32(menu + CAMERA_ANIMATIONS, 0x500);
+        e.register(SEQUENCE_TIME_00508100, |_, _| ret_f(0.75));
+        e.register(DYNAMIC_CAST, |_, _| ret(0x777));
+        e.register(TUTORIAL_MENU_CREATE, |_, _| ret(1));
+        do_idle(&mut e, this);
+        // 0.5 + 250 / 1000.
+        assert_eq!(e.global::<f32>(IDLE_TIME), 0.75);
+        assert_eq!(e.get(this, CaravanMenu::uiPrevIdleTick), 1250);
+        assert_eq!(e.global::<u32>(IDLE_TIME_STATE), 1);
+        assert_ne!(e.get(this, CaravanMenu::iFlags) & CAF_ISONTOP, 0);
+        // The deck menu resets the interface tile's trait 0xfa9.
+        assert_eq!(
+            calls_to(&e, SET_FLOAT_TRAIT)[0][1..],
+            [0xfa9, 0x437f_0000, 1]
+        );
+        // Not at 0.0: no activation; the timer reached the sequence's end.
+        assert_eq!(count(&e, ACTIVATE_SEQUENCE), 0);
+        assert_eq!(
+            calls_to(&e, DEACTIVATE_SEQUENCE),
+            vec![vec![0x600, 0x500, 0]]
+        );
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0);
+        assert_eq!(
+            calls_to(&e, FORM_BY_EDITOR_ID),
+            vec![vec![HELP_DECK_BUILDING]]
+        );
+        assert_eq!(calls_to(&e, TUTORIAL_MARK)[0][1], 0x1f);
+        assert_eq!(e.get(this, CaravanMenu::bTutorial), 1);
+        assert_eq!(e.mem.u32(menu + TUTORIAL_INDEX), 0x1f);
+        // Before the end: the sequence starts at 0.0 and keeps running.
+        e.set(this, CaravanMenu::bTutorial, 0);
+        idle_at(&mut e, this, 1, 0.0);
+        e.register(SEQUENCE_TIME_00508100, |_, _| ret_f(0.75));
+        do_idle(&mut e, this);
+        assert_eq!(
+            calls_to(&e, ACTIVATE_SEQUENCE),
+            vec![vec![0x600, 0x500, 0, 0, 0x3f80_0000, 0, 0]]
+        );
+        assert_eq!(count(&e, DEACTIVATE_SEQUENCE), 0);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 1);
+    }
+
+    #[test]
+    fn do_idle_money_drop_updates_the_new_money_and_ends_past_a_second() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        idle_at(&mut e, this, 4, 1.5);
+        fill_array(&mut e, menu + LIST_OF_BILLS, &[0xb0, 0xb1, 0xb2]);
+        fill_array(&mut e, menu + LIST_OF_COINS, &[0xc0, 0xc1]);
+        e.mem.set_u32(menu + BILL_INDEX_TO_ANIM, 1);
+        e.mem.set_u32(menu + COIN_INDEX_TO_ANIM, 2);
+        do_idle(&mut e, this);
+        let updated: Vec<u32> = calls_to(&e, OBJECT_UPDATE).iter().map(|c| c[0]).collect();
+        assert_eq!(updated, vec![0xb1, 0xb2]);
+        assert_eq!(calls_to(&e, UPDATE_DATA_INIT)[0][1..], [0x3fc0_0000, 1, 0]);
+        assert_eq!(e.mem.u32(menu + BILL_INDEX_TO_ANIM), 3);
+        assert_eq!(e.mem.u32(menu + COIN_INDEX_TO_ANIM), 2);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0);
+    }
+
+    #[test]
+    fn do_idle_deck_meter_release_moves_by_the_difference() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        e.set(this, CaravanMenu::eActiveMenu, 1);
+        idle_at(&mut e, this, 0, 0.0);
+        e.mem.set_u8(menu + BYTE_E85, 1);
+        e.set(this, CaravanMenu::iPrevValue, 4);
+        e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
+        let deck: Vec<u32> = (0..13).map(|_| card(&mut e, 1, 1, 0)).collect();
+        fill_array(&mut e, menu + DECK_ARRAY, &deck);
+        do_idle(&mut e, this);
+        assert_eq!(e.get(this, CaravanMenu::iNumSteps), 3);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 5);
+        assert_eq!(e.get(this, CaravanMenu::iPrevValue), 7);
+        assert_eq!(e.mem.u8(menu + BYTE_E85), 0);
+        // Five or more steps back: state 9.
+        idle_at(&mut e, this, 0, 0.0);
+        e.mem.set_u8(menu + BYTE_E85, 1);
+        e.set(this, CaravanMenu::iPrevValue, 12);
+        do_idle(&mut e, this);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 9);
+        assert_eq!(e.get(this, CaravanMenu::iPrevValue), 7);
+    }
+
+    #[test]
+    fn do_idle_game_keys_move_the_hand_card_selection() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        e.set(this, CaravanMenu::eActiveMenu, 2);
+        idle_at(&mut e, this, 0, 1.0);
+        e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
+        e.mem.set_u32(menu + PENDING_KEY, KEY_RIGHT);
+        e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
+            ret_f(f64::from(f32::from_bits(a[0]).abs()))
+        });
+        let cards: Vec<u32> = (0..3).map(|_| card(&mut e, 2, 1, 0)).collect();
+        fill_array(&mut e, menu + PLAYER_HAND, &cards);
+        e.mem.set_u32(menu + 0xe2c, 2);
+        let object = e.mem.alloc(0x100);
+        e.register_double(OBJECT_BY_NAME, move |_, _| ret(object));
+        e.set(this, CaravanMenu::iFlags, CAF_DISABLE_A);
+        do_idle(&mut e, this);
+        assert_eq!(e.mem.u32(menu + PENDING_KEY), 0);
+        assert_eq!(e.mem.u32(menu + SELECTION_DELAY), 1.0f32.to_bits());
+        // 2 + 1 is past the last card: back to the first.
+        assert_eq!(e.mem.u32(menu + 0xe2c), 0);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_BY_NAME)[0][2], SWITCH_CARD_SOUND);
+        assert_eq!(e.get(this, CaravanMenu::iFlags) & CAF_DISABLE_A, 0);
+        // Within the delay nothing moves.
+        idle_at(&mut e, this, 0, 1.1);
+        e.mem.set_u32(menu + PENDING_KEY, KEY_LEFT);
+        do_idle(&mut e, this);
+        assert_eq!(e.mem.u32(menu + 0xe2c), 0);
+        assert_eq!(count(&e, SOUND_HANDLE_BY_NAME), 0);
+    }
+
+    #[test]
+    fn do_idle_next_joker_selects_the_next_track_with_jokers() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        idle_at(&mut e, this, 0x13, 0.0);
+        e.mem.set_u32(menu + 0xe30, 1);
+        fill_array(&mut e, menu + JOKER_LOCATIONS + 0x20, &[3]);
+        do_idle(&mut e, this);
+        assert_eq!(e.mem.u32(menu + 0xe30), 2);
+        assert_eq!(e.mem.u32(menu + 0xe34), 3);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0x11);
+        assert_ne!(e.get(this, CaravanMenu::iFlags) & CAF_JOKER, 0);
+        // No track left with jokers: the turn ends.
+        idle_at(&mut e, this, 0x13, 0.0);
+        e.mem.set_u32(menu + 0xe30, 3);
+        do_idle(&mut e, this);
+        assert_eq!(e.mem.u32(menu + 0xe30), 6);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0x15);
+        assert_eq!(e.get(this, CaravanMenu::iFlags) & CAF_JOKER, 0);
+    }
+
+    #[test]
+    fn do_idle_navigates_the_deck_step_by_step() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        idle_at(&mut e, this, 5, 0.0);
+        e.mem.set_u32(menu + ACTIVE_DECK_ANIM_MANAGER, 0x610);
+        e.mem.set_u32(menu + ACTIVE_DECK_ANIMATIONS, 0x510);
+        e.mem.set_u32(menu + INACTIVE_DECK_ANIM_MANAGER, 0x620);
+        e.mem.set_u32(menu + INACTIVE_DECK_ANIMATIONS, 0x520);
+        e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
+        e.set(this, CaravanMenu::iNumSteps, 3);
+        e.register(GET_FLOAT_TRAIT, |_, _| ret_f(9.0));
+        e.register(SEQUENCE_TIME_00508100, |_, _| ret_f(0.0));
+        do_idle(&mut e, this);
+        // Started at 0.0 and already at the end: one step taken, the
+        // timer restarts for the next.
+        let activated: Vec<u32> = calls_to(&e, ACTIVATE_SEQUENCE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(activated, vec![0x510, 0x520]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_BY_NAME)[0][2], NAVIGATE_SOUND);
+        assert_eq!(e.get(this, CaravanMenu::iNumSteps), 1);
+        assert_eq!(e.global::<u32>(IDLE_TIME), 0);
+        assert_eq!(e.mem.u32(menu + PENDING_KEY), 0);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 5);
+        assert_eq!(count(&e, DEACTIVATE_SEQUENCE), 0);
+        // The last step stops the sequences.
+        idle_at(&mut e, this, 5, 0.0);
+        do_idle(&mut e, this);
+        assert_eq!(e.get(this, CaravanMenu::iNumSteps), 0);
+        let stopped: Vec<u32> = calls_to(&e, DEACTIVATE_SEQUENCE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(stopped, vec![0x510, 0x520]);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0);
+    }
+
+    #[test]
+    fn do_idle_turn_change_and_closing() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        // Both sides out of cards: the game is over.
+        idle_at(&mut e, this, 0x15, 0.0);
+        do_idle(&mut e, this);
+        assert_ne!(e.get(this, CaravanMenu::iFlags) & CAF_AI, 0);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0x16);
+        // Closing: the fade starts, instantly when it was started before.
+        idle_at(&mut e, this, 0x17, 0.0);
+        e.set_global::<u8>(CLOSE_FADED_BYTE, 1);
+        do_idle(&mut e, this);
+        assert_eq!(calls_to(&e, MENU_START_FADE_OUT), vec![vec![menu]]);
+        assert_eq!(calls_to(&e, MENU_INSTANT_FADE_OUT), vec![vec![menu]]);
+        assert_eq!(e.global::<u32>(CARAVAN_MENU), 0);
+        assert_eq!(e.global::<u8>(CLOSE_FADED_BYTE), 1);
+        // A fade state of 2 does nothing.
+        e.register(WORD_AT_0X24, |_, _| ret(2));
+        do_idle(&mut e, this);
+        assert_eq!(count(&e, MENU_START_FADE_OUT), 0);
+    }
+
+    #[test]
+    fn do_idle_discards_a_track_column_by_column() {
+        let (mut e, this) = idle_engine();
+        let menu = this.addr();
+        idle_at(&mut e, this, 0xf, 0.0);
+        e.mem.set_u32(menu + 0xe30, 1);
+        for row in 0..2 {
+            let cards = [card(&mut e, 3, 1, 0), card(&mut e, 4, 1, 0)];
+            fill_array(&mut e, card_track(menu, 1, row), &cards);
+            e.mem
+                .set_u32(menu + TRACK_GEOMETRY + 0x1c + 4 * row, 0x900 + row);
+            e.mem
+                .set_u32(menu + TRACK_ANIM_MANAGER + 0x1c + 4 * row, 0x800 + row);
+            for column in 0..4 {
+                for which in 0..2 {
+                    let sequence = 0x1000 + 0x100 * row + 0x10 * column + which;
+                    e.mem
+                        .set_u32(track_animation(menu, 1, row, column, which), sequence);
+                }
+            }
+        }
+        e.register(SEQUENCE_TIME_00508100, |_, _| ret_f(-1.0));
+        do_idle(&mut e, this);
+        // From column 4 down, the first column with cards (1) starts on both
+        // rows; past its end it stops and the timer restarts.
+        let activated: Vec<u32> = calls_to(&e, ACTIVATE_SEQUENCE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(activated, vec![0x1011, 0x1111]);
+        assert_eq!(calls_to(&e, ACTIVATE_SEQUENCE)[0][0], 0x800);
+        let updated: Vec<u32> = calls_to(&e, OBJECT_UPDATE).iter().map(|c| c[0]).collect();
+        assert_eq!(updated, vec![0x900, 0x901]);
+        assert_eq!(count(&e, DEACTIVATE_SEQUENCE), 7);
+        assert_eq!(calls_to(&e, DEACTIVATE_SEQUENCE)[0][1], 0x1011);
+        assert_eq!(e.mem.u32(menu + 0xe38), 1);
+        assert_eq!(e.global::<u32>(IDLE_TIME), 0);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_BY_NAME)[0][2], REMOVE_CARD_SOUND);
+        // A later frame past the column's end: the next column (0) starts.
+        idle_at(&mut e, this, 0xf, 0.5);
+        do_idle(&mut e, this);
+        let activated: Vec<u32> = calls_to(&e, ACTIVATE_SEQUENCE)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(activated, vec![0x1001, 0x1101]);
+        assert_eq!(e.mem.u32(menu + 0xe38), 0);
+        assert_eq!(count(&e, ARRAY_RELEASE_008454F0), 0);
+        // The last column ends: the lists are released, the turn ends.
+        idle_at(&mut e, this, 0xf, 0.5);
+        e.set(
+            this,
+            CaravanMenu::iFlags,
+            CAF_DESTROY_TRACK | CAF_SELECT_TRACK,
+        );
+        do_idle(&mut e, this);
+        assert_eq!(count(&e, ACTIVATE_SEQUENCE), 0);
+        let released: Vec<u32> = calls_to(&e, ARRAY_RELEASE_008454F0)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        let expected: Vec<u32> = (0..7).map(|row| card_track(menu, 1, row)).collect();
+        assert_eq!(released, expected);
+        assert_eq!(e.get(this, CaravanMenu::eGameState), 0x15);
+        assert_eq!(
+            e.get(this, CaravanMenu::iFlags) & (CAF_DESTROY_TRACK | CAF_SELECT_TRACK),
+            0
+        );
     }
 }
