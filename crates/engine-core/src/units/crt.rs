@@ -15,8 +15,10 @@
 use crate::prelude::*;
 
 pub mod cvt;
+pub mod files;
 pub mod fpinit;
 pub mod glue;
+pub mod lcmap;
 pub mod locale2;
 pub mod lowio;
 pub mod math;
@@ -6169,8 +6171,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x00ed_2f21, output_l_entry as AbiFn),
     ];
     table.extend(cvt::funcs());
+    table.extend(files::funcs());
     table.extend(fpinit::funcs());
     table.extend(glue::funcs());
+    table.extend(lcmap::funcs());
     table.extend(locale2::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());

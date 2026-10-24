@@ -3,7 +3,8 @@
 //! (`00ecf7b8`), `_free_locale` (`00ecf80b`) with its `__finally` blocks, `__strcats`
 //! (`00ecf8cd`), `___lc_strtolc` (`00ecf90d`), `___lc_lctostr` (`00ecfa36`),
 //! `__setlocale_get_all` (`00ecfaa3`), `__expandlocale` (`00ecfc20`), `__setlocale_set_cat`
-//! (`00ecfe51`) and `__setlocale_nolock` (`00ed0153`).
+//! (`00ecfe51`), `__setlocale_nolock` (`00ed0153`), and the `LC_TIME` and `LC_NUMERIC` init
+//! callbacks `___init_time` (`00ee045e`) and `___init_numeric` (`00ee051c`).
 //!
 //! The locale information (`threadlocinfo`, 0xd8 bytes) is addressed by offset: the reference
 //! count (+0x0), the code page (+0x4), the collation code page (+0x8), the `lc_handle` words
@@ -735,6 +736,168 @@ pub fn setlocale_nolock(e: &mut Engine, info: u32, locale: u32, category: u32) -
     })
 }
 
+/// `__calloc_crt` (`00ed0d24`), `__get_lc_time` (`00edfeae`; `EAX` the locale information,
+/// `ESI` the block), `___free_lc_time` (`00ee02c9`) and the C locale's time block
+/// (`__lc_time_c`, `011c2a98`).
+const CALLOC_CRT: u32 = 0x00ed_0d24;
+const GET_LC_TIME: u32 = 0x00ed_feae;
+const FREE_LC_TIME: u32 = 0x00ee_02c9;
+const C_LC_TIME: u32 = 0x011c_2a98;
+
+// Translated from 00ee045e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `___init_time` (Ghidra's function ID; `LC_TIME`'s init callback), cdecl, the locale
+/// information. With a `LC_TIME` handle (+0x20) a 0xb8-byte block (`__calloc_crt`; none
+/// answers 1) is filled (`__get_lc_time`; failing frees it with `___free_lc_time` and `free`
+/// and answers 1) and counted once (+0xb4); without one the C locale's block is used. The
+/// old block (+0xd4) loses a reference unless it is the C one, the new one is stored and 0
+/// answered.
+pub fn init_time(e: &mut Engine, info: u32) -> u32 {
+    let block = if e.mem.u32(info.wrapping_add(0x20)) != 0 {
+        let block = e.call(CALLOC_CRT, &args![1u32, 0xb8u32]).u32();
+        if block == 0 {
+            return 1;
+        }
+        if e.call(GET_LC_TIME, &args![info, block]).u32() != 0 {
+            e.call(FREE_LC_TIME, &args![block]);
+            e.call(FREE_FN, &args![block]);
+            return 1;
+        }
+        e.mem.set_u32(block.wrapping_add(0xb4), 1);
+        block
+    } else {
+        C_LC_TIME
+    };
+    let old = e.mem.u32(info.wrapping_add(0xd4));
+    if old != C_LC_TIME {
+        interlocked_decrement(e, old.wrapping_add(0xb4));
+    }
+    e.mem.set_u32(info.wrapping_add(0xd4), block);
+    0
+}
+
+/// `_malloc_crt` (`00ed0cdf`), `__getlocaleinfo` (`00ed2af0`; locale object, type, LCID,
+/// field, out), `__free_lconv_num` (`00ee04d7`) and the C locale's `lconv` (`__lconv_c`,
+/// `011c19d4`).
+const MALLOC_CRT_FN: u32 = 0x00ed_0cdf;
+const GETLOCALEINFO: u32 = 0x00ed_2af0;
+const FREE_LCONV_NUM: u32 = 0x00ee_04d7;
+const C_LCONV: u32 = 0x011c_19d4;
+
+// Translated from 00ee051c (disassembled, FalloutNV.exe 1.4.0.525)
+/// `___init_numeric` (Ghidra's function ID; `LC_NUMERIC`'s init callback), cdecl, the
+/// locale information. Without `LC_MONETARY` and `LC_NUMERIC` handles (+0x18, +0x1c) the C
+/// locale's `lconv` is taken with no counts. Otherwise a copy of the current `lconv` (+0xbc,
+/// 0x30 bytes, `__calloc_crt`) with a reference count (`_malloc_crt`) is made (either
+/// failing answers 1). With a `LC_NUMERIC` handle a second count is made and the decimal
+/// point, thousands separator and grouping are read (`__getlocaleinfo` with the
+/// category's language, `LOCALE_SDECIMAL`/`STHOUSAND`/`SGROUPING`); any failure frees them
+/// (`__free_lconv_num`) and the copy and answers -1; the grouping's digits become numbers
+/// and its `;`s are removed. Without the handle the C locale's three words are copied.
+/// The counts start at 1; the old counts lose a reference (the old `lconv` and its count
+/// freed at 0) and the new `lconv` and counts are stored. 0 is answered.
+pub fn init_numeric(e: &mut Engine, info: u32) -> u32 {
+    let (lconv, count, numeric_count) =
+        if e.mem.u32(info.wrapping_add(0x1c)) == 0 && e.mem.u32(info.wrapping_add(0x18)) == 0 {
+            (C_LCONV, 0, 0)
+        } else {
+            let lconv = e.call(CALLOC_CRT, &args![1u32, 0x30u32]).u32();
+            if lconv == 0 {
+                return 1;
+            }
+            let current = e.mem.u32(info.wrapping_add(0xbc));
+            for i in 0..0xcu32 {
+                let word = e.mem.u32(current.wrapping_add(i * 4));
+                e.mem.set_u32(lconv.wrapping_add(i * 4), word);
+            }
+            let count = e.call(MALLOC_CRT_FN, &args![4u32]).u32();
+            if count == 0 {
+                e.call(FREE_FN, &args![lconv]);
+                return 1;
+            }
+            e.mem.set_u32(count, 0);
+            let numeric_count = if e.mem.u32(info.wrapping_add(0x1c)) != 0 {
+                let numeric_count = e.call(MALLOC_CRT_FN, &args![4u32]).u32();
+                if numeric_count == 0 {
+                    e.call(FREE_FN, &args![lconv]);
+                    e.call(FREE_FN, &args![count]);
+                    return 1;
+                }
+                e.mem.set_u32(numeric_count, 0);
+                let lcid = u32::from(e.mem.u16(info.wrapping_add(0x3e)));
+                // The locale object `__getlocaleinfo` takes (EBP-0x18): this information and no
+                // multibyte information.
+                let failed = e.with_stack(8, |e, object| {
+                    let object = object.addr();
+                    e.mem.set_u32(object, info);
+                    e.mem.set_u32(object + 4, 0);
+                    let mut failed = 0;
+                    for (field, offset) in [(0xeu32, 0u32), (0xf, 4), (0x10, 8)] {
+                        failed |= e
+                            .call(
+                                GETLOCALEINFO,
+                                &args![object, 1u32, lcid, field, lconv.wrapping_add(offset)],
+                            )
+                            .u32();
+                    }
+                    failed
+                });
+                if failed != 0 {
+                    e.call(FREE_LCONV_NUM, &args![lconv]);
+                    e.call(FREE_FN, &args![lconv]);
+                    e.call(FREE_FN, &args![count]);
+                    return 0xffff_ffff;
+                }
+                let mut at = e.mem.u32(lconv.wrapping_add(8));
+                while e.mem.u8(at) != 0 {
+                    let c = e.mem.u8(at);
+                    if (c as i8) >= 0x30 && (c as i8) <= 0x39 {
+                        e.mem.set_u8(at, c - 0x30);
+                        at = at.wrapping_add(1);
+                    } else if c == b';' {
+                        let mut to = at;
+                        loop {
+                            let next = e.mem.u8(to.wrapping_add(1));
+                            e.mem.set_u8(to, next);
+                            to = to.wrapping_add(1);
+                            if e.mem.u8(to) == 0 {
+                                break;
+                            }
+                        }
+                    } else {
+                        at = at.wrapping_add(1);
+                    }
+                }
+                numeric_count
+            } else {
+                for i in 0..3u32 {
+                    let word = e.mem.u32(C_LCONV.wrapping_add(i * 4));
+                    e.mem.set_u32(lconv.wrapping_add(i * 4), word);
+                }
+                0
+            };
+            e.mem.set_u32(count, 1);
+            if numeric_count != 0 {
+                e.mem.set_u32(numeric_count, 1);
+            }
+            (lconv, count, numeric_count)
+        };
+    let old_numeric = e.mem.u32(info.wrapping_add(0xb4));
+    if old_numeric != 0 {
+        interlocked_decrement(e, old_numeric);
+    }
+    let old_count = e.mem.u32(info.wrapping_add(0xb0));
+    if old_count != 0 && interlocked_decrement(e, old_count) == 0 {
+        let old_count = e.mem.u32(info.wrapping_add(0xb0));
+        e.call(FREE_FN, &args![old_count]);
+        let old_lconv = e.mem.u32(info.wrapping_add(0xbc));
+        e.call(FREE_FN, &args![old_lconv]);
+    }
+    e.mem.set_u32(info.wrapping_add(0xb4), numeric_count);
+    e.mem.set_u32(info.wrapping_add(0xb0), count);
+    e.mem.set_u32(info.wrapping_add(0xbc), lconv);
+    0
+}
+
 /// The registry entries of the functions that take registers or a variable list.
 fn copytlocinfo_entry(e: &mut Engine, words: &[u32]) -> Ret {
     copytlocinfo_nolock(e, words[0], words[1]);
@@ -778,6 +941,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_fc20, expandlocale(u32, u32, u32, u32, u32) -> u32),
         (0x00ec_fe51, setlocale_set_cat_entry as AbiFn),
         (0x00ed_0153, setlocale_nolock_entry as AbiFn),
+        entry!(0x00ee_045e, init_time(u32) -> u32),
+        entry!(0x00ee_051c, init_numeric(u32) -> u32),
     ]
 }
 
@@ -1237,5 +1402,76 @@ mod tests {
         assert!(calls(&e, SETLOCALE_SET_CAT).is_empty());
         let bad = text(&mut e, b"bad");
         assert_eq!(setlocale_nolock(&mut e, info, bad, 0), 0);
+    }
+
+    #[test]
+    fn init_time_takes_a_new_block_or_the_c_one() {
+        let (mut e, _) = engine();
+        e.register_double(CALLOC_CRT, |e, a| e.mem.alloc(a[0] * a[1]).into_ret());
+        e.register_double(GET_LC_TIME, |_, _| 0u32.into_ret());
+        e.register_double(INTERLOCKED_DECREMENT, |_, _| 0u32.into_ret());
+        e.mem.map(C_LC_TIME, 4);
+        let info = e.mem.alloc(0xd8);
+        e.mem.set_u32(info + 0xd4, C_LC_TIME);
+        assert_eq!(e.call(0x00ee_045e, &args![info]).u32(), 0);
+        assert_eq!(e.mem.u32(info + 0xd4), C_LC_TIME);
+        e.mem.set_u32(info + 0x20, 0x407);
+        assert_eq!(init_time(&mut e, info), 0);
+        let block = e.mem.u32(info + 0xd4);
+        assert_eq!(e.mem.u32(block + 0xb4), 1);
+        assert!(calls(&e, INTERLOCKED_DECREMENT).is_empty());
+        // A second one releases the first; a failed read frees the new block.
+        assert_eq!(init_time(&mut e, info), 0);
+        assert_eq!(calls(&e, INTERLOCKED_DECREMENT), vec![vec![block + 0xb4]]);
+        e.register_double(GET_LC_TIME, |_, _| 1u32.into_ret());
+        e.register_double(FREE_LC_TIME, |_, _| Ret::default());
+        assert_eq!(init_time(&mut e, info), 1);
+        assert_eq!(calls(&e, FREE_LC_TIME).len(), 1);
+    }
+
+    #[test]
+    fn init_numeric_reads_the_separators_and_the_grouping() {
+        let (mut e, _) = engine();
+        e.register_double(CALLOC_CRT, |e, a| e.mem.alloc(a[0] * a[1]).into_ret());
+        e.register_double(INTERLOCKED_DECREMENT, |_, _| 0u32.into_ret());
+        e.mem.map(C_LCONV, 0x30);
+        let info = e.mem.alloc(0xd8);
+        let current = e.mem.alloc(0x30);
+        e.mem.set_u32(current + 0xc, 0x77);
+        e.mem.set_u32(info + 0xbc, current);
+        // No handles: the C lconv.
+        assert_eq!(e.call(0x00ee_051c, &args![info]).u32(), 0);
+        assert_eq!(e.mem.u32(info + 0xbc), C_LCONV);
+        assert_eq!(e.mem.u32(info + 0xb0), 0);
+        // A numeric locale: the three fields read, the grouping turned into numbers.
+        e.mem.set_u32(info + 0xbc, current);
+        e.mem.set_u32(info + 0x1c, 0x407);
+        e.mem.set_u16(info + 0x3e, 0x407);
+        e.register_double(GETLOCALEINFO, |e, a| {
+            let text: &[u8] = match a[3] {
+                0xe => b",",
+                0xf => b".",
+                _ => b"3;2;0",
+            };
+            let at = e.mem.alloc(8);
+            e.mem.set_cstr(at, text);
+            e.mem.set_u32(a[4], at);
+            0u32.into_ret()
+        });
+        let old_count = e.mem.alloc(4);
+        e.mem.set_u32(info + 0xb0, old_count);
+        assert_eq!(init_numeric(&mut e, info), 0);
+        let lconv = e.mem.u32(info + 0xbc);
+        assert_eq!(e.mem.cstr(e.mem.u32(lconv)), b",".to_vec());
+        assert_eq!(e.mem.bytes(e.mem.u32(lconv + 8), 4), vec![3, 2, 0, 0]);
+        assert_eq!(e.mem.u32(lconv + 0xc), 0x77);
+        assert_eq!(e.mem.u32(e.mem.u32(info + 0xb0)), 1);
+        assert_eq!(e.mem.u32(e.mem.u32(info + 0xb4)), 1);
+        assert_eq!(calls(&e, FREE_FN), vec![vec![old_count], vec![current]]);
+        // A failed read frees everything and answers -1.
+        e.register_double(GETLOCALEINFO, |_, _| 1u32.into_ret());
+        e.register_double(FREE_LCONV_NUM, |_, _| Ret::default());
+        assert_eq!(init_numeric(&mut e, info), 0xffff_ffff);
+        assert_eq!(calls(&e, FREE_LCONV_NUM).len(), 1);
     }
 }
