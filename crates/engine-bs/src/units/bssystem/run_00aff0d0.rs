@@ -56,10 +56,25 @@ pub fn fn_00aff180(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `DeleteFileA` (KERNEL32 import slot).
+const IMPORT_DELETE_FILE_A: u32 = 0x00fd_f0d4;
+
+// Translated from 00aff0b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSSystemFile::DeleteFileA` (engine map; `cdecl`, one word): `DeleteFileA(path)`; 0 when it
+/// succeeded, 4 when it failed (`NEG`, `SBB`, `AND 0xfffffffc`, `ADD 4`).
+pub fn bs_system_file_delete_file_a(e: &mut Engine, path: Ptr) -> u32 {
+    if e.call(IMPORT_DELETE_FILE_A, &args![path]).u32() != 0 {
+        0
+    } else {
+        4
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00af_f100, fn_00aff100() -> u32),
+        entry!(0x00af_f0b0, bs_system_file_delete_file_a(Ptr) -> u32),
         entry!(0x00af_f180, fn_00aff180(Ptr) -> Ptr),
     ]
 }
@@ -100,5 +115,20 @@ mod tests {
         assert_eq!(e.mem.u8(file + 0x44), 0);
         assert_eq!(e.mem.u8(file + 0x45), 0x55);
         assert_eq!(e.mem.u32(file + 0x1c), 0x5555_5555);
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn delete_answers_0_on_success_and_4_on_failure() {
+        let mut e = Engine::new();
+        e.register(IMPORT_DELETE_FILE_A, |_, a| {
+            u32::from(a[0] == 0x10).into_ret()
+        });
+        assert_eq!(e.call(0x00af_f0b0, &args![0x10u32]).u32(), 0);
+        assert_eq!(e.call(0x00af_f0b0, &args![0x20u32]).u32(), 4);
     }
 }

@@ -368,20 +368,22 @@ const COUNT_UP: u32 = 0x0040_b460;
 /// The game's counted semaphore's wait (`thiscall`, no stack words; the record: its count
 /// word at +0, the semaphore handle at +4): `WaitForSingleObject(handle, INFINITE)`, then
 /// `004019a0(this)` counts it down. As the exe's code, from its disassembly.
-pub fn counted_semaphore_wait(e: &mut Engine, this: Ptr) {
+pub fn counted_semaphore_wait(e: &mut Engine, this: Ptr) -> u32 {
     let handle = e.mem.u32(this.addr() + 4);
     e.call(SLOT_WAIT_FOR_SINGLE_OBJECT, &args![handle, 0xffff_ffffu32]);
-    e.call(COUNT_DOWN, &args![this]);
+    // The exe ends on this call: its `EAX` is the answer (00442510 passes it on).
+    e.call(COUNT_DOWN, &args![this]).u32()
 }
 
 // Platform: replaces 00442550 (ReleaseSemaphore (engine map, XAPILIB/synch.c), FalloutNV.exe 1.4.0.525)
 /// The game's counted semaphore's release (`thiscall`, no stack words; the record as for
 /// [`counted_semaphore_wait`]): `ReleaseSemaphore(handle, 1, NULL)`, then `0040b460(this)`
 /// counts it up. As the exe's code, from its disassembly.
-pub fn counted_semaphore_release(e: &mut Engine, this: Ptr) {
+pub fn counted_semaphore_release(e: &mut Engine, this: Ptr) -> u32 {
     let handle = e.mem.u32(this.addr() + 4);
     e.call(SLOT_RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
-    e.call(COUNT_UP, &args![this]);
+    // The exe ends on this call: its `EAX` is the answer.
+    e.call(COUNT_UP, &args![this]).u32()
 }
 
 pub fn funcs() -> Vec<(u32, AbiFn)> {
@@ -389,8 +391,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_193c, d3d9::cpu_id_flag_test() -> u32),
         entry!(0x00ed_1951, d3d9::cpuid(u32, Ptr)),
         entry!(0x00ed_1964, d3d9::cpuid(u32, Ptr)),
-        entry!(0x0044_24e0, counted_semaphore_wait(Ptr)),
-        entry!(0x0044_2550, counted_semaphore_release(Ptr)),
+        entry!(0x0044_24e0, counted_semaphore_wait(Ptr) -> u32),
+        entry!(0x0044_2550, counted_semaphore_release(Ptr) -> u32),
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
