@@ -12,7 +12,7 @@ in `scripts/`.
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
 | Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
-| Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | Not done: answers 0 (no sound), but the DLL answers 1 (see below) |
+| Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; a movie with sound tracks is not provided yet |
 
 ## Mixer (DirectSound 8 to the device)
 
@@ -117,5 +117,7 @@ What is left:
   in 10 ms device periods, which is the likely source of the jitter.
 - Then answer 1.
 
-Until then the platform answers 0. That is not what the player's machine does,
-so the maintainer decides whether the intro keeps playing that way.
+The platform answers 1, as measured: the game calls it at start-up (`BGSMoviePlayer`,
+`008670e0`) whether or not a movie plays. A movie with sound tracks then stops at
+`BinkOpen` with "not provided" until its track plays through our DirectSound;
+silent movies play, timed by the clock.

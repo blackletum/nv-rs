@@ -70,6 +70,8 @@ pub const OPEN_DIRECT_SOUND_SLOT: u32 = 0x00fd_f3b4;
 /// number handed out once per engine, [`engine_id`]). Like the other platform layers' code
 /// addresses (`0x7e00_0000` up), no exe code uses it.
 pub const STATE_PAGE: u32 = 0x7e14_0000;
+/// The word after it: 1 once `BinkSetSoundSystem` chose the DirectSound system.
+const SOUND_SYSTEM: u32 = 4;
 
 /// After how many `BinkWait` calls in a row that answer "wait" at the same platform clock the
 /// run stops: with the real clock off (tests) the clock (`Engine::clock_now_ms`) moves only with
@@ -138,23 +140,22 @@ fn put(e: &mut Engine, bink: u32, movie: Playing) {
 /// `BinkSetSoundSystem(open, param)`: chooses the sound system later `BinkOpen`s play through
 /// (`open` is the system's open function, `param` its argument: for `BinkOpenDirectSound`,
 /// an `IDirectSound` or 0 for one of the library's own). The game passes
-/// `BinkOpenDirectSound` and 0. No sound system opens here: the answer is 0, and movies play
-/// without sound, timed by the clock ([`wait`]) as the DLL times them without sound. Any
-/// other sound system is not provided.
-///
-/// This is not what the player's machine does (docs/SOUND.md, "Bink with sound"). The
-/// 2026-10-23 measurement that answered 0 asked `GetProcAddress` for a garbled name, so it
-/// passed NULL. Measured again on 2026-10-24 (`nv-bink --sound-system`,
-/// `bink-sound-2026-10-24`), the DLL answers 1 with or without a window, then plays the
-/// movie's sound and times the frames by it. Answering 1 needs the movie's sound played
-/// through the platform's DirectSound and the DLL's sound-driven timing, which are not done
-/// yet; the maintainer decides whether the intro keeps this answer until then.
-pub fn set_sound_system(_e: &mut Engine, open: u32, param: u32) -> i32 {
+/// `BinkOpenDirectSound` and 0 at start-up (`BGSMoviePlayer`, `008670e0`), whether or not a
+/// movie plays. The answer is 1, as the player's DLL answers on this machine (measured
+/// 2026-10-24, `nv-bink --sound-system`, with and without a window, `bink-sound-2026-10-24`;
+/// the 2026-10-23 measurement that gave 0 had passed the DLL a NULL function). The layer
+/// remembers that the DirectSound system is chosen: a movie with sound tracks then plays its
+/// sound through it and is timed by that sound (docs/SOUND.md, "Bink with sound"), which is
+/// not provided yet, so [`open`] stops on such a movie. Any other sound system is not
+/// provided.
+pub fn set_sound_system(e: &mut Engine, open: u32, param: u32) -> i32 {
     assert!(
         open == OPEN_DIRECT_SOUND_SLOT && param == 0,
         "BinkSetSoundSystem({open:#x}, {param:#x}) is not provided (only BinkOpenDirectSound, 0)"
     );
-    0
+    engine_id(e);
+    e.mem.set_u32(STATE_PAGE + SOUND_SYSTEM, 1);
+    1
 }
 
 // Platform: replaces binkw32.dll _BinkOpenDirectSound@4 (import)
@@ -184,9 +185,16 @@ pub fn open(e: &mut Engine, name: Ptr, flags: u32) -> u32 {
     let Some(data) = super::files::read_whole(e, &path) else {
         return 0;
     };
+    engine_id(e);
+    let sound = e.mem.u32(STATE_PAGE + SOUND_SYSTEM) == 1;
     let (handle_fields, decoder) = {
         let movie = ::bink::Movie::parse(&data)
             .unwrap_or_else(|err| panic!("BinkOpen({shown:?}): {err:?} is not provided"));
+        assert!(
+            movie.audio.is_empty() || !sound,
+            "BinkOpen({shown:?}): its {} sound track(s) with the DirectSound sound system are not \n             provided (movie sound: the track has to play through our DirectSound and time the \n             frames, see docs/SOUND.md)",
+            movie.audio.len()
+        );
         assert!(
             movie.revision == b'i' && movie.video_flags == 0,
             "BinkOpen({shown:?}): revision {:?} with video flags {:#x} is not provided",
@@ -502,6 +510,33 @@ mod tests {
         for v in [frames, largest, frames, width, height, 30000, 1001, 0, 0] {
             d.extend_from_slice(&v.to_le_bytes());
         }
+        let mut o = d.len() + 4 * (frames as usize + 1);
+        for (i, p) in packets.iter().enumerate() {
+            d.extend_from_slice(&((o as u32) | u32::from(i == 0)).to_le_bytes());
+            o += p.len();
+        }
+        d.extend_from_slice(&(o as u32).to_le_bytes());
+        for p in &packets {
+            d.extend_from_slice(p);
+        }
+        let size = (d.len() - 8) as u32;
+        d[4..8].copy_from_slice(&size.to_le_bytes());
+        d
+    }
+
+    /// [`movie_bytes`] with one sound track (22050 Hz; each frame's audio packet empty).
+    fn movie_with_track(frames: u32) -> Vec<u8> {
+        let packets: Vec<Vec<u8>> = (0..frames)
+            .map(|f| [vec![0u8; 4], zeros(f)].concat())
+            .collect();
+        let mut d = b"BIKi".to_vec();
+        d.extend_from_slice(&0u32.to_le_bytes());
+        for v in [frames, 4100, frames, 64, 48, 30000, 1001, 0, 1, 0] {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        d.extend_from_slice(&22050u16.to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&0u32.to_le_bytes());
         let mut o = d.len() + 4 * (frames as usize + 1);
         for (i, p) in packets.iter().enumerate() {
             d.extend_from_slice(&((o as u32) | u32::from(i == 0)).to_le_bytes());
@@ -832,9 +867,26 @@ mod tests {
     }
 
     #[test]
-    fn the_sound_system_does_not_open() {
+    fn the_direct_sound_system_is_chosen_as_measured() {
         let mut e = Engine::new();
-        assert_eq!(set_sound_system(&mut e, OPEN_DIRECT_SOUND_SLOT, 0), 0);
+        assert_eq!(set_sound_system(&mut e, OPEN_DIRECT_SOUND_SLOT, 0), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "movie sound: the track has to play through our DirectSound")]
+    fn a_movie_with_sound_stops_once_the_sound_system_is_chosen() {
+        let (mut e, name) = engine(movie_with_track(2));
+        set_sound_system(&mut e, OPEN_DIRECT_SOUND_SLOT, 0);
+        open(&mut e, name, 0);
+    }
+
+    #[test]
+    fn a_silent_movie_opens_with_the_sound_system_chosen() {
+        let (mut e, name) = engine(movie_bytes(64, 48, 2, &zeros));
+        set_sound_system(&mut e, OPEN_DIRECT_SOUND_SLOT, 0);
+        assert_ne!(open(&mut e, name, 0), 0);
+        let (mut e, name) = engine(movie_with_track(2));
+        assert_ne!(open(&mut e, name, 0), 0);
     }
 
     #[test]
