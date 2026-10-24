@@ -20,6 +20,7 @@ pub mod glue;
 pub mod locale2;
 pub mod lowio;
 pub mod math;
+pub mod mbs;
 pub mod mem;
 pub mod misc2;
 pub mod misc3;
@@ -6168,6 +6169,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(locale2::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
+    table.extend(mbs::funcs());
     table.extend(mem::funcs());
     table.extend(misc2::funcs());
     table.extend(misc3::funcs());
