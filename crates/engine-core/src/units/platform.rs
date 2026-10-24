@@ -521,6 +521,26 @@ fn try_enter_critical_section(e: &mut Engine, section: Ptr) -> i32 {
     }
 }
 
+// Platform: replaces OLE32.DLL CoInitializeEx (import)
+/// `CoInitializeEx(reserved, mode)` (the documented answers): COM on the running thread in that
+/// concurrency mode, `S_OK` the first time on a thread, `S_FALSE` again in the same mode,
+/// `RPC_E_CHANGED_MODE` in another; a reserved word other than null is `E_INVALIDARG`. COM
+/// itself is not provided beyond this (`CoCreateInstance` stops).
+fn co_initialize_ex(e: &mut Engine, reserved: u32, mode: u32) -> u32 {
+    if reserved != 0 {
+        return 0x8007_0057;
+    }
+    let thread = crate::thread_host::current_id(e);
+    match e.kernel.com_threads.get(&thread) {
+        None => {
+            e.kernel.com_threads.insert(thread, mode);
+            0
+        }
+        Some(&m) if m == mode => 1,
+        Some(_) => 0x8001_0106,
+    }
+}
+
 // Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
 fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spin: u32) -> i32 {
     critical_section_reset(e, section);
@@ -1063,6 +1083,8 @@ pub struct Kernel {
     pub windows: window::Windows,
     /// The files the game made in this run ([`files`]).
     pub disk: files::Disk,
+    /// The threads that called `CoInitializeEx`, with their concurrency mode.
+    pub com_threads: std::collections::BTreeMap<u32, u32>,
     /// The critical sections by address: the mutex object standing for each.
     pub critical_sections: std::collections::BTreeMap<u32, u32>,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
@@ -2268,6 +2290,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "ole32.dll",
+            "CoInitializeEx",
+            entry!(0, co_initialize_ex(u32, u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
             "CoInitialize",
             entry!(0, dsound::co_initialize(u32) -> u32).1,
         ),
@@ -3035,6 +3062,19 @@ mod tests {
         log(e, a[0] + 1);
         leave_critical_section(e, Ptr::new(0x2e00));
         Ret::default()
+    }
+
+    #[test]
+    fn co_initialize_ex_answers_per_thread_and_mode() {
+        let mut e = thread_engine();
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 0);
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 1, "S_FALSE");
+        assert_eq!(
+            co_initialize_ex(&mut e, 0, 2),
+            0x8001_0106,
+            "RPC_E_CHANGED_MODE"
+        );
+        assert_eq!(co_initialize_ex(&mut e, 4, 0), 0x8007_0057, "E_INVALIDARG");
     }
 
     #[test]
