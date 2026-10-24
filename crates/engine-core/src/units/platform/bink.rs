@@ -138,12 +138,17 @@ fn put(e: &mut Engine, bink: u32, movie: Playing) {
 /// `BinkSetSoundSystem(open, param)`: chooses the sound system later `BinkOpen`s play through
 /// (`open` is the system's open function, `param` its argument: for `BinkOpenDirectSound`,
 /// an `IDirectSound` or 0 for one of the library's own). The game passes
-/// `BinkOpenDirectSound` and 0. The platform has no sound output (the DirectSound layer,
-/// `super::dsound`, mixes nothing), so no sound system opens here: the answer is 0, what the
-/// DLL answers when `BinkOpenDirectSound(0)` cannot open (measured in a process without a
-/// window, `bink-soundsys-2026-10-23`), and movies then play without sound, timed by the
-/// clock ([`wait`]) as the DLL times them without sound. Any other sound system is not
-/// provided.
+/// `BinkOpenDirectSound` and 0. No sound system opens here: the answer is 0, and movies play
+/// without sound, timed by the clock ([`wait`]) as the DLL times them without sound. Any
+/// other sound system is not provided.
+///
+/// This is not what the player's machine does (docs/SOUND.md, "Bink with sound"). The
+/// 2026-10-23 measurement that answered 0 asked `GetProcAddress` for a garbled name, so it
+/// passed NULL. Measured again on 2026-10-24 (`nv-bink --sound-system`,
+/// `bink-sound-2026-10-24`), the DLL answers 1 with or without a window, then plays the
+/// movie's sound and times the frames by it. Answering 1 needs the movie's sound played
+/// through the platform's DirectSound and the DLL's sound-driven timing, which are not done
+/// yet; the maintainer decides whether the intro keeps this answer until then.
 pub fn set_sound_system(_e: &mut Engine, open: u32, param: u32) -> i32 {
     assert!(
         open == OPEN_DIRECT_SOUND_SLOT && param == 0,

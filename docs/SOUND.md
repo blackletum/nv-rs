@@ -12,6 +12,7 @@ in `scripts/`.
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
 | Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit x87; 53-bit not provided |
+| Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | Not done: answers 0 (no sound), but the DLL answers 1 (see below) |
 
 ## Mixer (DirectSound 8 to the device)
 
@@ -84,3 +85,34 @@ does that is in the DLL's code, which the project does not read.
 Until the decoding thread is measured, or a measurement-only route to the model is
 found, `platform/vorbisfile.rs` stops with "not provided" on a thread whose
 precision control is not 24 bits.
+
+## Bink with sound
+
+The game calls `BinkSetSoundSystem(BinkOpenDirectSound, 0)` (`00ec1680`). An
+earlier measurement (2026-10-23) recorded the answer as 0, and `platform/bink.rs`
+was written to match it: no sound, frames timed by the clock. That measurement
+was wrong: `nv-bink` passed a garbled export name to `GetProcAddress`, so it
+handed the DLL a NULL function.
+
+Measured again on 2026-10-24 (`nv-bink --sound-system`, private recordings in
+`bink-sound-2026-10-24`):
+
+- **The answer is 1**, with or without a window.
+- **With sound on** (`nv-bink --wait 300 --sound`, which plays the intro on the default
+  device), the frames follow the sound:
+  - the first frame comes about 3 ms later than without sound;
+  - frames then keep the clock schedule's rate, but jitter by up to about ±2 ms
+    around it;
+  - without sound, the frames land on the clock schedule `wait` implements, to
+    within a millisecond.
+
+What is left:
+- Play the movie's audio track (`crates/bink`'s audio decoder; within one step of
+  the DLL, docs/MOVIES.md) through the platform's DirectSound buffers, as the
+  DLL's DirectSound sound system does.
+- Measure how its frame timing follows the buffer's play cursor: the cursor moves
+  in 10 ms device periods, which is the likely source of the jitter.
+- Then answer 1.
+
+Until then the platform answers 0. That is not what the player's machine does,
+so the maintainer decides whether the intro keeps playing that way.

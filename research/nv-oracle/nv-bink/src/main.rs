@@ -24,6 +24,10 @@
 //!   --open-flags X  BinkOpen flags, hex (default 0)
 //!   --sound-system  only call BinkSetSoundSystem(BinkOpenDirectSound, 0)
 //!                   and print its answer
+//!   --window        make a window first (with --sound-system or --sound)
+//!   --sound         with --wait: BinkSetSoundSystem(BinkOpenDirectSound, 0)
+//!                   before BinkOpen and the sound left on (it plays on the
+//!                   default device), so the timing is the one with sound
 //!   --late F:MS,..  with --wait: sleep MS before waiting for frame F (F
 //!                   followed by w, d or n: after BinkWait said go, after
 //!                   BinkDoFrame, after BinkNextFrame instead; p: after
@@ -84,6 +88,8 @@ mod run {
         precision: Option<u32>,
         game: bool,
         sound_system: bool,
+        sound: bool,
+        window: bool,
         flags: u32,
         wait: Option<u32>,
         start_delay: u32,
@@ -108,6 +114,8 @@ mod run {
             precision: None,
             game: false,
             sound_system: false,
+            sound: false,
+            window: false,
             flags: 3,
             wait: None,
             start_delay: 0,
@@ -116,11 +124,15 @@ mod run {
         };
         let mut i = 3;
         while i < args.len() {
-            if args[i] == "--game" || args[i] == "--sound-system" {
-                if args[i] == "--game" {
-                    o.game = true;
-                } else {
-                    o.sound_system = true;
+            if ["--game", "--sound-system", "--sound", "--window"].contains(&args[i].as_str()) {
+                match args[i].as_str() {
+                    "--game" => o.game = true,
+                    "--sound-system" => o.sound_system = true,
+                    "--window" => o.window = true,
+                    _ => {
+                        o.sound = true;
+                        o.sound_system = true;
+                    }
                 }
                 i += 1;
                 continue;
@@ -255,13 +267,18 @@ mod run {
             if o.sound_system {
                 type BinkSetSoundSystem = unsafe extern "system" fn(*mut c_void, u32) -> i32;
                 let set_system: BinkSetSoundSystem = proc(module, "_BinkSetSoundSystem@8")?;
-                let z = "_BinkOpenDirectSound@4            set_tracks(0, std::ptr::null());";
-                let open_ds = nv_win::GetProcAddress(module, z.as_ptr());
+                let open_ds = nv_win::GetProcAddress(module, b"_BinkOpenDirectSound@4\0".as_ptr());
+                if o.window {
+                    crate::make_window();
+                }
                 let r = set_system(open_ds, 0);
-                println!("BinkSetSoundSystem(BinkOpenDirectSound, 0) = {r}");
-                return Ok(());
+                println!("BinkSetSoundSystem(BinkOpenDirectSound, 0) = {r} (window: {})", o.window);
+                if !o.sound {
+                    return Ok(());
+                }
+            } else {
+                set_tracks(0, std::ptr::null());
             }
-            set_tracks(0, std::ptr::null());
             let movie = format!("{}\0", o.movie);
             let bink = open(movie.as_ptr(), o.open_flags);
             let opened = crate::game::counter();
@@ -440,4 +457,46 @@ fn main() {
 fn main() {
     eprintln!("nv-bink runs only as a 32-bit Windows program (the game's binkw32.dll is 32-bit)");
     std::process::exit(1);
+}
+
+#[cfg(all(windows, target_arch = "x86"))]
+#[link(name = "user32")]
+extern "system" {
+    fn CreateWindowExA(
+        ex: u32,
+        class: *const u8,
+        name: *const u8,
+        style: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        parent: *mut std::ffi::c_void,
+        menu: *mut std::ffi::c_void,
+        instance: *mut std::ffi::c_void,
+        param: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn ShowWindow(window: *mut std::ffi::c_void, cmd: i32) -> i32;
+}
+
+/// A plain top-level window, shown (DirectSound's cooperative level wants one).
+#[cfg(all(windows, target_arch = "x86"))]
+fn make_window() {
+    unsafe {
+        let w = CreateWindowExA(
+            0,
+            b"STATIC\0".as_ptr(),
+            b"nv-bink\0".as_ptr(),
+            0x10cf_0000,
+            0,
+            0,
+            320,
+            240,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        ShowWindow(w, 5);
+    }
 }

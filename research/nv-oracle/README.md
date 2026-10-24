@@ -449,7 +449,8 @@ nv-bink <binkw32.dll> <movie.bik> <out-dir> [--surface N] [--first N] [--count N
         [--audio T] [--precision 24|53|64]
 nv-bink <binkw32.dll> <movie.bik> <out-dir> --game [--flags X] [--open-flags X] [--count N] [--dump A,B,...]
 nv-bink <binkw32.dll> <movie.bik> <out-dir> --wait N [--start-delay MS] [--late F:MS,...]
-nv-bink <binkw32.dll> <movie.bik> <out-dir> --sound-system
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --sound-system [--window]
+nv-bink <binkw32.dll> <movie.bik> <out-dir> --wait N --sound [--window]
 ```
 
 `--game` drives the library as FalloutNV.exe 1.4.0.525 does (its frame copy
@@ -459,7 +460,10 @@ nv-bink <binkw32.dll> <movie.bik> <out-dir> --sound-system
 frames). `--wait` plays the first N frames polling `BinkWait` and records
 when it said go (`wait.tsv`), with optional sleeps before or after each call
 and `BinkPause` (`--late`). `--sound-system` only calls
-`BinkSetSoundSystem(BinkOpenDirectSound, 0)` and prints the answer. These
+`BinkSetSoundSystem(BinkOpenDirectSound, 0)` and prints the answer (`--window`
+makes a window first); `--sound` with `--wait` sets that sound system before
+`BinkOpen` and leaves the sound on (it plays on the default device), so the
+timing recorded is the one with sound. These
 are the measurements behind the engine's platform Bink layer
 (`crates/engine-core/src/units/platform/bink.rs`).
 
