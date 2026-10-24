@@ -17,6 +17,7 @@ use crate::prelude::*;
 pub mod cvt;
 pub mod fpinit;
 pub mod glue;
+pub mod locale2;
 pub mod lowio;
 pub mod math;
 pub mod mem;
@@ -24,6 +25,7 @@ pub mod misc2;
 pub mod misc3;
 pub mod num2;
 pub mod printf;
+pub mod qualified;
 pub mod rtti;
 pub mod runtime;
 pub mod scanf;
@@ -36,6 +38,7 @@ pub mod str2;
 pub mod string;
 pub mod time;
 pub mod trig;
+pub mod wide;
 
 // ---- Memory ---------------------------------------------------------------
 
@@ -6162,6 +6165,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(cvt::funcs());
     table.extend(fpinit::funcs());
     table.extend(glue::funcs());
+    table.extend(locale2::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
     table.extend(mem::funcs());
@@ -6169,6 +6173,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(misc3::funcs());
     table.extend(num2::funcs());
     table.extend(printf::funcs());
+    table.extend(qualified::funcs());
     table.extend(rtti::funcs());
     table.extend(runtime::funcs());
     table.extend(scanf::funcs());
@@ -6181,6 +6186,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(stat::funcs());
     table.extend(time::funcs());
     table.extend(trig::funcs());
+    table.extend(wide::funcs());
     table
 }
 
