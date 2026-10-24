@@ -373,7 +373,7 @@ fn directory_exists(e: &Engine, path: &[u8]) -> bool {
 }
 
 // Platform: replaces KERNEL32.DLL FindFirstFileA (import)
-/// `FindFirstFileA(name, data)` for a name without wildcards: the player's file or directory,
+/// `FindFirstFileA(name, data)` (a name with wildcards: [`find_first_wild`]): the player's file or directory,
 /// described as Windows does in the `WIN32_FIND_DATAA` at `data` (0x140 bytes): attributes,
 /// creation, last-access and last-write `FILETIME`s (UTC, as the file system keeps them), the
 /// size (high word, then low), `dwReserved0`/`dwReserved1` 0, and `cFileName` the name as the
@@ -388,15 +388,13 @@ fn directory_exists(e: &Engine, path: &[u8]) -> bool {
 /// directory, `...\Data` and `...\Data\`, with the buffer filled with 0xAA first): as above;
 /// the last error stayed what it was (203) on success. Not provided here: `cAlternateFileName`
 /// (Windows wrote the 8.3 name `FALLOU~1.BSA` for the archive, nothing for `Data`) is left
-/// empty (one zero byte); wildcards, files and directories the game made in this run, a
+/// empty (one zero byte); files and directories the game made in this run, a
 /// trailing separator on a missing name, and non-ASCII names stop the run.
 pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     let text = e.mem.cstr(name.addr());
-    assert!(
-        !text.iter().any(|&b| b == b'*' || b == b'?'),
-        "FindFirstFileA(\"{}\"): wildcards are not provided",
-        String::from_utf8_lossy(&text)
-    );
+    if text.iter().any(|&b| b == b'*' || b == b'?') {
+        return find_first_wild(e, &text, data);
+    }
     let path = full_path(e, &text);
     let k = key(&path);
     let shown = String::from_utf8_lossy(&path).into_owned();
@@ -451,6 +449,17 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
         stored.is_ascii(),
         "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
     );
+    write_find_data(e, data, &meta, &stored, &shown);
+    e.kernel.insert(KernelObject::FindFile(Search::default()))
+}
+
+/// Writes the `WIN32_FIND_DATAA` at `data` for an entry: attributes, creation, last-access and
+/// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
+/// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
+/// +0x130); the rest of the buffer is left as it was.
+fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: &str, shown: &str) {
+    #[cfg(windows)]
+    let _ = shown;
     #[cfg(windows)]
     let (attributes, created, accessed, written) = {
         use std::os::windows::fs::MetadataExt;
@@ -480,7 +489,212 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     e.mem.write(d + 0x2c, stored.as_bytes());
     e.mem.set_u8(d + 0x2c + stored.len() as u32, 0);
     e.mem.set_u8(d + 0x130, 0);
-    e.kernel.insert(KernelObject::FindFile)
+}
+
+/// `ERROR_NO_MORE_FILES`.
+pub const ERROR_NO_MORE_FILES: u32 = 18;
+
+/// What a search handle has left to answer ([`KernelObject::FindFile`]): the entries after the
+/// one answered last, in the order Windows answers them, each with its full path and the name
+/// as the directory stores it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Search {
+    pub rest: std::collections::VecDeque<(std::path::PathBuf, String)>,
+}
+
+/// Whether `name` matches the wildcard `pattern` as Windows' file search matches a long name
+/// (both compared without case): `*` any run of characters, `?` one character or, at the end
+/// of the name or before a dot, none (`*.ES?` finds `e.es`, measured).
+fn wild_match(pattern: &[u8], name: &[u8]) -> bool {
+    match (pattern.first(), name.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            wild_match(&pattern[1..], name) || (!name.is_empty() && wild_match(pattern, &name[1..]))
+        }
+        (Some(b'?'), None) => wild_match(&pattern[1..], name),
+        (Some(b'?'), Some(b'.')) => {
+            wild_match(&pattern[1..], name) || wild_match(&pattern[1..], &name[1..])
+        }
+        (Some(b'?'), Some(_)) => wild_match(&pattern[1..], &name[1..]),
+        (Some(p), Some(n)) => p.eq_ignore_ascii_case(n) && wild_match(&pattern[1..], &name[1..]),
+        _ => false,
+    }
+}
+
+/// Whether `name` needs an 8.3 short name (more than 8 characters before the extension or 3
+/// after it, more than one dot, or a character a short name cannot hold) and, when it does,
+/// the extension of that short name: the first three characters of its last extension, upper
+/// case, with spaces left out (`d.esmx` is `D6104~1.ESM`, measured). The rest of a short name is
+/// a hash Windows makes, not provided here.
+fn short_extension(name: &str) -> Option<String> {
+    let dots = name.matches('.').count();
+    let (base, extension) = match name.rfind('.') {
+        Some(at) => (&name[..at], &name[at + 1..]),
+        None => (name, ""),
+    };
+    let unusual = |c: char| c == ' ' || "+,;=[]".contains(c) || !c.is_ascii();
+    let needs = base.len() > 8 || extension.len() > 3 || dots > 1 || name.chars().any(unusual);
+    if !needs {
+        return None;
+    }
+    Some(
+        extension
+            .chars()
+            .filter(|&c| c != ' ')
+            .take(3)
+            .collect::<String>()
+            .to_ascii_uppercase(),
+    )
+}
+
+/// Whether a search pattern finds `name`: its long name, or its 8.3 short name where the parts
+/// of it that are known decide (measured: `*.esm` finds `d.esmx` through `D6104~1.ESM`, not
+/// `c.esm.bak`; `?.esm` does not find `a b.esm`, `ABE286~1.ESM`). A short name is its
+/// extension ([`short_extension`]), then a base of at least three characters (`X~1`) whose
+/// first character is the long name's first one other than a space or a dot, upper case (the
+/// rest may be a hash Windows makes: `D6104~1`). A pattern the known parts cannot decide stops the
+/// run as not provided.
+fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
+    if wild_match(pattern, name.as_bytes()) {
+        return true;
+    }
+    if name == "." || name == ".." {
+        return false;
+    }
+    let Some(extension) = short_extension(name) else {
+        return false;
+    };
+    let (base_pattern, extension_pattern): (&[u8], &[u8]) =
+        match pattern.iter().rposition(|&b| b == b'.') {
+            Some(at) => (&pattern[..at], &pattern[at + 1..]),
+            None => (pattern, b""),
+        };
+    if !wild_match(extension_pattern, extension.as_bytes()) {
+        return false;
+    }
+    if base_pattern == b"*" {
+        return true;
+    }
+    let known: Vec<u8> = name
+        .bytes()
+        .filter(|&b| b != b' ' && b != b'.')
+        .take(1)
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    let literal: Vec<u8> = base_pattern
+        .iter()
+        .take_while(|&&b| b != b'*' && b != b'?')
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    if literal.iter().zip(&known).any(|(a, b)| a != b) {
+        return false;
+    }
+    if !base_pattern.contains(&b'*') && base_pattern.len() < 3 {
+        return false;
+    }
+    panic!("FindFirstFileA(\"{shown}\"): matching the short name of \"{name}\" is not provided")
+}
+
+/// `FindFirstFileA` with wildcards in the last part of the name, measured on scratch files
+/// (`build43-scratch/measure/findfile-2026-10-23.txt`, `findfile.ps1`): every entry of the
+/// player's directory the pattern finds ([`search_finds`]; `.` and `..` too, directories as
+/// well as files), in the order of their upper-case names compared byte by byte (`10.esm`,
+/// `2.esm`, `a b.esm`, `A.esm`, `aa.esm`, `Ab.esm`, ..., `Z_...`, `_under.esm`), the first
+/// written as [`find_first_file_a`] writes one; the last error stays as it was. Nothing found:
+/// `INVALID_HANDLE_VALUE` with `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` for a missing
+/// directory. Wildcards before the last part, a directory where the game made or deleted
+/// files in this run, and non-ASCII names stop the run.
+fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
+    let path = full_path(e, text);
+    let shown = String::from_utf8_lossy(&path).into_owned();
+    let cut = path
+        .iter()
+        .rposition(|&b| b == b'\\' || b == b'/')
+        .unwrap_or_else(|| panic!("FindFirstFileA(\"{shown}\"): a name without a directory"));
+    let (directory, pattern) = (&path[..cut], &path[cut + 1..]);
+    assert!(
+        !directory.iter().any(|&b| b == b'*' || b == b'?'),
+        "FindFirstFileA(\"{shown}\"): wildcards before the last part are not provided"
+    );
+    let mut prefix = key(directory);
+    prefix.push(b'\\');
+    let touched = |k: &Vec<u8>| k.starts_with(&prefix);
+    let disk = &e.kernel.disk;
+    if disk.files.keys().any(touched)
+        || disk.directories.iter().any(touched)
+        || disk.deleted.iter().any(touched)
+    {
+        panic!(
+            "FindFirstFileA(\"{shown}\"): a directory the game changed in this run is not provided"
+        );
+    }
+    let real = real_path(directory);
+    let Ok(entries) = std::fs::read_dir(&real) else {
+        e.kernel.last_error = if real.exists() {
+            ERROR_FILE_NOT_FOUND
+        } else {
+            ERROR_PATH_NOT_FOUND
+        };
+        return INVALID_HANDLE_VALUE;
+    };
+    let mut found: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for special in [".", ".."] {
+        if search_finds(pattern, special, &shown) {
+            found.push((real.join(special), special.to_string()));
+        }
+    }
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        assert!(
+            name.is_ascii(),
+            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
+        );
+        if search_finds(pattern, &name, &shown) {
+            found.push((entry.path(), name));
+        }
+    }
+    found.sort_by(|a, b| a.1.to_ascii_uppercase().cmp(&b.1.to_ascii_uppercase()));
+    let mut rest: std::collections::VecDeque<_> = found.into();
+    let Some((first, name)) = rest.pop_front() else {
+        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
+        return INVALID_HANDLE_VALUE;
+    };
+    let meta = std::fs::metadata(&first).expect("the found entry's metadata");
+    write_find_data(e, data, &meta, &name, &shown);
+    e.kernel.insert(KernelObject::FindFile(Search { rest }))
+}
+
+// Platform: replaces KERNEL32.DLL FindNextFileA (import)
+/// `FindNextFileA(handle, data)`: the search's next entry written as `FindFirstFileA` writes
+/// one, true; when none is left FALSE with `ERROR_NO_MORE_FILES` (measured). Another handle is
+/// not provided.
+pub fn find_next_file_a(e: &mut Engine, handle: u32, data: Ptr) -> u32 {
+    let next = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::FindFile(search)) => search.rest.pop_front(),
+        _ => panic!("FindNextFileA({handle:#x}): not a search handle; not provided"),
+    };
+    let Some((path, name)) = next else {
+        e.kernel.last_error = ERROR_NO_MORE_FILES;
+        return 0;
+    };
+    let shown = path.to_string_lossy().into_owned();
+    let meta = std::fs::metadata(&path).expect("the found entry's metadata");
+    write_find_data(e, data, &meta, &name, &shown);
+    1
+}
+
+// Platform: replaces KERNEL32.DLL CompareFileTime (import)
+/// `CompareFileTime(a, b)`: -1, 0 or 1 as the 64-bit time at `a` is less than, equal to or
+/// greater than the one at `b`.
+pub fn compare_file_time(e: &mut Engine, a: Ptr, b: Ptr) -> i32 {
+    let time = |e: &Engine, p: Ptr| {
+        u64::from(e.mem.u32(p.addr())) | (u64::from(e.mem.u32(p.addr() + 4)) << 32)
+    };
+    match time(e, a).cmp(&time(e, b)) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
 }
 
 // Platform: replaces KERNEL32.DLL FindClose (import)
@@ -488,7 +702,10 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
 /// handle is not provided (stops the run).
 pub fn find_close(e: &mut Engine, handle: u32) -> u32 {
     assert!(
-        matches!(e.kernel.objects.get(&handle), Some(KernelObject::FindFile)),
+        matches!(
+            e.kernel.objects.get(&handle),
+            Some(KernelObject::FindFile(_))
+        ),
         "FindClose({handle:#x}): not a search handle; not provided"
     );
     e.kernel.objects.remove(&handle);
@@ -1056,6 +1273,100 @@ mod tests_player_files {
 
     /// A file of the player's opened for reading only is read where the reads ask, not copied:
     /// the crate's own manifest stands in for one.
+    #[test]
+    fn searches_match_and_order_as_measured() {
+        // The measured directory (findfile-2026-10-23.txt) by its names.
+        let names = [
+            "A.esm",
+            "b.ESM",
+            "c.esm.bak",
+            "d.esmx",
+            "Z_long_name_file.esm",
+            "e.es",
+            "f.esp",
+            "_under.esm",
+            "10.esm",
+            "2.esm",
+            "aa.esm",
+            "Ab.esm",
+            "a b.esm",
+            "g.esm",
+        ];
+        let found = |pattern: &[u8]| {
+            let mut v: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|n| search_finds(pattern, n, "test"))
+                .collect();
+            v.sort_by_key(|n| n.to_ascii_uppercase());
+            v
+        };
+        assert_eq!(
+            found(b"*.esm"),
+            [
+                "10.esm",
+                "2.esm",
+                "a b.esm",
+                "A.esm",
+                "aa.esm",
+                "Ab.esm",
+                "b.ESM",
+                "d.esmx",
+                "g.esm",
+                "Z_long_name_file.esm",
+                "_under.esm"
+            ]
+        );
+        assert_eq!(found(b"*.esp"), ["f.esp"]);
+        assert_eq!(
+            found(b"*.ES?").len(),
+            13,
+            "e.es and f.esp too, not c.esm.bak"
+        );
+        assert!(found(b"x*.esm").is_empty());
+        assert_eq!(found(b"?.esm"), ["2.esm", "A.esm", "b.ESM", "g.esm"]);
+        assert!(search_finds(b"*", ".", "test") && search_finds(b"*", "..", "test"));
+        assert!(!search_finds(b"*.esm", "..", "test"));
+        assert_eq!(short_extension("d.esmx").as_deref(), Some("ESM"));
+        assert_eq!(short_extension("A.esm"), None);
+        assert_eq!(short_extension("c.esm.bak").as_deref(), Some("BAK"));
+    }
+
+    #[test]
+    fn a_wildcard_search_lists_then_runs_out() {
+        let mut e = Engine::new();
+        let name = e.mem.alloc(0x200);
+        let pattern = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.*");
+        e.mem.set_cstr(name, pattern.as_bytes());
+        let data = e.mem.alloc(0x140);
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.mem.cstr(data + 0x2c), b"Cargo.toml".to_vec());
+        e.kernel.last_error = 0;
+        assert_eq!(find_next_file_a(&mut e, h, Ptr::new(data)), 0);
+        assert_eq!(e.kernel.last_error, ERROR_NO_MORE_FILES);
+        assert_eq!(find_close(&mut e, h), 1);
+        let none = concat!(env!("CARGO_MANIFEST_DIR"), "/NoSuch*.x");
+        e.mem.set_cstr(name, none.as_bytes());
+        assert_eq!(
+            find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data)),
+            INVALID_HANDLE_VALUE
+        );
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+    }
+
+    #[test]
+    fn compare_file_time_orders_the_64_bit_times() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        e.mem.set_u32(a + 4, 1);
+        e.mem.set_u32(b, 0xffff_ffff);
+        assert_eq!(compare_file_time(&mut e, Ptr::new(a), Ptr::new(b)), 1);
+        assert_eq!(compare_file_time(&mut e, Ptr::new(b), Ptr::new(a)), -1);
+        assert_eq!(compare_file_time(&mut e, Ptr::new(a), Ptr::new(a)), 0);
+    }
+
     #[test]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();

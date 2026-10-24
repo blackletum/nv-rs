@@ -940,8 +940,8 @@ pub enum KernelObject {
     UserObject(&'static str),
     /// An open file ([`files::create_file_a`]): its path and position.
     File(files::OpenFile),
-    /// A file search ([`files::find_first_file_a`]): only the one result it answered.
-    FindFile,
+    /// A file search ([`files::find_first_file_a`]): the entries it has left to answer.
+    FindFile(files::Search),
     /// A heap from [`heap_create`]: only its handle.
     Heap,
 }
@@ -1264,7 +1264,7 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         // A file handle is signalled while no I/O is pending (all of it is synchronous here).
         Some(KernelObject::File(_)) => true,
         // Waiting on a file search handle is not provided (not measured).
-        Some(KernelObject::FindFile) => {
+        Some(KernelObject::FindFile(_)) => {
             panic!("waiting on file search {handle:#x} is not provided")
         }
         Some(KernelObject::Heap) => panic!("waiting on heap {handle:#x} is not provided"),
@@ -2286,6 +2286,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             k,
             "FindFirstFileA",
             entry!(0, files::find_first_file_a(Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "FindNextFileA",
+            entry!(0, files::find_next_file_a(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "CompareFileTime",
+            entry!(0, files::compare_file_time(Ptr, Ptr) -> i32).1,
         ),
         (k, "FindClose", entry!(0, files::find_close(u32) -> u32).1),
         (
