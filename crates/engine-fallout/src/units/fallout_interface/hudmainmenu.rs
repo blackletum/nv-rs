@@ -863,8 +863,9 @@ pub fn hud_main_menu_create(e: &mut Engine) -> Ptr {
     let maximum_depth = e.call(0x00a0_1530, &args![]).f64() as f32;
     let critical = e.call(0x0071_3d70, &args![]).u32();
     e.call(0x0045_38a0, &args![critical, 0_u32]);
-    let path = e.call(0x0058_6150, &args![resource, 0x0107_343c_u32]).u32();
-    let xml = e.call(0x00a0_1b00, &args![path]).u32();
+    // 0076c092: the pushed path is Tile::ReadFile's word; 00586150 (RET, no word) gives its `this`.
+    let tiles = e.call(0x0058_6150, &args![resource]).u32();
+    let xml = e.call(0x00a0_1b00, &args![tiles, 0x0107_343c_u32]).u32();
     let menu = e.call(0x00a0_3c90, &args![xml]).u32();
     let valid_menu = if menu == 0 {
         false
@@ -10787,14 +10788,14 @@ mod tests {
             Ret::default()
         });
         e.register_double(0x0058_6150, |_, words| {
-            assert_eq!(words, &[0x1010, 0x0107_343c]);
+            assert_eq!(words, &[0x1010]);
             Ret {
                 eax: 0x3030,
                 ..Ret::default()
             }
         });
         e.register_double(0x00a0_1b00, |_, words| {
-            assert_eq!(words, &[0x3030]);
+            assert_eq!(words, &[0x3030, 0x0107_343c]);
             Ret {
                 eax: 0x4040,
                 ..Ret::default()
