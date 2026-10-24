@@ -834,6 +834,151 @@ pub fn crt_lc_map_string_a(
     })
 }
 
+/// `_mbstok_l` (`00ece21d`), `_mbstok_s_l` (`00edfa19`), `__ismbblead_l` (`00ed5c74`),
+/// `_getptd` (`00ed11de`) and `strtok_s` (`00ecc5f8`), cdecl.
+const MBSTOK_L: u32 = 0x00ec_e21d;
+const MBSTOK_S_L: u32 = 0x00ed_fa19;
+const ISMBBLEAD_L: u32 = 0x00ed_5c74;
+const GETPTD_ADDR: u32 = 0x00ed_11de;
+const STRTOK_S: u32 = 0x00ec_c5f8;
+
+// Translated from 00ece23e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_mbstok` (LIBCMT/mbstok.c, engine map), cdecl: (string, delimiters): `_mbstok_l` with
+/// no locale.
+pub fn mbstok(e: &mut Engine, string: Ptr, delimiters: Ptr) -> Ptr {
+    e.call(MBSTOK_L, &args![string, delimiters, 0u32]).ptr()
+}
+
+// Translated from 00ece21d (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_mbstok_l` (LIBCMT/mbstok.c, engine map), cdecl: (string, delimiters, locale):
+/// `_mbstok_s_l` with the thread's token position (`_getptd()` + 0x20, `_mtoken`).
+pub fn mbstok_l(e: &mut Engine, string: Ptr, delimiters: Ptr, locale: u32) -> Ptr {
+    let ptd = e.call(GETPTD_ADDR, &args![]).u32();
+    let context = ptd.wrapping_add(0x20);
+    e.call(MBSTOK_S_L, &args![string, delimiters, context, locale])
+        .ptr()
+}
+
+// Translated from 00ed5c74 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__ismbblead_l` (LIBCMT/ismbbyte.c, engine map), cdecl: (character, locale):
+/// `_ismbbtype_l(locale, character, 0, _MLEAD (4))`.
+pub fn ismbblead_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    e.call(ISMBBTYPE_L, &args![locale, c, 0u32, 4u32]).u32()
+}
+
+/// `_mbstok_s_l`'s delimiter scan: walks the delimiters from the start for the character at
+/// `at` (a two-byte delimiter, lead byte by `__ismbblead_l` on the `_LocaleUpdate` object,
+/// matches the pair). Answers where the scan stopped (on the delimiter that matched, or on
+/// the terminating zero), whether a lead byte at the end of the delimiters stopped it, and
+/// whether a pair matched.
+fn mbstok_scan(e: &mut Engine, delimiters: u32, at: u32, update: u32) -> (u32, bool, bool) {
+    let mut d = delimiters;
+    while e.mem.u8(d) != 0 {
+        let byte = e.mem.u8(d);
+        if e.call(ISMBBLEAD_L, &args![u32::from(byte), update]).u32() != 0 {
+            let next = d.wrapping_add(1);
+            let second = e.mem.u8(next);
+            if second == 0 {
+                return (next, true, false);
+            }
+            if e.mem.u8(d) == e.mem.u8(at) && second == e.mem.u8(at.wrapping_add(1)) {
+                return (d, false, true);
+            }
+            d = next;
+        } else if e.mem.u8(d) == e.mem.u8(at) {
+            return (d, false, false);
+        }
+        d = d.wrapping_add(1);
+    }
+    (d, false, false)
+}
+
+// Translated from 00edfa19 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_mbstok_s_l` (LIBCMT/mbstok_s.c, engine map), cdecl: (string, delimiters, context,
+/// locale). A null context or delimiters, or a null string with a null `*context`, give
+/// `errno` `EINVAL`, the invalid-parameter handler and null. With the locale taken
+/// (`_LocaleUpdate`): a single-byte code page (`ismbcodepage` +8 clear) is `strtok_s`.
+/// Otherwise, from the string (or `*context` when it is null), leading delimiters are
+/// skipped (two-byte characters compared as pairs; a lead byte at the end of the
+/// delimiters, or a lead byte ending the string, sets `errno` `EILSEQ` (0x2A) and ends the
+/// skip); then the token runs to the next delimiter, which is overwritten with zeros (both
+/// bytes of a two-byte one) and stepped over, or to the end of the string (a lead byte
+/// before the end is zeroed). `*context` gets where the scan stopped; the answer is the
+/// token's start, or null when the token is empty.
+pub fn mbstok_s_l(e: &mut Engine, string: Ptr, delimiters: Ptr, context: Ptr, locale: u32) -> Ptr {
+    let (mut at, delimiters, context) = (string.addr(), delimiters.addr(), context.addr());
+    if context == 0 || delimiters == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return Ptr::new(0);
+    }
+    if at == 0 && e.mem.u32(context) == 0 {
+        set_errno(e, 0x16);
+        invalid_parameter_zeros(e);
+        return Ptr::new(0);
+    }
+    e.with_stack(0x10, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        let mbcinfo = e.mem.u32(update + 4);
+        if e.mem.u32(mbcinfo + 8) == 0 {
+            let token = e.call(STRTOK_S, &args![string, delimiters, context]).u32();
+            locale_update_release(e, update);
+            return Ptr::new(token);
+        }
+        if at == 0 {
+            at = e.mem.u32(context);
+        }
+        // Skip the leading delimiters.
+        while e.mem.u8(at) != 0 {
+            let (d, lead_at_end, _) = mbstok_scan(e, delimiters, at, update);
+            if lead_at_end {
+                set_errno(e, 0x2a);
+            }
+            if e.mem.u8(d) == 0 {
+                break;
+            }
+            let byte = e.mem.u8(at);
+            if e.call(ISMBBLEAD_L, &args![u32::from(byte), update]).u32() != 0 {
+                at = at.wrapping_add(1);
+                if e.mem.u8(at) == 0 {
+                    set_errno(e, 0x2a);
+                    break;
+                }
+            }
+            at = at.wrapping_add(1);
+        }
+        let start = at;
+        // The token.
+        while e.mem.u8(at) != 0 {
+            let (d, _, pair) = mbstok_scan(e, delimiters, at, update);
+            if e.mem.u8(d) != 0 {
+                e.mem.set_u8(at, 0);
+                at = at.wrapping_add(1);
+                if pair {
+                    e.mem.set_u8(at, 0);
+                    at = at.wrapping_add(1);
+                }
+                break;
+            }
+            let byte = e.mem.u8(at);
+            if e.call(ISMBBLEAD_L, &args![u32::from(byte), update]).u32() != 0 {
+                let next = at.wrapping_add(1);
+                if e.mem.u8(next) == 0 {
+                    e.mem.set_u8(at, 0);
+                    break;
+                }
+                at = next;
+            }
+            at = at.wrapping_add(1);
+        }
+        e.mem.set_u32(context, at);
+        let token = if start == at { 0 } else { start };
+        locale_update_release(e, update);
+        Ptr::new(token)
+    })
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ec_67d6, ascii_stricmp(Ptr, Ptr) -> i32),
@@ -859,6 +1004,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_9162, is_root_unc_name(Ptr) -> u32),
         entry!(0x00ed_74ad, getdrive() -> u32),
         entry!(0x00ec_923c, stat64i32(Ptr, Ptr) -> i32),
+        entry!(0x00ec_e23e, mbstok(Ptr, Ptr) -> Ptr),
+        entry!(0x00ec_e21d, mbstok_l(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x00ed_5c74, ismbblead_l(u32, u32) -> u32),
+        entry!(0x00ed_fa19, mbstok_s_l(Ptr, Ptr, Ptr, u32) -> Ptr),
     ]
 }
 
@@ -1249,5 +1398,183 @@ mod tests_strlwr {
         assert_eq!(calls.len(), 1);
         assert_eq!(&calls[0][..2], &[0x1000, 9]);
         assert_eq!(calls[0][2], update_seen.get());
+    }
+}
+
+#[cfg(test)]
+mod mbstok_tests {
+    use super::*;
+
+    /// The multibyte information the doubled `_LocaleUpdate` hands out: `ismbcodepage` set
+    /// and 0x81 a lead byte.
+    const MBCINFO: u32 = 0x0e40_0000;
+    /// The thread data block `_getptd` answers (the token position at +0x20).
+    const THREAD: u32 = 0x0e50_0000;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(THREAD, 0x100);
+        e.register(GETPTD_NOEXIT, |_, _| THREAD.into_ret());
+        e.register(GETPTD_ADDR, |_, _| THREAD.into_ret());
+        e.register(DECODE_POINTER, |_, _| 0x0e30_0000u32.into_ret());
+        e.register(0x0e30_0000, |_, _| Ret::default());
+        e.map(MBCINFO, 0x1000);
+        e.mem.set_u32(MBCINFO + 8, 1);
+        e.mem.set_u8(MBCINFO + 0x1d + 0x81, 4);
+        e.register(LOCALE_UPDATE, |e, a| {
+            e.mem.set_u32(a[0] + 4, MBCINFO);
+            e.mem.set_u8(a[0] + 0xc, 0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn text(e: &mut Engine, s: &[u8]) -> u32 {
+        let at = e.mem.alloc(s.len() as u32 + 1);
+        e.mem.set_cstr(at, s);
+        at
+    }
+
+    fn errno_now(e: &mut Engine) -> u32 {
+        let slot = errno(e);
+        e.mem.u32(slot.addr())
+    }
+
+    #[test]
+    fn mbstok_splits_on_one_and_two_byte_delimiters() {
+        let mut e = engine();
+        // TEST DATA: delimiters are the comma and the two-byte character 0x81 0x82.
+        let s = text(&mut e, b",ab,\x81\x82cd\x81\x82e");
+        let delimiters = text(&mut e, b",\x81\x82");
+        assert_eq!(e.call(0x00ec_e23e, &args![s, delimiters]).u32(), s + 1);
+        assert_eq!(e.mem.cstr(s + 1), b"ab");
+        assert_eq!(e.mem.u32(THREAD + 0x20), s + 4);
+        assert_eq!(e.call(0x00ec_e23e, &args![0u32, delimiters]).u32(), s + 6);
+        assert_eq!(e.mem.cstr(s + 6), b"cd");
+        assert_eq!(&e.mem.bytes(s + 8, 2)[..], &[0, 0]);
+        assert_eq!(e.mem.u32(THREAD + 0x20), s + 10);
+        assert_eq!(e.call(0x00ec_e23e, &args![0u32, delimiters]).u32(), s + 10);
+        assert_eq!(e.mem.cstr(s + 10), b"e");
+        assert_eq!(e.call(0x00ec_e23e, &args![0u32, delimiters]).u32(), 0);
+        assert_eq!(e.mem.u32(THREAD + 0x20), s + 11);
+        // Each call reached `_mbstok_s_l` with the thread's token position.
+        let log = e.call_log.as_ref().unwrap();
+        let contexts: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == MBSTOK_S_L)
+            .map(|c| c.1[2])
+            .collect();
+        assert_eq!(contexts, vec![THREAD + 0x20; 4]);
+    }
+
+    #[test]
+    fn a_two_byte_character_inside_a_token_is_not_split() {
+        let mut e = engine();
+        // 0x81 0x2c is one character, though its second byte is a comma.
+        let s = text(&mut e, b"a\x81,b,c");
+        let delimiters = text(&mut e, b",");
+        let context = e.mem.alloc(4);
+        let words = |s: u32| args![s, delimiters, context, 0u32];
+        assert_eq!(e.call(0x00ed_fa19, &words(s)).u32(), s);
+        assert_eq!(e.mem.cstr(s), b"a\x81,b");
+        assert_eq!(e.call(0x00ed_fa19, &words(0)).u32(), s + 5);
+        assert_eq!(e.mem.cstr(s + 5), b"c");
+    }
+
+    #[test]
+    fn lead_bytes_at_the_ends_set_eilseq_or_end_the_token() {
+        let mut e = engine();
+        let context = e.mem.alloc(4);
+        // A lead byte ending the delimiters: EILSEQ, and the skip ends.
+        let s = text(&mut e, b"a");
+        let delimiters = text(&mut e, b",\x81");
+        assert_eq!(
+            e.call(0x00ed_fa19, &args![s, delimiters, context, 0u32])
+                .u32(),
+            s
+        );
+        assert_eq!(errno_now(&mut e), 0x2a);
+        // A lead byte ending the string inside a token is zeroed.
+        let slot = errno(&mut e).addr();
+        e.mem.set_u32(slot, 0);
+        let s = text(&mut e, b"ab\x81");
+        let delimiters = text(&mut e, b",");
+        assert_eq!(
+            e.call(0x00ed_fa19, &args![s, delimiters, context, 0u32])
+                .u32(),
+            s
+        );
+        assert_eq!(e.mem.u8(s + 2), 0);
+        assert_eq!(e.mem.u32(context), s + 2);
+        assert_eq!(errno_now(&mut e), 0);
+        // A lone lead byte after a delimiter: zeroed, an empty token.
+        let s = text(&mut e, b",\x81");
+        assert_eq!(
+            e.call(0x00ed_fa19, &args![s, delimiters, context, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u8(s + 1), 0);
+        assert_eq!(e.mem.u32(context), s + 1);
+    }
+
+    #[test]
+    fn bad_arguments_and_single_byte_code_pages() {
+        let mut e = engine();
+        let s = text(&mut e, b"a,b");
+        let delimiters = text(&mut e, b",");
+        let context = e.mem.alloc(4);
+        e.mem.set_u32(context, 0);
+        for words in [
+            args![s, delimiters, 0u32, 0u32],
+            args![s, 0u32, context, 0u32],
+            args![0u32, delimiters, context, 0u32],
+        ] {
+            let slot = errno(&mut e).addr();
+            e.mem.set_u32(slot, 0);
+            assert_eq!(e.call(0x00ed_fa19, &words).u32(), 0);
+            assert_eq!(errno_now(&mut e), 0x16);
+        }
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|c| c.0 != LOCALE_UPDATE));
+        // A single-byte code page hands the work to `strtok_s`.
+        e.mem.set_u32(MBCINFO + 8, 0);
+        e.register(STRTOK_S, |_, a| (a[0] + 0x100).into_ret());
+        assert_eq!(
+            e.call(0x00ed_fa19, &args![s, delimiters, context, 0u32])
+                .u32(),
+            s + 0x100
+        );
+        let calls: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == STRTOK_S)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(calls, vec![vec![s, delimiters, context]]);
+    }
+
+    #[test]
+    fn ismbblead_l_asks_the_lead_byte_type() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00ed_5c74, &args![0x81u32, 0u32]).u32(), 1);
+        assert_eq!(e.call(0x00ed_5c74, &args![0x41u32, 0u32]).u32(), 0);
+        let calls: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == ISMBBTYPE_L)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(calls, vec![vec![0, 0x81, 0, 4], vec![0, 0x41, 0, 4]]);
     }
 }

@@ -875,6 +875,157 @@ pub fn fn_00ec18a0(e: &mut Engine, this: Ptr, setting: u32) -> u32 {
     e.call(SET_THREAD_PRIORITY, &args![handle, priority]).u32()
 }
 
+/// The frame texture set's texture slots (vtable byte offsets): `IDirect3DTexture9::Release`
+/// (+8), `LockRect` (+0x4C: level, the locked rectangle out, the rectangle, flags) and
+/// `UnlockRect` (+0x50: level).
+const TEXTURE_RELEASE: u32 = 0x8;
+const TEXTURE_LOCK_RECT: u32 = 0x4c;
+const TEXTURE_UNLOCK_RECT: u32 = 0x50;
+
+// Translated from 00ebfd20 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: the frame texture set): its release. With a
+/// texture array (+0x40), each non-null texture of the first `+0x20` (the count, re-read each
+/// pass) is released (`Release`, vtable +8); then the array word is cleared and the set's
+/// memory given back (`MemoryManager::Deallocate` on `011f6238`). The array itself is not
+/// freed. Without an array nothing happens.
+pub fn fn_00ebfd20(e: &mut Engine, set: Ptr) {
+    let set = set.addr();
+    if e.mem.u32(set + 0x40) == 0 {
+        return;
+    }
+    let mut i = 0u32;
+    while i < e.mem.u32(set + 0x20) {
+        let slot = e.mem.u32(set + 0x40).wrapping_add(i.wrapping_mul(4));
+        if e.mem.u32(slot) != 0 {
+            let texture = e
+                .mem
+                .u32(e.mem.u32(set + 0x40).wrapping_add(i.wrapping_mul(4)));
+            e.vcall(texture, TEXTURE_RELEASE, &[]);
+        }
+        i = i.wrapping_add(1);
+    }
+    e.mem.set_u32(set + 0x40, 0);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, set]);
+}
+
+// Translated from 00ebfda0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the frame texture set and six word addresses, each
+/// may be null): the next tile. While the tile index (+0x14) is below the tile count (+0x20)
+/// and the tile's texture (array +0x40) locks (`LockRect(0, &locked, NULL, 0)`, vtable +0x4C,
+/// not negative), it stores the locked bits and pitch, the tile's x and y in pixels (column
+/// and row of the index in a grid of `+0x24` columns plus one when the partial width +0x2C is
+/// non-zero, times the tile size +0x3C), its width (the tile size, or +0x2C for a column at
+/// or past +0x24) and height (the tile size, or +0x30 for a row at or past +0x28), advances
+/// the index and answers 1. Otherwise the index goes back to 0 and it answers 0. A grid of 0
+/// columns divides by zero, as the exe's `DIV` does.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00ebfda0(
+    e: &mut Engine,
+    set: Ptr,
+    bits: u32,
+    pitch: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> u32 {
+    let set = set.addr();
+    // The locked rectangle, as the frame has it: +0 `Pitch` ([EBP-8]), +4 `pBits` ([EBP-4]).
+    e.with_stack(8, |e, locked| {
+        let locked = locked.addr();
+        if e.mem.u32(set + 0x14) >= e.mem.u32(set + 0x20) {
+            e.mem.set_u32(set + 0x14, 0);
+            return 0;
+        }
+        let index = e.mem.u32(set + 0x14);
+        let texture = e
+            .mem
+            .u32(e.mem.u32(set + 0x40).wrapping_add(index.wrapping_mul(4)));
+        let hr = e
+            .vcall(texture, TEXTURE_LOCK_RECT, &args![0u32, locked, 0u32, 0u32])
+            .u32();
+        if (hr as i32) < 0 {
+            e.mem.set_u32(set + 0x14, 0);
+            return 0;
+        }
+        if bits != 0 {
+            let v = e.mem.u32(locked + 4);
+            e.mem.set_u32(bits, v);
+        }
+        if pitch != 0 {
+            let v = e.mem.u32(locked);
+            e.mem.set_u32(pitch, v);
+        }
+        let columns = u32::from(e.mem.u32(set + 0x2c) != 0).wrapping_add(e.mem.u32(set + 0x24));
+        let row = e.mem.u32(set + 0x14) / columns;
+        let column = e
+            .mem
+            .u32(set + 0x14)
+            .wrapping_sub(columns.wrapping_mul(row));
+        if x != 0 {
+            let v = column.wrapping_mul(e.mem.u32(set + 0x3c));
+            e.mem.set_u32(x, v);
+        }
+        if y != 0 {
+            let v = row.wrapping_mul(e.mem.u32(set + 0x3c));
+            e.mem.set_u32(y, v);
+        }
+        if width != 0 {
+            let v = if column < e.mem.u32(set + 0x24) {
+                e.mem.u32(set + 0x3c)
+            } else {
+                e.mem.u32(set + 0x2c)
+            };
+            e.mem.set_u32(width, v);
+        }
+        if height != 0 {
+            let v = if row < e.mem.u32(set + 0x28) {
+                e.mem.u32(set + 0x3c)
+            } else {
+                e.mem.u32(set + 0x30)
+            };
+            e.mem.set_u32(height, v);
+        }
+        let next = e.mem.u32(set + 0x14).wrapping_add(1);
+        e.mem.set_u32(set + 0x14, next);
+        1
+    })
+}
+
+// Translated from 00ebff00 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word: the frame texture set): unlocks the tile
+/// `00ebfda0` handed out last, the texture before the index (+0x14) in the array (+0x40):
+/// `UnlockRect(0)` (vtable +0x50), whose answer stays in `EAX`.
+pub fn fn_00ebff00(e: &mut Engine, set: Ptr) -> u32 {
+    let set = set.addr();
+    let slot = e
+        .mem
+        .u32(set + 0x40)
+        .wrapping_add(e.mem.u32(set + 0x14).wrapping_mul(4))
+        .wrapping_sub(4);
+    let texture = e.mem.u32(slot);
+    e.vcall(texture, TEXTURE_UNLOCK_RECT, &args![0u32]).u32()
+}
+
+// Translated from 00ec1570 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): the movie's fields reset. The
+/// Bink handle, device, frame textures, frames shown and frames skipped (+0 to +0x10) are
+/// cleared, the scale (+0x14) is 1.0 (`FLD1`), the position (+0x18, +0x1C) 0.0 (`FLDZ`), the
+/// play state (+0x20) 0 and the busy byte (+0x24) 0.
+pub fn fn_00ec1570(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, 0);
+    e.mem.set_u32(at + 4, 0);
+    e.mem.set_u32(at + 8, 0);
+    e.mem.set_u32(at + 0xc, 0);
+    e.mem.set_u32(at + 0x10, 0);
+    e.mem.set_u32(at + 0x14, x87_store32(1.0));
+    e.mem.set_u32(at + 0x18, x87_store32(0.0));
+    e.mem.set_u32(at + 0x1c, x87_store32(0.0));
+    e.mem.set_u32(at + 0x20, 0);
+    e.mem.set_u8(at + 0x24, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -903,6 +1054,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00ec_20c0, fn_00ec20c0(Ptr) -> Ptr),
         entry!(0x00ec_2e50, fn_00ec2e50(Ptr)),
+        entry!(0x00eb_fd20, fn_00ebfd20(Ptr)),
+        entry!(
+            0x00eb_fda0,
+            fn_00ebfda0(Ptr, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00eb_ff00, fn_00ebff00(Ptr) -> u32),
+        entry!(0x00ec_1570, fn_00ec1570(Ptr)),
         entry!(
             0x00ec1d50,
             bst_case_insensitive_string_map_key_to_hash_index(Ptr, u32) -> u32
@@ -1554,5 +1712,173 @@ mod sequence_tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00ec_16b0, &args![0x1234u32]).u32(), 0);
         assert_eq!(calls(&e, SEQUENCE_RUN), vec![vec![0x5000, 0x1234]]);
+    }
+}
+
+#[cfg(test)]
+mod texture_set_tests {
+    use super::*;
+
+    fn calls_at(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A texture whose `Release` (+8), `LockRect` (+0x4C) and `UnlockRect` (+0x50) are the
+    /// recorded doubles `0x0021_0008`, `0x0021_004c` and `0x0021_0050`; `LockRect` writes
+    /// pitch 0x40 and bits 0x7000 and answers `lock_answer`.
+    fn texture(e: &mut Engine, lock_answer: u32) -> u32 {
+        let vtable = e.mem.alloc(0x60);
+        for slot in [TEXTURE_RELEASE, TEXTURE_LOCK_RECT, TEXTURE_UNLOCK_RECT] {
+            e.mem.set_u32(vtable + slot, 0x0021_0000 + slot);
+        }
+        e.register(0x0021_0008, |_, _| Ret::default());
+        e.register_double(0x0021_004c, move |e, a| {
+            e.mem.set_u32(a[2], 0x40);
+            e.mem.set_u32(a[2] + 4, 0x7000);
+            lock_answer.into_ret()
+        });
+        e.register(0x0021_0050, |_, _| 0x55u32.into_ret());
+        let texture = e.mem.alloc(8);
+        e.mem.set_u32(texture, vtable);
+        texture
+    }
+
+    #[test]
+    fn release_frees_each_texture_then_the_set() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let t = texture(&mut e, 0);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array, t);
+        e.mem.set_u32(array + 8, t);
+        let set = e.mem.alloc(0x44);
+        e.mem.set_u32(set + 0x20, 3);
+        e.mem.set_u32(set + 0x40, array);
+        e.call_log = Some(vec![]);
+        e.call(0x00eb_fd20, &args![set]);
+        assert_eq!(calls_at(&e, 0x0021_0008), vec![vec![t], vec![t]]);
+        assert_eq!(e.mem.u32(set + 0x40), 0);
+        assert_eq!(
+            calls_at(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, set]]
+        );
+        // Without an array nothing happens.
+        e.call(0x00eb_fd20, &args![set]);
+        assert_eq!(calls_at(&e, MEMORY_DEALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn next_rect_walks_the_grid_and_wraps() {
+        let mut e = Engine::new();
+        let t = texture(&mut e, 0);
+        // TEST DATA: 2 full columns plus a partial one (+0x2C = 10), 1 full row plus a
+        // partial one (+0x30 = 6), tile size 0x20: six tiles.
+        let array = e.mem.alloc(0x18);
+        for i in 0..6 {
+            e.mem.set_u32(array + 4 * i, t);
+        }
+        let set = e.mem.alloc(0x44);
+        e.mem.set_u32(set + 0x20, 6);
+        e.mem.set_u32(set + 0x24, 2);
+        e.mem.set_u32(set + 0x28, 1);
+        e.mem.set_u32(set + 0x2c, 10);
+        e.mem.set_u32(set + 0x30, 6);
+        e.mem.set_u32(set + 0x3c, 0x20);
+        e.mem.set_u32(set + 0x40, array);
+        let out = e.mem.alloc(0x18);
+        let words = |set| {
+            args![
+                set,
+                out,
+                out + 4,
+                out + 8,
+                out + 0xc,
+                out + 0x10,
+                out + 0x14
+            ]
+        };
+        let mut seen = vec![];
+        for _ in 0..6 {
+            assert_eq!(e.call(0x00eb_fda0, &words(set)).u32(), 1);
+            seen.push((0..6).map(|i| e.mem.u32(out + 4 * i)).collect::<Vec<_>>());
+        }
+        assert_eq!(seen[0], vec![0x7000, 0x40, 0, 0, 0x20, 0x20]);
+        assert_eq!(seen[2], vec![0x7000, 0x40, 0x40, 0, 10, 0x20]);
+        assert_eq!(seen[3], vec![0x7000, 0x40, 0, 0x20, 0x20, 6]);
+        assert_eq!(seen[5], vec![0x7000, 0x40, 0x40, 0x20, 10, 6]);
+        assert_eq!(e.mem.u32(set + 0x14), 6);
+        // Past the last tile: the index goes back to 0.
+        assert_eq!(e.call(0x00eb_fda0, &words(set)).u32(), 0);
+        assert_eq!(e.mem.u32(set + 0x14), 0);
+        // Null outputs are skipped.
+        assert_eq!(
+            e.call(0x00eb_fda0, &args![set, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u32(set + 0x14), 1);
+    }
+
+    #[test]
+    fn next_rect_stops_when_the_lock_fails() {
+        let mut e = Engine::new();
+        let t = texture(&mut e, 0x8876_086c);
+        let array = e.mem.alloc(4);
+        e.mem.set_u32(array, t);
+        let set = e.mem.alloc(0x44);
+        e.mem.set_u32(set + 0x20, 1);
+        e.mem.set_u32(set + 0x24, 1);
+        e.mem.set_u32(set + 0x40, array);
+        e.mem.set_u32(set + 0x14, 0);
+        e.call_log = Some(vec![]);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0x99);
+        assert_eq!(
+            e.call(0x00eb_fda0, &args![set, out, 0u32, 0u32, 0u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(out), 0x99);
+        assert_eq!(e.mem.u32(set + 0x14), 0);
+        let lock = calls_at(&e, 0x0021_004c);
+        assert_eq!(lock.len(), 1);
+        assert_eq!(
+            (lock[0][0], lock[0][1], lock[0][3], lock[0][4]),
+            (t, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn step_unlocks_the_previous_tile() {
+        let mut e = Engine::new();
+        let t = texture(&mut e, 0);
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array + 4, t);
+        let set = e.mem.alloc(0x44);
+        e.mem.set_u32(set + 0x14, 2);
+        e.mem.set_u32(set + 0x40, array);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00eb_ff00, &args![set]).u32(), 0x55);
+        assert_eq!(calls_at(&e, 0x0021_0050), vec![vec![t, 0]]);
+    }
+
+    #[test]
+    fn movie_reset_clears_and_sets_the_scale() {
+        let mut e = Engine::new();
+        let movie = e.mem.alloc(0x28);
+        for i in 0..10 {
+            e.mem.set_u32(movie + 4 * i, 0xffff_ffff);
+        }
+        e.call(0x00ec_1570, &args![movie]);
+        let words: Vec<u32> = (0..9).map(|i| e.mem.u32(movie + 4 * i)).collect();
+        assert_eq!(words, vec![0, 0, 0, 0, 0, 0x3f80_0000, 0, 0, 0]);
+        assert_eq!(e.mem.u8(movie + 0x24), 0);
+        assert_eq!(e.mem.u8(movie + 0x25), 0xff);
     }
 }
