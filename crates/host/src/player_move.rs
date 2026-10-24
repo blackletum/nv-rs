@@ -416,6 +416,13 @@ impl PlayerMovement {
         let trace_file = std::env::var_os("NV_MOVE_TRACE");
         if trace_file.is_some() {
             e.trace = Some(Default::default());
+            // `NV_MOVE_TRACE_KEEP=N`: keep the last N calls instead of `TRACE_KEEP`.
+            if let Some(keep) = std::env::var("NV_MOVE_TRACE_KEEP")
+                .ok()
+                .and_then(|v| v.parse().ok())
+            {
+                e.trace_keep = keep;
+            }
         }
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));

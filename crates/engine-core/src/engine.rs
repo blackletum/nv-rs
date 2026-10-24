@@ -90,6 +90,8 @@ pub struct Engine {
     /// return, keeping the last [`TRACE_KEEP`]: a diagnostic of where a run
     /// went wrong before it stopped (the host's `NV_MOVE_TRACE`).
     pub trace: Option<std::collections::VecDeque<(u32, Vec<u32>, u32)>>,
+    /// How many returned calls the trace keeps ([`TRACE_KEEP`] unless the host says otherwise).
+    pub trace_keep: usize,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -152,6 +154,7 @@ impl Engine {
             call_stack: Vec::new(),
             on_open: None,
             trace: None,
+            trace_keep: TRACE_KEEP,
         }
     }
 
@@ -329,7 +332,7 @@ impl Engine {
         };
         self.call_stack.pop();
         if let Some(trace) = &mut self.trace {
-            if trace.len() == TRACE_KEEP {
+            if trace.len() >= self.trace_keep {
                 trace.pop_front();
             }
             trace.push_back((addr, args.to_vec(), ret.eax));
