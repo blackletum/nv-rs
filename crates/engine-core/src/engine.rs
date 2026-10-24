@@ -110,7 +110,7 @@ pub struct Engine {
     /// translation called.
     pub call_log: Option<Vec<(u32, Vec<u32>)>>,
     tls: u32,
-    /// Milliseconds since start: the one clock `GetTickCount`, `timeGetTime` and
+    /// Milliseconds (since the machine started once the real clock is on): the one clock `GetTickCount`, `timeGetTime` and
     /// `QueryPerformanceCounter` report ([`Engine::clock_now_ms`]). `Sleep(n)` moves it on by
     /// `n`; with the real clock on ([`Engine::start_real_clock`], the running game) the time
     /// that really passed is added at each reading. Tests set it directly.
@@ -290,8 +290,20 @@ impl Engine {
     }
 
     /// Turns the real clock on: from now each reading of the clock adds the time that really
-    /// passed since the last one (the running game; tests leave it off).
+    /// passed since the last one (the running game; tests leave it off). On Windows the clock
+    /// starts at the host's own `GetTickCount` (milliseconds since the machine started), as the
+    /// game sees it: code that takes a zero start stamp as long ago depends on it (the loading
+    /// menu's `Update` 00789a90 checks the intro movie only within 3 s of `+0x5b4`, 0 at first).
     pub fn start_real_clock(&mut self) {
+        #[cfg(windows)]
+        {
+            extern "system" {
+                fn GetTickCount() -> u32;
+            }
+            // SAFETY: GetTickCount takes nothing and only reads the system's tick count.
+            self.clock_ms = unsafe { GetTickCount() };
+            self.clock_us = 0;
+        }
         self.real_clock = Some(std::time::Instant::now());
     }
 
