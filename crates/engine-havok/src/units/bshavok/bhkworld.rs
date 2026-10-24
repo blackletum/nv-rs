@@ -87,8 +87,8 @@ layout! {
 // Translated from 00c66170 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkMemoryAllocator::blockAlloc` (Xbox PDB): allocates `size + 16` bytes
 /// and returns the first 16-byte-aligned address after reserving a trailing
-/// byte for the alignment distance. A virtual (`bhkMemoryAllocator`'s vtable `010c3af8`,
-/// slot +4), so `thiscall` with `ECX` unused: `this` is its first word.
+/// byte for the alignment distance.
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
 pub fn bhk_memory_allocator_block_alloc(e: &mut Engine, _this: Ptr, size: u32) -> Ptr {
     let raw = e
         .call(HEAP_ALLOC, &args![HEAP_SINGLETON, size.wrapping_add(0x10)])
@@ -101,9 +101,8 @@ pub fn bhk_memory_allocator_block_alloc(e: &mut Engine, _this: Ptr, size: u32) -
 
 // Translated from 00c661a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `bhkMemoryAllocator::blockFree` (Xbox PDB): recovers the raw allocation
-/// from the byte immediately before `block`; the second stack word is unused. A
-/// virtual (vtable `010c3af8`, slot +8), so `thiscall` with `ECX` unused: `this` is its
-/// first word.
+/// from the byte immediately before `block`; the second stack word is unused.
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
 pub fn bhk_memory_allocator_block_free(e: &mut Engine, _this: Ptr, block: Ptr, _unused_1: u32) {
     if !block.is_null() {
         let padding = e.mem.u8(block.addr() - 1) as u32;
@@ -116,9 +115,8 @@ pub fn bhk_memory_allocator_block_free(e: &mut Engine, _this: Ptr, block: Ptr, _
 
 // Translated from 00c661c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns the second of its two stack arguments; `RET 8` confirms both words
-/// are part of the function's ABI even though the first is not read. A virtual (vtables
-/// `010c3af8` slot +0x2C and `010d113c`), so `thiscall` with `ECX` unused: `this` is its
-/// first word.
+/// are part of the function's ABI even though the first is not read.
+/// `this` (`ECX`) is not read, but it sits in vtables and is called with `ECX` set.
 pub fn bhk_world_return_second_argument(
     _e: &mut Engine,
     _this: Ptr,
@@ -4236,9 +4234,7 @@ mod tests {
         e.map(0x0300_0000, 0x1000);
         e.register_double(HEAP_ALLOC, move |_, _| ret(raw));
         e.call_log = Some(vec![]);
-        let block = e
-            .call(0x00c6_6170, &args![0x0126_7b54u32, 0x20u32])
-            .ptr::<()>();
+        let block = e.call(0x00c6_6170, &args![0x5555u32, 0x20u32]).ptr::<()>();
         assert_eq!(block.addr(), raw + 0xd);
         assert_eq!(e.mem.u8(block.addr() - 1), 0xd);
         let call = e
@@ -4259,8 +4255,8 @@ mod tests {
         e.map(0x0300_1000, 0x1000);
         e.mem.set_u8(block - 1, 8);
         e.call_log = Some(vec![]);
-        e.call(0x00c6_61a0, &args![0x0126_7b54u32, block, 0xfeedu32]);
-        e.call(0x00c6_61a0, &args![0x0126_7b54u32, 0u32, 0xfeedu32]);
+        e.call(0x00c6_61a0, &args![0x5555u32, block, 0xfeedu32]);
+        e.call(0x00c6_61a0, &args![0x5555u32, 0u32, 0xfeedu32]);
         let frees: Vec<_> = e
             .call_log
             .as_ref()
@@ -4276,8 +4272,7 @@ mod tests {
     fn second_argument_helper_returns_the_second_word() {
         let mut e = engine();
         assert_eq!(
-            e.call(0x00c6_61c0, &args![0x0126_7b54u32, 17u32, 29u32])
-                .u32(),
+            e.call(0x00c6_61c0, &args![0x5555u32, 17u32, 29u32]).u32(),
             29
         );
     }

@@ -783,10 +783,11 @@ const SET_Z_WRITE_ENABLE: u32 = 0x00b9_7e30;
 const RENDER_STATE_00B97E80: u32 = 0x00b9_7e80;
 
 // Translated from 00be0e50 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word it
-/// does not read. Unless the pass type being rendered (`011f91e4`) is 0x252 to 0x256: the
-/// render states `00b97fa0(1, 0)`, `SetZWriteEnable(0, 0)` and `00b97e80(2, 0)`.
-pub fn fn_00be0e50(e: &mut Engine, _unused_0: u32) {
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable method (`thiscall`,
+/// `this` not read) with one stack word it does not read (`RET 4`). Unless the pass type being
+/// rendered (`011f91e4`) is 0x252 to 0x256: the render states `00b97fa0(1, 0)`,
+/// `SetZWriteEnable(0, 0)` and `00b97e80(2, 0)`.
+pub fn fn_00be0e50(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     let pass_type = e.global::<u32>(RENDERING_PASS_TYPE_011F91E4);
     if (0x252..=0x256).contains(&pass_type) {
         return;
@@ -821,10 +822,10 @@ fn pass_list_head(e: &Engine) -> u32 {
 }
 
 // Translated from 00be0eb0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word it
-/// does not read. For every node of the current pass's list (`0126f74c`, +0x30, +0x10):
-/// `00b97d90(first word, second word, 0)`.
-pub fn fn_00be0eb0(e: &mut Engine, _unused_0: u32) {
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable method (`thiscall`,
+/// `this` not read) with one stack word it does not read (`RET 4`). For every node of the
+/// current pass's list (`0126f74c`, +0x30, +0x10): `00b97d90(first word, second word, 0)`.
+pub fn fn_00be0eb0(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     let mut node = pass_list_head(e);
     while node != 0 {
         let second = e.mem.u32(node + 4);
@@ -835,9 +836,10 @@ pub fn fn_00be0eb0(e: &mut Engine, _unused_0: u32) {
 }
 
 // Translated from 00be0ee0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A function Ghidra did not make (unit `bsshader.cpp` by address), `stdcall` with one word it
-/// does not read. For every node of the current pass's list: `00b98610(first word, 0)`.
-pub fn fn_00be0ee0(e: &mut Engine, _unused_0: u32) {
+/// A function Ghidra did not make (unit `bsshader.cpp` by address), a vtable method (`thiscall`,
+/// `this` not read) with one stack word it does not read (`RET 4`). For every node of the
+/// current pass's list: `00b98610(first word, 0)`.
+pub fn fn_00be0ee0(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     let mut node = pass_list_head(e);
     while node != 0 {
         let first = e.mem.u32(node);
@@ -1070,10 +1072,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00be_0cf0,
             bs_shader_setup_default_stage(Ptr, u32, u32, u32, bool)
         ),
-        entry!(0x00be_0e50, fn_00be0e50(u32)),
+        entry!(0x00be_0e50, fn_00be0e50(Ptr, u32)),
         entry!(0x00be_0e90, fn_00be0e90()),
-        entry!(0x00be_0eb0, fn_00be0eb0(u32)),
-        entry!(0x00be_0ee0, fn_00be0ee0(u32)),
+        entry!(0x00be_0eb0, fn_00be0eb0(Ptr, u32)),
+        entry!(0x00be_0ee0, fn_00be0ee0(Ptr, u32)),
         entry!(0x00be_0f10, bs_shader_destructor(Ptr)),
         entry!(0x00be_1f90, fn_00be1f90(Ptr, u32)),
         entry!(0x00be_1ff0, fn_00be1ff0(Ptr, Ptr)),
@@ -1835,13 +1837,13 @@ mod b054_tests {
         let mut e = rig(&states);
         for pass_type in [0x252u32, 0x256] {
             e.set_global(RENDERING_PASS_TYPE_011F91E4, pass_type);
-            e.call(0x00be_0e50, &args![0u32]);
+            e.call(0x00be_0e50, &args![0x5555u32, 0u32]);
         }
         assert!(sequence(&e, &states).is_empty());
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x257u32);
-        e.call(0x00be_0e50, &args![0u32]);
+        e.call(0x00be_0e50, &args![0x5555u32, 0u32]);
         e.set_global(RENDERING_PASS_TYPE_011F91E4, 0x251u32);
-        e.call(0x00be_0e50, &args![0u32]);
+        e.call(0x00be_0e50, &args![0x5555u32, 0u32]);
         let once = vec![
             (RENDER_STATE_00B97FA0, vec![1, 0]),
             (SET_Z_WRITE_ENABLE, vec![0, 0]),
@@ -1891,7 +1893,7 @@ mod b054_tests {
     fn fn_00be0eb0_walks_the_pass_list() {
         let mut e = rig(&[ITEM_STATE_00B97D90]);
         pass_with_list(&mut e);
-        e.call(0x00be_0eb0, &args![0u32]);
+        e.call(0x00be_0eb0, &args![0x5555u32, 0u32]);
         assert_eq!(
             calls(&e, ITEM_STATE_00B97D90),
             vec![vec![1, 2, 0], vec![3, 4, 0]]
@@ -1902,7 +1904,7 @@ mod b054_tests {
     fn fn_00be0ee0_walks_the_pass_list() {
         let mut e = rig(&[ITEM_STATE_00B98610]);
         pass_with_list(&mut e);
-        e.call(0x00be_0ee0, &args![0u32]);
+        e.call(0x00be_0ee0, &args![0x5555u32, 0u32]);
         assert_eq!(calls(&e, ITEM_STATE_00B98610), vec![vec![1, 0], vec![3, 0]]);
     }
 
