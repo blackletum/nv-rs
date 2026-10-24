@@ -371,6 +371,62 @@ pub fn fn_00ec3b9a(e: &mut Engine) -> u32 {
     }
 }
 
+// Translated from 00ec3e73 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3e73 - a structured-exception handler: the dispatcher context is not modelled, and its last step (resuming 00ec3e47 on the guard node's saved ESP/EBP, a stack switch) stops with a panic
+/// `TranslatorGuardHandler` (Ghidra library match; cdecl, four words: record, guard node,
+/// context, dispatcher). Checks the node's cookie (+8 XOR the node, `__security_check_cookie`);
+/// a record whose flags (+4) have a bit of 0x66 set (unwinding) sets the node's unwind flag
+/// (+0x24) and answers 1. Otherwise `__InternalCxxFrameHandler` (`00eceeb8`) with the record,
+/// the node's frame (+0x10), the context, 0, its function info (+0xc), nesting level (+0x14),
+/// catch frame (+0x18) and 1; when the unwind flag is still 0, [`unwind_nested_frames`] of the
+/// node; then [`call_se_translator`] with the code 0x123 into a local gives the continuation
+/// `00ec3e47`, which the exe jumps to with the stack and base pointers saved in the node
+/// (+0x1c, +0x20). That jump is not a call in this model.
+pub fn translator_guard_handler(
+    e: &mut Engine,
+    record: Ptr,
+    guard: Ptr,
+    context: Ptr,
+    _unused_3: u32,
+) -> u32 {
+    let node = guard.addr();
+    let cookie = e.mem.u32(node + 8) ^ node;
+    security_check_cookie(e, cookie);
+    if e.mem.u32(record.addr() + 4) & 0x66 != 0 {
+        e.mem.set_u32(node + 0x24, 1);
+        return 1;
+    }
+    let frame = e.mem.u32(node + 0x10);
+    let info = e.mem.u32(node + 0xc);
+    let level = e.mem.u32(node + 0x14);
+    let catch_frame = e.mem.u32(node + 0x18);
+    e.call(
+        INTERNAL_CXX_FRAME_HANDLER,
+        &args![record, frame, context, 0u32, info, level, catch_frame, 1u32],
+    );
+    if e.mem.u32(node + 0x24) == 0 {
+        unwind_nested_frames(e, guard, record);
+    }
+    let continuation = e.with_stack(4, |e, local| {
+        call_se_translator(
+            e,
+            Ptr::new(GET_CONTINUATION_CODE),
+            local,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+        );
+        e.mem.u32(local.addr())
+    });
+    panic!(
+        "00ec3e73: resuming {continuation:08x} with ESP {:08x} and EBP {:08x} (a stack switch) is not modelled",
+        e.mem.u32(node + 0x1c),
+        e.mem.u32(node + 0x20)
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -398,6 +454,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_3d33, cxx_frame_handler(u32, Ptr, Ptr, Ptr, Ptr) -> u32),
         entry!(0x00ec_3d69, catch_guard_handler(Ptr, Ptr, Ptr, u32) -> u32),
         entry!(0x00ec_3d9c, call_se_translator(Ptr, Ptr, Ptr, u32, u32, u32, u32) -> u32),
+        entry!(
+            0x00ec_3e73,
+            translator_guard_handler(Ptr, Ptr, Ptr, u32) -> u32
+        ),
         entry!(0x00ec_3f12, get_range_of_trys_to_check(Ptr, i32, i32, Ptr, Ptr) -> u32),
         entry!(0x00ec_3f87, create_frame_info(Ptr, u32) -> Ptr),
         entry!(0x00ec_3fb3, is_exception_object_to_be_destroyed(u32) -> u32),
@@ -1414,5 +1474,54 @@ mod b001_tests {
         assert_eq!(calls_to(&e, ATEXIT), vec![vec![0x00ec_3b5a]]);
         e.register(ATEXIT, |_, _| 0xffff_ffffu32.into_ret());
         assert_eq!(e.call(0x00ec_3b9a, &args![]).u32(), 0x18);
+    }
+}
+
+#[cfg(test)]
+mod n089_tests {
+    use super::*;
+
+    #[test]
+    fn n089_00ec3e73_marks_unwinding_or_handles_and_resumes() {
+        let mut e = Engine::new();
+        e.map(SECURITY_COOKIE_011C16BC, 4);
+        e.set_global(SECURITY_COOKIE_011C16BC, 0x00c0_0c1eu32);
+        e.register(INTERNAL_CXX_FRAME_HANDLER, |_, _| Ret::default());
+        e.register(RTL_UNWIND, |_, _| Ret::default());
+        let node = e.mem.alloc(0x28);
+        e.mem.set_u32(node + 8, 0x00c0_0c1e ^ node);
+        for (offset, value) in [(0xcu32, 0xf1u32), (0x10, 0xf2), (0x14, 0xf3), (0x18, 0xf4)] {
+            e.mem.set_u32(node + offset, value);
+        }
+        e.mem.set_u32(node + 0x1c, 0x5500);
+        e.mem.set_u32(node + 0x20, 0x5600);
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record + 4, 2);
+        // Unwinding: the flag is set and the answer is 1.
+        assert_eq!(
+            e.call(0x00ec_3e73, &args![record, node, 0x0c0du32, 0u32])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u32(node + 0x24), 1);
+        // Dispatching: the frame handler runs; with the flag clear the frames are unwound; the
+        // resume on the node's stack stops.
+        e.mem.set_u32(record + 4, 0x81);
+        e.mem.set_u32(node + 0x24, 0);
+        e.call_log = Some(vec![]);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x00ec_3e73, &args![record, node, 0x0c0du32, 0u32]);
+        }));
+        assert!(stopped.is_err());
+        let log = e.call_log.take().unwrap();
+        let handler: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == INTERNAL_CXX_FRAME_HANDLER)
+            .collect();
+        assert_eq!(
+            handler[0].1,
+            vec![record, 0xf2, 0x0c0d, 0, 0xf1, 0xf3, 0xf4, 1]
+        );
+        assert!(log.iter().any(|c| c.0 == RTL_UNWIND && c.1[0] == node));
     }
 }
