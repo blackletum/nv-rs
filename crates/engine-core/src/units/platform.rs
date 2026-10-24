@@ -822,6 +822,34 @@ fn get_system_metrics(e: &mut Engine, index: u32) -> u32 {
 /// profiler here, so nothing changes.
 fn d3dperf_set_options(_e: &mut Engine, _options: u32) {}
 
+// Platform: replaces KERNEL32.DLL lstrcpyA (import)
+/// `lstrcpyA(destination, source)`: the source string with its terminating zero copied to the
+/// destination; answers the destination. A null pointer (Windows catches the fault and answers
+/// null) is not provided.
+fn lstrcpy_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
+    assert!(
+        !destination.is_null() && !source.is_null(),
+        "lstrcpyA with a null pointer is not provided"
+    );
+    let text = e.mem.cstr(source.addr());
+    e.mem.set_cstr(destination.addr(), &text);
+    destination.addr()
+}
+
+// Platform: replaces KERNEL32.DLL lstrcatA (import)
+/// `lstrcatA(destination, source)`: the source string with its terminating zero copied after the
+/// destination's; answers the destination. A null pointer is not provided.
+fn lstrcat_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
+    assert!(
+        !destination.is_null() && !source.is_null(),
+        "lstrcatA with a null pointer is not provided"
+    );
+    let end = destination.addr() + e.mem.cstr(destination.addr()).len() as u32;
+    let text = e.mem.cstr(source.addr());
+    e.mem.set_cstr(end, &text);
+    destination.addr()
+}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_now_ms()
@@ -2271,6 +2299,8 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, create_thread(u32, u32, u32, u32, u32, Ptr) -> u32).1,
         ),
         (k, "ResumeThread", entry!(0, resume_thread(u32) -> u32).1),
+        (k, "lstrcpyA", entry!(0, lstrcpy_a(Ptr, Ptr) -> u32).1),
+        (k, "lstrcatA", entry!(0, lstrcat_a(Ptr, Ptr) -> u32).1),
         (k, "SuspendThread", entry!(0, suspend_thread(u32) -> u32).1),
         (k, "ExitThread", entry!(0, exit_thread(u32)).1),
         (
@@ -3011,6 +3041,20 @@ mod tests {
         // Its handle is signalled now (it ended).
         assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 0]), WAIT_OBJECT_0);
         assert!(e.call_stack.is_empty() || e.call_stack.iter().all(|&a| a != 0x00ab_0200));
+    }
+
+    #[test]
+    fn lstrcpy_and_lstrcat_copy_with_the_zero_and_answer_the_destination() {
+        let mut e = Engine::new();
+        let d = e.mem.alloc(32);
+        let s = e.mem.alloc(8);
+        e.mem.set_cstr(s, b"abc");
+        e.mem.set_cstr(d, b"zzzzzzzz");
+        assert_eq!(lstrcpy_a(&mut e, Ptr::new(d), Ptr::new(s)), d);
+        assert_eq!(e.mem.cstr(d), b"abc".to_vec());
+        assert_eq!(e.mem.u8(d + 4), b'z', "only the string and its zero");
+        assert_eq!(lstrcat_a(&mut e, Ptr::new(d), Ptr::new(s)), d);
+        assert_eq!(e.mem.cstr(d), b"abcabc".to_vec());
     }
 
     #[test]
