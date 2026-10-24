@@ -350,7 +350,7 @@ pub fn ni_p_sys_drag_modifier_update(
             if x87_load32(range) < loaded {
                 let falloff = e.get(this, NiPSysDragModifier::m_fFalloff);
                 let falloff = x87_load32(falloff);
-                if falloff < loaded || falloff == loaded {
+                if falloff <= loaded {
                     index = index.wrapping_add(1);
                     continue;
                 }
