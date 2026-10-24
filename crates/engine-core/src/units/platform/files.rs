@@ -666,6 +666,9 @@ fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) {
 /// 8.3 short names and the order are the file system's (measured on scratch files,
 /// `build43-scratch/measure/findfile-2026-10-23.txt`: upper-case byte order, `.` and `..`, `?`
 /// matching nothing before a dot or at the end, `*.esm` finding `d.esmx` by `D6104~1.ESM`).
+/// This path runs on Windows only: it opens nothing for writing and changes no attribute (a
+/// search handle only lists, as `std::fs::read_dir` does). Other systems run the measured
+/// matcher ([`search_finds`], the other `listing`), which stops on short names it cannot decide.
 #[cfg(windows)]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
