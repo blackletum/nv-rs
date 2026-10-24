@@ -1819,7 +1819,8 @@ mod n072_tests {
         assert_eq!(created[1], 3);
         assert_eq!(created[4..], [SHADER_TEXT_0105C2B0, 0, 0, 0, 0, 1]);
         let table = e.mem.u32(this + 0x10);
-        let item = e.mem.u32(table + 4 * (0x4b00 % 2));
+        // The key 0x4b00 hashes to bucket 0 (key % 2 buckets).
+        let item = e.mem.u32(table);
         let description = e.mem.u32(item + 8);
         assert_eq!(e.mem.u32(description + 8), program);
         assert_eq!(e.mem.u32(item + 4), 0x4b00);
