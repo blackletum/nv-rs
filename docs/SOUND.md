@@ -12,7 +12,7 @@ in `scripts/`.
 | DirectSound | `platform/dsound.rs` | DirectSound 8 objects, cursors | `scripts/dsound-capture` | Answers and cursors as measured |
 | Mixer | `platform/mixer.rs`, `platform/sound_out.rs` | DirectSound's mixer, the device | `scripts/dsmix-measure` (WASAPI loopback) | 2D path bit-exact; resampler, 3D, distortion not provided |
 | Voices and sounds | `platform/vorbisfile.rs`, `crates/vorbis` | `libvorbisfile.dll`/`libvorbis.dll` (1.2.0) | `scripts/vorbis-record` | Bit-exact at 24-bit and 53-bit x87; 64-bit not provided |
-| Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; a movie with sound tracks is not provided yet |
+| Movie sound | `platform/bink.rs` | Bink's DirectSound sound system | `nv-bink --sound-system`, `--wait --sound` | `BinkSetSoundSystem` answers 1 as measured; the movie track plays as a mixer voice on the clock schedule (output off by default) |
 
 ## Mixer (DirectSound 8 to the device)
 
@@ -101,23 +101,47 @@ Measured again on 2026-10-24 (`nv-bink --sound-system`, private recordings in
 `bink-sound-2026-10-24`):
 
 - **The answer is 1**, with or without a window.
-- **With sound on** (`nv-bink --wait 300 --sound`, which plays the intro on the default
-  device), the frames follow the sound:
-  - the first frame comes about 3 ms later than without sound;
-  - frames then keep the clock schedule's rate, but jitter by up to about ±2 ms
-    around it;
-  - without sound, the frames land on the clock schedule `wait` implements, to
-    within a millisecond.
+- **That first run without a window** (`nv-bink --wait 300 --sound`): the frames came
+  about 3 ms late with about ±2 ms of jitter. With `--hook-dsound` it turned out the
+  library's `Play` had failed there (no window for the priority level), so that run
+  did not have sound. The runs below have a window and do.
 
-What is left:
-- Play the movie's audio track (`crates/bink`'s audio decoder; within one step of
-  the DLL, docs/MOVIES.md) through the platform's DirectSound buffers, as the
-  DLL's DirectSound sound system does.
-- Measure how its frame timing follows the buffer's play cursor: the cursor moves
-  in 10 ms device periods, which is the likely source of the jitter.
-- Then answer 1.
+### What the library does with DirectSound (measured)
 
-The platform answers 1, as measured: the game calls it at start-up (`BGSMoviePlayer`,
-`008670e0`) whether or not a movie plays. A movie with sound tracks then stops at
-`BinkOpen` with "not provided" until its track plays through our DirectSound;
-silent movies play, timed by the clock.
+`nv-bink --wait --sound --window --hook-dsound` records every DirectSound call the
+library makes while the intro plays with sound:
+- **Device:** its own (`DirectSoundCreate(NULL)`), at the priority level on a window.
+  Without a window the level fails and so does `Play` (`DSERR_PRIOLEVELNEEDED`).
+- **Primary buffer:** given a format and played looping.
+- **One secondary buffer:** 115,712 bytes of 48 kHz 16-bit stereo (0.6 s), flags `0x180e0`
+  (frequency, pan and volume controls, `GETCURRENTPOSITION2`, `GLOBALFOCUS`). Frequency is
+  set to 48000, pan and volume to 0.
+- **Filling:** at the first `BinkDoFrame` the buffer is cleared, then filled whole.
+  `Play` (looping) follows. Then, about every two frames, the part already played is
+  refilled: 11,520 or 13,440 bytes, wrapping round. The play cursor is polled about every
+  13 ms.
+- **When `Play` comes:** 50 to 540 ms after the fill, varying from run to run.
+- **Frames with sound:** frame 1 is due one frame time after the sound starts. From
+  there the frames keep exactly the clock schedule they keep without sound: 600 frames,
+  the same per-frame times to within 0.05 ms.
+
+### What the platform does
+
+`BinkSetSoundSystem` answers 1, as measured. The game calls it at start-up
+(`BGSMoviePlayer`, `008670e0`) whether or not a movie plays.
+
+A movie with a sound track has its track decoded whole at `BinkOpen` by
+`crates/bink` (within one step of the DLL, docs/MOVIES.md). The track becomes one
+mixer voice (`dsound::play_stream`), started at the first `BinkDoFrame`, when the
+clock schedule starts. It is held while the movie is paused (`BinkPause`) and ended
+at `BinkClose`. It is heard only when the host has turned the output on, which is
+off by default.
+
+This gives the same samples on the same schedule as the DLL. What is not
+reproduced:
+- The DLL streams the track through a 0.6 s buffer instead of one voice; only the
+  samples heard matter, and they are the same.
+- The DLL's 50 to 540 ms device start, which varies from run to run.
+
+Still not provided: more than one sound track, a track the decoder cannot read, and a
+rate other than the device's.

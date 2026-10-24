@@ -697,6 +697,56 @@ fn with_voice(e: &mut Engine, at: u32, f: impl FnOnce(&mut Voices, u32)) {
     }
 }
 
+/// For a platform layer that plays sound of its own through DirectSound (Bink's DirectSound
+/// sound system, `super::bink`): starts `pcm` (`channels`, `bits`, `rate`) as a voice under
+/// `key` (an engine address of the caller's, distinct from every buffer's), heard when the
+/// output is on, with volume, pan and frequency at their defaults. A rate other than the
+/// device's is not provided (the mixer's exact path, `super::mixer`).
+pub fn play_stream(e: &mut Engine, key: u32, pcm: Vec<u8>, channels: u16, bits: u16, rate: u32) {
+    let Some(m) = &e.kernel.sound.mix else {
+        return;
+    };
+    assert!(
+        rate == m.rate,
+        "a stream heard at {rate} Hz on a {} Hz device is not provided (Windows' resampler is \
+         not pinned down; the maintainer decides)",
+        m.rate
+    );
+    let mut v = m.voices.lock().expect("the voices");
+    v.all.insert(
+        key,
+        Voice {
+            data: pcm,
+            channels,
+            bits,
+            volume: 0,
+            pan: 0,
+            looping: false,
+            position: Some(0),
+        },
+    );
+    v.playing.retain(|&p| p != key);
+    v.playing.insert(0, key);
+}
+
+/// Holds (`paused`) or goes on with a stream from [`play_stream`] where it is.
+pub fn pause_stream(e: &mut Engine, key: u32, paused: bool) {
+    with_voice(e, key, |m, at| {
+        m.playing.retain(|&p| p != at);
+        if !paused && m.all.get(&at).is_some_and(|v| v.position.is_some()) {
+            m.playing.insert(0, at);
+        }
+    });
+}
+
+/// Ends a stream from [`play_stream`].
+pub fn stop_stream(e: &mut Engine, key: u32) {
+    with_voice(e, key, |m, at| {
+        m.all.remove(&at);
+        m.playing.retain(|&p| p != at);
+    });
+}
+
 type Slots<const N: usize> = [(u32, crate::AbiFn); N];
 
 fn register_code(e: &mut Engine) {
@@ -2355,6 +2405,36 @@ mod tests {
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         e.vcall(b, 0x30, &[0, 0, 0]);
         e.vcall(b, 0x44, &[11025]);
+    }
+
+    #[test]
+    fn a_stream_plays_pauses_and_stops() {
+        let mut e = engine();
+        let voices = hear(&mut e);
+        let pcm: Vec<u8> = [1000i16, -1000, 2000, -2000, 3000, -3000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        play_stream(&mut e, 0x9000, pcm, 2, 16, 22050);
+        let mut out = [0f32; 2];
+        super::super::sound_out::Source::render(&mut *voices.lock().unwrap(), 22050, 2, &mut out);
+        assert_eq!(out, [1000.0 / 32768.0, -1000.0 / 32768.0]);
+        pause_stream(&mut e, 0x9000, true);
+        assert!(voices.lock().unwrap().playing.is_empty());
+        pause_stream(&mut e, 0x9000, false);
+        let mut out = [0f32; 2];
+        super::super::sound_out::Source::render(&mut *voices.lock().unwrap(), 22050, 2, &mut out);
+        assert_eq!(out, [2000.0 / 32768.0, -2000.0 / 32768.0]);
+        stop_stream(&mut e, 0x9000);
+        assert!(voices.lock().unwrap().all.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "a stream heard at 48000 Hz on a 22050 Hz device is not provided")]
+    fn a_stream_at_another_rate_stops() {
+        let mut e = engine();
+        let _ = hear(&mut e);
+        play_stream(&mut e, 0x9000, vec![0; 4], 2, 16, 48000);
     }
 
     #[test]
