@@ -2468,6 +2468,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "mmioAdvance",
             entry!(0, mmio::mmio_advance(u32, Ptr, u32) -> u32).1,
         ),
+        (
+            "ole32.dll",
+            "CoCreateInstance",
+            entry!(0, dsound::co_create_instance(Ptr, u32, u32, Ptr, Ptr) -> u32).1,
+        ),
         // The sound imports: end.
     ]
 }
