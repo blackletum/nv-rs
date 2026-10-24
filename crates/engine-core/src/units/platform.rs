@@ -1903,8 +1903,8 @@ fn set_handle_count(_e: &mut Engine, count: u32) -> u32 {
 /// `HeapCreate(options, initial, maximum)` for a growable heap (`maximum` 0, options 0 or
 /// `HEAP_NO_SERIALIZE` 1), as the CRT's `_heap_init` makes `_crtheap`: a handle (Windows
 /// answers a nonzero heap handle for these arguments). Only the handle: the CRT's allocations
-/// are the engine's heap (`malloc`, `free`, `__calloc_crt` are platform), so `HeapAlloc` and
-/// the other heap calls on it are not provided (they stop the run). Other options or a fixed
+/// are the engine's heap (`malloc`, `free`, `__calloc_crt` are platform; [`heap_alloc`] hands
+/// out the same blocks); the other heap calls on it are not provided (they stop the run). Other options or a fixed
 /// size are not provided.
 fn heap_create(e: &mut Engine, options: u32, _initial: u32, maximum: u32) -> u32 {
     assert!(
@@ -1912,6 +1912,24 @@ fn heap_create(e: &mut Engine, options: u32, _initial: u32, maximum: u32) -> u32
         "HeapCreate({options:#x}, maximum {maximum:#x}) is not provided"
     );
     e.kernel.insert(KernelObject::Heap)
+}
+
+// Platform: replaces KERNEL32.DLL HeapAlloc (import)
+/// `HeapAlloc(heap, flags, size)` on the CRT's heap (`_crtheap`, from [`heap_create`]), as the
+/// exe's `malloc` body (`00ecd1c7`) asks it with `__active_heap` 1: a block of the platform
+/// allocator, the same one `malloc` and `free` use, so `free` and `_msize` take it
+/// (`crate::units::crt`). `HEAP_ZERO_MEMORY` (8) clears it. Another heap or other flags are not
+/// provided.
+fn heap_alloc(e: &mut Engine, heap: u32, flags: u32, size: u32) -> u32 {
+    assert!(
+        matches!(e.kernel.object(heap), Some(KernelObject::Heap)) && flags & !8 == 0,
+        "HeapAlloc(heap {heap:#x}, flags {flags:#x}) is not provided"
+    );
+    let block = crate::units::crt::crt_alloc(e, size);
+    if flags & 8 != 0 {
+        e.mem.write(block, &vec![0u8; size as usize]);
+    }
+    block
 }
 
 // Platform: replaces KERNEL32.DLL GetCurrentDirectoryA (import)
@@ -2496,6 +2514,7 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
         (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
         (k, "HeapCreate", entry!(0, heap_create(u32, u32, u32) -> u32).1),
+        (k, "HeapAlloc", entry!(0, heap_alloc(u32, u32, u32) -> u32).1),
         (
             k,
             "GetSystemTimeAsFileTime",
@@ -3174,6 +3193,19 @@ mod tests {
             "RPC_E_CHANGED_MODE"
         );
         assert_eq!(co_initialize_ex(&mut e, 4, 0), 0x8007_0057, "E_INVALIDARG");
+    }
+
+    #[test]
+    fn heap_alloc_on_the_crt_heap_hands_out_platform_blocks() {
+        let mut e = thread_engine();
+        let heap = heap_create(&mut e, 0, 0x1000, 0);
+        let block = heap_alloc(&mut e, heap, 0, 0x20);
+        assert_ne!(block, 0);
+        assert_eq!(e.kernel.crt_block_sizes.get(&block), Some(&0x20));
+        e.mem.set_u32(block, 0xdead_beef);
+        crate::units::crt::free(&mut e, Ptr::new(block));
+        let zeroed = heap_alloc(&mut e, heap, 8, 0x10);
+        assert_eq!(e.mem.u32(zeroed), 0);
     }
 
     #[test]

@@ -80,7 +80,7 @@ pub fn memset_wrapper(e: &mut Engine, dst: Ptr, c: i32, n: u32) -> Ptr {
 /// A block from the platform allocator for the CRT's heap, its asked-for size kept for `_msize`
 /// (`HeapSize` answers the size `HeapAlloc` was asked for; 0 is asked as 1, as the exe's
 /// `malloc` body does on the system heap).
-fn crt_alloc(e: &mut Engine, n: u32) -> u32 {
+pub(crate) fn crt_alloc(e: &mut Engine, n: u32) -> u32 {
     let block = e.mem.alloc(n);
     e.kernel.crt_block_sizes.insert(block, n.max(1));
     block
