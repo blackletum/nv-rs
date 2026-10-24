@@ -544,6 +544,30 @@ fn co_initialize_ex(e: &mut Engine, reserved: u32, mode: u32) -> u32 {
     }
 }
 
+// Platform: replaces OLE32.DLL CoUninitialize (import)
+/// Ends the running thread's COM (what `CoInitializeEx` began).
+fn co_uninitialize(e: &mut Engine) {
+    let thread = crate::thread_host::current_id(e);
+    e.kernel.com_threads.remove(&thread);
+}
+
+// Platform: replaces OLE32.DLL CoTaskMemAlloc (import)
+/// A block of `size` bytes from the platform's heap (COM's task allocator); 0 when it cannot
+/// be had. A size of 0 still gives a block, as the task allocator does.
+fn co_task_mem_alloc(e: &mut Engine, size: u32) -> u32 {
+    e.mem.alloc(size.max(1))
+}
+
+// Platform: replaces OLE32.DLL CoTaskMemFree (import)
+/// Frees a block from [`co_task_mem_alloc`]; null is allowed.
+fn co_task_mem_free(e: &mut Engine, block: Ptr) {
+    e.mem.free(block.addr());
+}
+
+// Platform: replaces OLE32.DLL CoFreeUnusedLibraries (import)
+/// No COM servers are loaded from DLLs here, so there is nothing to unload.
+fn co_free_unused_libraries(_e: &mut Engine) {}
+
 // Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
 fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spin: u32) -> i32 {
     critical_section_reset(e, section);
@@ -2296,6 +2320,22 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "CoInitializeEx",
             entry!(0, co_initialize_ex(u32, u32) -> u32).1,
         ),
+        ("ole32.dll", "CoUninitialize", entry!(0, co_uninitialize()).1),
+        (
+            "ole32.dll",
+            "CoTaskMemAlloc",
+            entry!(0, co_task_mem_alloc(u32) -> u32).1,
+        ),
+        (
+            "ole32.dll",
+            "CoTaskMemFree",
+            entry!(0, co_task_mem_free(Ptr)).1,
+        ),
+        (
+            "ole32.dll",
+            "CoFreeUnusedLibraries",
+            entry!(0, co_free_unused_libraries()).1,
+        ),
         (
             "ole32.dll",
             "CoInitialize",
@@ -3065,6 +3105,24 @@ mod tests {
         log(e, a[0] + 1);
         leave_critical_section(e, Ptr::new(0x2e00));
         Ret::default()
+    }
+
+    #[test]
+    fn the_task_allocator_gives_and_takes_blocks() {
+        let mut e = thread_engine();
+        let block = co_task_mem_alloc(&mut e, 0x48);
+        assert_ne!(block, 0);
+        e.mem.set_u32(block + 0x44, 1);
+        co_task_mem_free(&mut e, Ptr::new(block));
+        co_task_mem_free(&mut e, Ptr::new(0));
+        assert_ne!(co_task_mem_alloc(&mut e, 0), 0);
+        assert_eq!(co_initialize_ex(&mut e, 0, 0), 0);
+        co_uninitialize(&mut e);
+        assert_eq!(
+            co_initialize_ex(&mut e, 0, 2),
+            0,
+            "a new start after CoUninitialize"
+        );
     }
 
     #[test]
