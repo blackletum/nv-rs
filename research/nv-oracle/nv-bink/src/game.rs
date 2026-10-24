@@ -217,6 +217,7 @@ pub unsafe fn wait(
         }
         let t = now_us(freq, opened);
         let tg = timeGetTime();
+        crate::dshook::log(format!("go frame {f}"));
         let num = *bink.add(3);
         pause(f, 'w');
         (api.do_frame)(bink);

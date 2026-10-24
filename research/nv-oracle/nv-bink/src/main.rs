@@ -24,6 +24,8 @@
 //!   --open-flags X  BinkOpen flags, hex (default 0)
 //!   --sound-system  only call BinkSetSoundSystem(BinkOpenDirectSound, 0)
 //!                   and print its answer
+//!   --hook-dsound   record every DirectSound call the library makes to
+//!                   dsound.tsv (see `dshook.rs`)
 //!   --window        make a window first (with --sound-system or --sound)
 //!   --sound         with --wait: BinkSetSoundSystem(BinkOpenDirectSound, 0)
 //!                   before BinkOpen and the sound left on (it plays on the
@@ -90,6 +92,7 @@ mod run {
         sound_system: bool,
         sound: bool,
         window: bool,
+        hook_dsound: bool,
         flags: u32,
         wait: Option<u32>,
         start_delay: u32,
@@ -116,6 +119,7 @@ mod run {
             sound_system: false,
             sound: false,
             window: false,
+            hook_dsound: false,
             flags: 3,
             wait: None,
             start_delay: 0,
@@ -124,11 +128,12 @@ mod run {
         };
         let mut i = 3;
         while i < args.len() {
-            if ["--game", "--sound-system", "--sound", "--window"].contains(&args[i].as_str()) {
+            if ["--game", "--sound-system", "--sound", "--window", "--hook-dsound"].contains(&args[i].as_str()) {
                 match args[i].as_str() {
                     "--game" => o.game = true,
                     "--sound-system" => o.sound_system = true,
                     "--window" => o.window = true,
+                    "--hook-dsound" => o.hook_dsound = true,
                     _ => {
                         o.sound = true;
                         o.sound_system = true;
@@ -244,6 +249,9 @@ mod run {
         }
         std::fs::create_dir_all(&o.out).map_err(|e| format!("{}: {e}", o.out.display()))?;
         unsafe {
+            if o.hook_dsound {
+                crate::dshook::install(&o.out);
+            }
             let dll = format!("{}\0", o.dll);
             let module = nv_win::LoadLibraryA(dll.as_ptr());
             if module.is_null() {
@@ -444,6 +452,8 @@ mod run {
 
 #[cfg(all(windows, target_arch = "x86"))]
 mod game;
+#[cfg(all(windows, target_arch = "x86"))]
+mod dshook;
 
 #[cfg(all(windows, target_arch = "x86"))]
 fn main() {
