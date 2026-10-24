@@ -14,7 +14,9 @@ pub struct Mdct {
     log2n: u32,
     trig: Vec<f32>,
     bitrev: Vec<usize>,
-    fpu: Fpu,
+    /// For measuring: the arithmetic of each stage (rotation in, the first and generic
+    /// butterflies, the 32-point butterflies, the bit reversal, rotation out).
+    pub(crate) stages: [Fpu; 5],
 }
 
 macro_rules! v {
@@ -68,13 +70,13 @@ impl Mdct {
             log2n,
             trig: t,
             bitrev,
-            fpu,
+            stages: [fpu; 5],
         }
     }
 
     /// `mdct_backward(init, x, x)`: the first `n / 2` values in, `n` samples out.
     pub fn backward(&self, x: &mut [f32]) {
-        let f = self.fpu;
+        let f = self.stages[0];
         let n = self.n;
         let n2 = n >> 1;
         let n4 = n >> 2;
@@ -122,6 +124,11 @@ impl Mdct {
         self.butterflies(&mut x[n2..n], n2);
         self.bitreverse(x);
 
+        let f = self.stages[4];
+        let ms =
+            |a: f64, b: f32, c: f64, d: f32| f.sub(f.mul(a, f64::from(b)), f.mul(c, f64::from(d)));
+        let ma =
+            |a: f64, b: f32, c: f64, d: f32| f.add(f.mul(a, f64::from(b)), f.mul(c, f64::from(d)));
         // Rotate and window.
         let mut ox1 = n2 + n4;
         let mut ox2 = n2 + n4;
@@ -182,7 +189,7 @@ impl Mdct {
     }
 
     fn butterflies(&self, x: &mut [f32], points: usize) {
-        let f = self.fpu;
+        let f = self.stages[1];
         let t = &self.trig;
         let mut stages = self.log2n as i32 - 5;
         stages -= 1;
@@ -203,13 +210,13 @@ impl Mdct {
         }
         let mut j = 0;
         while j < points {
-            butterfly_32(f, &mut x[j..j + 32]);
+            butterfly_32(self.stages[2], &mut x[j..j + 32]);
             j += 32;
         }
     }
 
     fn bitreverse(&self, x: &mut [f32]) {
-        let f = self.fpu;
+        let f = self.stages[3];
         let n = self.n;
         let half = n >> 1;
         let t = &self.trig;

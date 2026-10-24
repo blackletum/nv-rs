@@ -24,8 +24,10 @@ pub struct Block {
 /// `vorbis_dsp_state` for decoding.
 pub struct Dsp {
     pub info: Info,
+    /// For measuring: leave the spectrum (the inverse MDCT's input) in the block.
+    pub(crate) skip_transform: bool,
     fpu: Fpu,
-    transforms: [Mdct; 2],
+    pub(crate) transforms: [Mdct; 2],
     modebits: u32,
     pcm: Vec<Vec<f32>>,
     lw: bool,
@@ -63,6 +65,7 @@ impl Dsp {
             granulepos: -1,
             sequence: -1,
             sample_count: -1,
+            skip_transform: false,
             info,
             fpu,
         };
@@ -194,6 +197,9 @@ impl Dsp {
             let submap = map.chmuxlist[i];
             let floor = &info.floors[map.floorsubmap[submap]];
             floor1_inverse2(floor, memo[i].as_deref(), &mut pcm[i], n / 2);
+        }
+        if self.skip_transform {
+            return;
         }
         for ch in pcm.iter_mut() {
             self.transforms[usize::from(w)].backward(ch);

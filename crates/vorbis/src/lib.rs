@@ -57,8 +57,20 @@ pub mod diag {
 
     pub type RawPacket = (Vec<u8>, i64, i64, bool, bool);
 
+    /// The packets of an Ogg file, or of a measuring file of bare packets (`PKTS`, then each
+    /// packet's length as a little-endian `u32` and its bytes; numbered from 0, the first one
+    /// beginning the stream, no granule positions).
     pub fn packets(data: &[u8]) -> Vec<RawPacket> {
         let mut out = Vec::new();
+        if let Some(mut rest) = data.strip_prefix(b"PKTS") {
+            while rest.len() >= 4 {
+                let n = u32::from_le_bytes(rest[..4].try_into().expect("4 bytes")) as usize;
+                let k = out.len() as i64;
+                out.push((rest[4..4 + n].to_vec(), -1, k, false, k == 0));
+                rest = &rest[4 + n..];
+            }
+            return out;
+        }
         let mut at = 0;
         let mut os: Option<Stream> = None;
         while let Some((start, page)) = next_page(data, at) {
@@ -72,17 +84,51 @@ pub mod diag {
         out
     }
 
-    /// The blocks with a model of the arithmetic (`fpu::Fpu::model`).
-    pub fn blocks(data: &[u8], p24: bool, locals: bool, trig24: bool) -> Vec<Vec<Vec<f32>>> {
+    /// The blocks with a model of the arithmetic (`fpu::Fpu::model`); with `spectrum`, the
+    /// inverse MDCT's input instead of its output.
+    pub fn blocks(
+        data: &[u8],
+        p24: bool,
+        locals: bool,
+        trig24: bool,
+        spectrum: bool,
+    ) -> Vec<Vec<Vec<f32>>> {
         let ps = packets(data);
         let mut info = crate::Info::default();
         for p in &ps[..3] {
             assert_eq!(info.headerin(&p.0, p.4), 0);
         }
-        let dsp = crate::decode::Dsp::new(info, crate::fpu::Fpu::model(p24, locals, trig24));
+        let mut dsp = crate::decode::Dsp::new(info, crate::fpu::Fpu::model(p24, locals, trig24));
+        dsp.skip_transform = spectrum;
         ps[3..]
             .iter()
             .filter_map(|p| dsp.synthesis(&p.0, p.1, p.2, p.3).ok().map(|b| b.pcm))
             .collect()
     }
+}
+
+/// For measuring: the blocks with each inverse-MDCT stage's arithmetic chosen apart
+/// (`(rounded to 24 bits, float locals rounded)` for rotation in, first and generic
+/// butterflies, 32-point butterflies, bit reversal, rotation out) and the tables' angles.
+#[doc(hidden)]
+pub fn diag_blocks_staged(
+    data: &[u8],
+    trig24: bool,
+    stages: [(bool, bool); 5],
+) -> Vec<Vec<Vec<f32>>> {
+    let ps = diag::packets(data);
+    let mut info = Info::default();
+    for p in &ps[..3] {
+        assert_eq!(info.headerin(&p.0, p.4), 0);
+    }
+    let mut dsp = decode::Dsp::new(info, fpu::Fpu::model(true, true, trig24));
+    for t in dsp.transforms.iter_mut() {
+        for (s, &(p24, locals)) in t.stages.iter_mut().zip(&stages) {
+            *s = fpu::Fpu::model(p24, locals, trig24);
+        }
+    }
+    ps[3..]
+        .iter()
+        .filter_map(|p| dsp.synthesis(&p.0, p.1, p.2, p.3).ok().map(|b| b.pcm))
+        .collect()
 }

@@ -12,6 +12,10 @@
 //! the bytes) and, with `--pcm`, the decoded bytes of the files whose path contains `--only`.
 //! These are private recordings of the player's files: keep them out of the repository.
 //!
+//! With `VORBIS_PACKETS=<file>` (bare packets, see crates/vorbis `diag::packets`) it runs those
+//! through `libvorbis.dll` (`--blocks`) and writes their blocks to `<out.tsv>` instead; the
+//! archives are then not read (give any).
+//!
 //! `--precision` sets the x87 precision control while the library decodes (libvorbis' float
 //! code may be x87; Direct3D 9 sets 24 bits on the thread that makes the device unless
 //! `D3DCREATE_FPU_PRESERVE`), default the process's (53 bits). `--read` is the length asked of
@@ -155,6 +159,14 @@ fn main() {
                 other => panic!("--precision {other}: use 24, 53 or 64"),
             };
             set_control_word((control_word() & !0x0300) | (pc << 8));
+        }
+        if let Some(crafted) = std::env::var_os("VORBIS_PACKETS") {
+            // A measuring file of bare packets (crates/vorbis `diag::packets`): its blocks, to
+            // `<out.tsv>` (the second argument) as `f32`.
+            let lib = plain[0].replace('/', "\\").replace("libvorbisfile.dll", "libvorbis.dll");
+            let data = std::fs::read(crafted).unwrap();
+            std::fs::write(&plain[1], record_blocks(&lib, &data)).unwrap();
+            return;
         }
         let mut out = std::io::BufWriter::new(std::fs::File::create(&plain[1]).unwrap());
         writeln!(out, "# control word {:04x}, read {chunk}", control_word()).unwrap();
