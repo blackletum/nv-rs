@@ -370,12 +370,30 @@ pub fn bs_stream_load_stream(e: &mut Engine, this: Ptr) -> u8 {
     1
 }
 
+/// `NiStream::RemoveAllObjects` (`00a644f0`) and `NiStream::FreeLoadData` (`00a64ca0`), both
+/// `thiscall` on the stream.
+const NI_STREAM_REMOVE_ALL_OBJECTS: u32 = 0x00a6_44f0;
+const NI_STREAM_FREE_LOAD_DATA: u32 = 0x00a6_4ca0;
+
+// Translated from 00c3b370 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSStream::FreeAllObjects` (engine map; `thiscall`, no stack words):
+/// `NiStream::RemoveAllObjects`, then the words +0x25c, +0x26c, +0x260 and +0x270 cleared (in that order), then
+/// `NiStream::FreeLoadData`, whose `EAX` is left as the answer.
+pub fn bs_stream_free_all_objects(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(NI_STREAM_REMOVE_ALL_OBJECTS, &args![this]);
+    for offset in [0x25cu32, 0x26c, 0x260, 0x270] {
+        e.mem.set_u32(this.addr() + offset, 0);
+    }
+    e.call(NI_STREAM_FREE_LOAD_DATA, &args![this]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c3_a6d0, bs_stream_init_loaders()),
         entry!(0x00c3_a8a0, bs_stream_load(Ptr, u32, u32) -> u8),
         entry!(0x00c3_ac10, bs_stream_load_stream(Ptr) -> u8),
+        entry!(0x00c3_b370, bs_stream_free_all_objects(Ptr) -> u32),
         entry!(0x00c3_b9e0, fn_00c3b9e0(Ptr) -> u32),
         entry!(0x00c3_ba70, fn_00c3ba70(Ptr) -> u32),
         entry!(
@@ -765,5 +783,31 @@ mod stream_tests {
         e.mem.set_u32(stream + 0xd8, 20);
         e.mem.set_u32(stream + 0x28c, 2);
         assert_eq!(e.call(0x00c3_ac10, &args![stream]).u8(), 0);
+    }
+}
+
+#[cfg(test)]
+mod free_tests {
+    use super::*;
+
+    #[test]
+    fn free_all_objects_clears_the_four_words_between_the_two_calls() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x280);
+        for offset in [0x25cu32, 0x260, 0x26c, 0x270] {
+            e.mem.set_u32(this + offset, 7);
+        }
+        e.register(NI_STREAM_REMOVE_ALL_OBJECTS, |e, a| {
+            assert_eq!(e.mem.u32(a[0] + 0x25c), 7, "cleared after");
+            Ret::default()
+        });
+        e.register(NI_STREAM_FREE_LOAD_DATA, |e, a| {
+            assert_eq!(e.mem.u32(a[0] + 0x270), 0, "cleared before");
+            5u32.into_ret()
+        });
+        assert_eq!(e.call(0x00c3_b370, &args![this]).u32(), 5);
+        for offset in [0x25cu32, 0x260, 0x26c, 0x270] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
     }
 }
