@@ -445,6 +445,30 @@ pub fn isxdigit(e: &mut Engine, c: u32) -> u32 {
     class(e, c, 0x80, isxdigit_l)
 }
 
+// Translated from 00ec868b (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_isalpha_l` (LIBCMT/_ctype.c; cdecl: character, locale): class bits 0x103 (`_ALPHA`).
+pub fn isalpha_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    class_l(e, c, locale, 0x103)
+}
+
+// Translated from 00ec8711 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_isupper_l` (LIBCMT/_ctype.c; cdecl: character, locale): class bit 1 (`_UPPER`).
+pub fn isupper_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    class_l(e, c, locale, 1)
+}
+
+// Translated from 00ec8790 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_islower_l` (LIBCMT/_ctype.c; cdecl: character, locale): class bit 2 (`_LOWER`).
+pub fn islower_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    class_l(e, c, locale, 2)
+}
+
+// Translated from 00ec8993 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_isalnum_l` (LIBCMT/_ctype.c; cdecl: character, locale): class bits 0x107 (`_ALPHA | _DIGIT`).
+pub fn isalnum_l(e: &mut Engine, c: u32, locale: u32) -> u32 {
+    class_l(e, c, locale, 0x107)
+}
+
 // Translated from 00ed41d4 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `isleadbyte` (LIBCMT/_wctype.c; cdecl): `_isleadbyte_l(c, NULL)`.
 pub fn isleadbyte(e: &mut Engine, c: u32) -> u32 {
@@ -2414,6 +2438,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_8965, isspace(u32) -> u32),
         entry!(0x00ec_888e, isxdigit_l(u32, u32) -> u32),
         entry!(0x00ec_88e4, isxdigit(u32) -> u32),
+        entry!(0x00ec_868b, isalpha_l(u32, u32) -> u32),
+        entry!(0x00ec_8711, isupper_l(u32, u32) -> u32),
+        entry!(0x00ec_8790, islower_l(u32, u32) -> u32),
+        entry!(0x00ec_8993, isalnum_l(u32, u32) -> u32),
         entry!(0x00ed_41d4, isleadbyte(u32) -> u32),
         entry!(0x00ee_3928, mbtowc_l(u32, u32, u32, u32) -> i32),
         entry!(0x00ec_c300, allmul(u64, u64) -> u64),
@@ -2958,5 +2986,25 @@ mod tests {
         e.call(0x00ed_248e, &[]);
         assert_eq!(e.mem.u32(CFLTCVT_FASSIGN), 0x00ed_1aa7 ^ 0x5a5a_0000);
         assert_eq!(scan_float(&mut e, b"0.1"), (1, 0x3dcc_cccd));
+    }
+
+    #[test]
+    fn the_alpha_upper_lower_alnum_classes_mask_the_table() {
+        let (mut e, info) = engine();
+        // The test table has no _ALPHA (0x100) bit: the masks still read their own bits.
+        let table = e.mem.u32(info + 0xc8);
+        e.mem.set_u16(table + u32::from(b'q') * 2, 0x102);
+        assert_eq!(e.call(0x00ec_868b, &[u32::from(b'q'), 0]).u32(), 0x102);
+        assert_eq!(e.call(0x00ec_868b, &[u32::from(b'7'), 0]).u32(), 0);
+        assert_eq!(e.call(0x00ec_8711, &[u32::from(b'Q'), 0]).u32(), 1);
+        assert_eq!(e.call(0x00ec_8711, &[u32::from(b'q'), 0]).u32(), 0);
+        assert_eq!(e.call(0x00ec_8790, &[u32::from(b'q'), 0]).u32(), 2);
+        assert_eq!(e.call(0x00ec_8993, &[u32::from(b'7'), 0]).u32(), 4);
+        assert_eq!(e.call(0x00ec_8993, &[u32::from(b'q'), 0]).u32(), 0x102);
+        assert_eq!(e.call(0x00ec_8993, &[u32::from(b'-'), 0]).u32(), 0);
+        // A multibyte locale asks __isctype_l with the mask.
+        e.mem.set_u32(info + 0xac, 2);
+        e.register(0x00ed_41e7, |_, a| (a[1] << 8 | a[0]).into_ret());
+        assert_eq!(e.call(0x00ec_8993, &[0x41, 0]).u32(), 0x107 << 8 | 0x41);
     }
 }
