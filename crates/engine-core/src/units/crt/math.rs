@@ -4623,6 +4623,18 @@ fn dispatch_class(e: &Engine, x: X87Ext) -> (u32, u8) {
     (class as i8 as i32 as u32, shuffled)
 }
 
+// Translated from 00ed2550 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__trandisp1`: [`trandisp`] with one operand (`ST0`).
+fn trandisp1(e: &mut Engine, d: &mut Dispatch) {
+    trandisp(e, d, false);
+}
+
+// Translated from 00ed25b7 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__trandisp2`: [`trandisp`] with two operands (`ST0`, `ST1`).
+fn trandisp2(e: &mut Engine, d: &mut Dispatch) {
+    trandisp(e, d, true);
+}
+
 /// `__trandisp1` (`00ed2550`) and `__trandisp2` (`00ed25b7`): the dispatch control word (for
 /// the operation 5, the saved word with 53-bit precision and every exception masked; otherwise
 /// `0x133f`: 64-bit precision, round to nearest), the operands' classes and the handler the
@@ -4828,6 +4840,15 @@ fn exp_finite(e: &mut Engine, d: &mut Dispatch) {
     d.fpu.set(0, r);
 }
 
+// Translated from 00ed6133 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `__ctrandisp` entry of the dispatch tail: flag bit 0 cleared (`AND byte [EBP-0x2c8], 0xfe`:
+/// the arguments are on the stack), then the tail (`00ed613a`, [`dispatch_tail`]).
+fn dispatch_tail_from_ctrandisp(e: &mut Engine, d: &mut Dispatch, arguments: &[f64]) -> X87Ext {
+    d.flags &= !1;
+    dispatch_tail(e, d, arguments)
+}
+
+// Translated from 00ed613a (disassembled, FalloutNV.exe 1.4.0.525)
 /// The dispatch tail (`00ed6133`, which clears flag bit 0, falls into `00ed613a`): with the
 /// math-error switch set, the saved word back and `ST0` as it is. Otherwise the result is
 /// stored as a double (`FST`) and the error kind decides: 0 checks the precision flag (the
@@ -4966,9 +4987,8 @@ pub fn ctrandisp1(e: &mut Engine, descriptor: u32, _return_address: u32, x: f64)
     with_dispatch(e, descriptor, |e, d| {
         d.fpu.push(dispatch_load(x.to_bits()));
         d.flags &= !2;
-        trandisp(e, d, false);
-        d.flags &= !1;
-        dispatch_tail(e, d, &[x, 0.0]).store64()
+        trandisp1(e, d);
+        dispatch_tail_from_ctrandisp(e, d, &[x, 0.0]).store64()
     })
 }
 
@@ -4984,7 +5004,7 @@ pub fn cintrindisp1(e: &mut Engine, descriptor: u32, st0: f64) -> f64 {
             e.mem.set_u64(d.exception + 8, x.store64().to_bits());
         }
         d.fpu.push(x);
-        trandisp(e, d, false);
+        trandisp1(e, d);
         d.flags = (d.flags | 1) & !2;
         dispatch_tail(e, d, &[st0, 0.0]).store64()
     })
@@ -5000,9 +5020,8 @@ pub fn ctrandisp2(e: &mut Engine, descriptor: u32, _return_address: u32, y: f64,
         d.fpu.push(dispatch_load(y.to_bits()));
         d.fpu.push(dispatch_load(x.to_bits()));
         d.flags |= 2;
-        trandisp(e, d, true);
-        d.flags &= !1;
-        dispatch_tail(e, d, &[y, x]).store64()
+        trandisp2(e, d);
+        dispatch_tail_from_ctrandisp(e, d, &[y, x]).store64()
     })
 }
 
@@ -5019,7 +5038,7 @@ pub fn cintrindisp2(e: &mut Engine, descriptor: u32, st1: f64, st0: f64) -> f64 
         }
         d.fpu.push(y);
         d.fpu.push(x);
-        trandisp(e, d, true);
+        trandisp2(e, d);
         d.flags |= 3;
         dispatch_tail(e, d, &[st1, st0]).store64()
     })
@@ -6370,6 +6389,8 @@ mod tests {
         }
         // The loads read the constants: without them the run stops; the other bits read nothing.
         let mut bare = Engine::new();
+        // Engine::new maps the page of 011c2b60; the constants' words are dropped again.
+        bare.mem.unmap(0x011c_2000, 0x1000);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             bare.call(SET_STATFP, &args![1u32]);
         }));
@@ -9969,6 +9990,8 @@ mod tests_bodies {
     #[test]
     fn the_dispatch_fills_the_exception_from_the_stack_or_the_registers() {
         let (mut e, _, _) = dispatch_engine();
+        // The image holds 0x2694 at 011c2b60; this test takes the report path first.
+        e.set_global(MATHERR_SKIP, 0u32);
         let fields: Seen = Rc::default();
         let record = fields.clone();
         e.register_double(EXCEPT87, move |e, a| {

@@ -32,6 +32,8 @@ pub mod runtime;
 pub mod scanf;
 pub mod search;
 pub mod sort;
+#[cfg(any(test, feature = "test-support"))]
+pub mod start_up_test;
 pub mod startup;
 pub mod stat;
 pub mod stdio;
@@ -2242,92 +2244,82 @@ pub fn time64(e: &mut Engine, out: Ptr) -> u64 {
 
 // ---- Program ---------------------------------------------------------------
 
-// Platform: replaces 00ec658f (_atexit, LIBCMT) with its callee 00ec6468 (__onexit_nolock)
-/// Registers a function to run at exit: appends it to the CRT's table of
-/// exit functions (`ONEXIT_BEGIN`, `ONEXIT_END`), which [`doexit`] runs.
-/// Answers 0, or -1 when the table could not take it (`(f != 0) - 1` of
-/// `__onexit`'s answer, which is `f` when it was stored and 0 when not).
-///
-/// What the exe does and what differs here:
-/// - `__onexit_nolock` keeps the pointers in a heap block of words
-///   (`__encode_pointer`'d: the OS obfuscates pointers kept in writable
-///   memory; `EncodePointer` is the identity here, so the words are plain
-///   addresses and a null entry is 0). It grows the block by
-///   `min(size, 0x800)` bytes when full, or by 0x10 if that fails.
-/// - The table itself is made by the first C initializer, `00ec6522`
-///   (32 zeroed words from `__calloc_crt`, begin = end = the block); it has
-///   no Ghidra function, so the engine's start-up leaves it open and the
-///   first `atexit` makes the table the same way instead.
-/// - `_lock(8)` / `_unlock(8)` around it are no-ops: one thread.
+/// `__onexit` (`00ec6553`), `__encode_pointer` (`00ed0f17`), `_msize` (`00ecd31f`) and
+/// `__realloc_crt` (`00ed0d70`), all cdecl.
+const ONEXIT: u32 = 0x00ec_6553;
+const ENCODE_POINTER: u32 = 0x00ed_0f17;
+const MSIZE: u32 = 0x00ec_d31f;
+const REALLOC_CRT: u32 = 0x00ed_0d70;
+
+// Translated from 00ec658f (disassembled, FalloutNV.exe 1.4.0.525)
+/// `_atexit` (Ghidra's function ID), cdecl, a function: `__onexit(function)`, and 0 when
+/// that answers it (nonzero), -1 when it answers 0.
 pub fn atexit(e: &mut Engine, f: Ptr) -> i32 {
-    let stored = onexit(e, f.addr()).unwrap_or(0);
-    (stored != 0) as i32 - 1
+    let stored = e.call(ONEXIT, &args![f.addr()]).u32();
+    if stored != 0 {
+        0
+    } else {
+        -1
+    }
 }
 
 /// The words at `01271a8c` and `01271a88`: the start and the end (one past the last
-/// word) of the table of exit functions. The names (`__onexitbegin`,
-/// `__onexitend` in the CRT's source) are not confirmed in Ghidra.
+/// word) of the table of exit functions, both kept encoded (`__encode_pointer`). The names
+/// (`__onexitbegin`, `__onexitend` in the CRT's source) are not confirmed in Ghidra.
 const ONEXIT_BEGIN: u32 = 0x0127_1a8c;
 const ONEXIT_END: u32 = 0x0127_1a88;
 
-/// `__onexit_nolock`'s work for `f`: its address when stored, `None` when
-/// not (the exe answers 0).
-fn onexit(e: &mut Engine, f: u32) -> Option<u32> {
-    e.mem.map(ONEXIT_END, 8);
-    if e.mem.u32(ONEXIT_BEGIN) == 0 {
-        // 00ec6522: `__calloc_crt(32, 4)`; begin = end = the block; `AND
-        // [block],0`. (The exe answers 24, _RT_SPACEINIT, when the heap
-        // gives nothing; `Mem`'s heap stops with a panic instead.)
-        let table = calloc_crt(e, 32, 4).addr();
-        e.mem.set_u32(ONEXIT_BEGIN, table);
-        e.mem.set_u32(ONEXIT_END, table);
-        e.mem.set_u32(table, 0);
-    }
-    let begin = e.mem.u32(ONEXIT_BEGIN);
-    let end = e.mem.u32(ONEXIT_END);
-    // `JC`: the end below the start; then the byte count plus one word
-    // wrapping around.
+// Translated from 00ec6468 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__onexit_nolock` (Ghidra's function ID), cdecl, a function. The table's start and end
+/// are decoded; an end below the start, or a byte count whose next word wraps, answers 0.
+/// When the block (`_msize`) has no room for one more word it grows by its size, at most
+/// 0x800 bytes (`__realloc_crt`; the sum wrapping or the call failing tries 0x10 more,
+/// which failing or wrapping answers 0), the new start is stored encoded and the slot is
+/// the old byte count (as words, `SAR`) into it. The function is stored encoded, the end
+/// moved one word on (encoded) and the function answered.
+pub fn onexit_nolock(e: &mut Engine, function: u32) -> u32 {
+    let encoded = e.mem.u32(ONEXIT_BEGIN);
+    let begin = e.call(DECODE_POINTER, &args![encoded]).u32();
+    let encoded = e.mem.u32(ONEXIT_END);
+    let end = e.call(DECODE_POINTER, &args![encoded]).u32();
     if end < begin {
-        return None;
+        return 0;
     }
-    let used = end - begin;
+    let used = end.wrapping_sub(begin);
     if used.wrapping_add(4) < 4 {
-        return None;
+        return 0;
     }
-    let size = e
-        .mem
-        .block_size(begin)
-        .unwrap_or_else(|| panic!("the exit function table {begin:08x} is not a heap block"));
-    let mut at = end;
+    let size = e.call(MSIZE, &args![begin]).u32();
+    let mut slot = end;
     if size < used.wrapping_add(4) {
         let grow = size.min(0x800);
-        let block = match size
-            .checked_add(grow)
-            .and_then(|n| onexit_realloc(e, begin, n))
-        {
-            Some(b) => b,
-            None => size
-                .checked_add(0x10)
-                .and_then(|n| onexit_realloc(e, begin, n))?,
-        };
-        // `used >> 2` words (SAR) from the new start.
-        at = block.wrapping_add((((used as i32) >> 2) as u32).wrapping_mul(4));
-        e.mem.set_u32(ONEXIT_BEGIN, block);
+        let wanted = grow.wrapping_add(size);
+        let mut block = 0;
+        if wanted >= size {
+            block = e.call(REALLOC_CRT, &args![begin, wanted]).u32();
+        }
+        if block == 0 {
+            let wanted = size.wrapping_add(0x10);
+            if wanted < size {
+                return 0;
+            }
+            block = e.call(REALLOC_CRT, &args![begin, wanted]).u32();
+            if block == 0 {
+                return 0;
+            }
+        }
+        slot = ((used as i32) >> 2)
+            .wrapping_mul(4)
+            .wrapping_add(block as i32) as u32;
+        let encoded = e.call(ENCODE_POINTER, &args![block]).u32();
+        e.mem.set_u32(ONEXIT_BEGIN, encoded);
     }
-    e.mem.set_u32(at, f);
-    e.mem.set_u32(ONEXIT_END, at.wrapping_add(4));
-    Some(f)
-}
-
-/// `__realloc_crt` (`00ed0d70`) for the table: `Mem`'s heap, which does not
-/// fail; the old block is freed and its bytes are copied.
-fn onexit_realloc(e: &mut Engine, block: u32, size: u32) -> Option<u32> {
-    let old = e.mem.block_size(block)?;
-    let new = e.mem.alloc(size);
-    let kept = e.mem.bytes(block, old.min(size));
-    e.mem.write(new, &kept);
-    e.mem.free(block);
-    Some(new)
+    let encoded = e.call(ENCODE_POINTER, &args![function]).u32();
+    e.mem.set_u32(slot, encoded);
+    let next = slot.wrapping_add(4);
+    let encoded = e.call(ENCODE_POINTER, &args![next]).u32();
+    e.mem.set_u32(ONEXIT_END, encoded);
+    function
 }
 
 /// The `_initterm` ranges `doexit` runs, as the exe passes them (`PUSH end;
@@ -2390,37 +2382,49 @@ fn run_exit_table(e: &mut Engine, (start, end): (u32, u32), report: &mut ExitRep
     }
 }
 
-/// The part of `doexit` that runs the exit functions: from the last
-/// registered to the first, each cleared before it runs, and the walk
-/// restarted from the new end if a handler changed the table.
+/// `__encoded_null` (`00ed0f89`, no arguments).
+const ENCODED_NULL: u32 = 0x00ed_0f89;
+
+/// The part of `doexit` that runs the exit functions (`00eccdd8`..`00ecce63`): the table's
+/// start decoded (null: nothing to run) and its end; from the last word to the first,
+/// each word that is not the encoded null is decoded, replaced by the encoded null and
+/// called, and the walk restarts from the new end when the decoded start or end changed.
 fn run_onexit(e: &mut Engine, report: &mut ExitReport) {
     e.mem.map(ONEXIT_END, 8);
-    let mut begin = e.mem.u32(ONEXIT_BEGIN);
-    if begin == 0 {
+    let encoded = e.mem.u32(ONEXIT_BEGIN);
+    let mut low = e.call(DECODE_POINTER, &args![encoded]).u32();
+    if low == 0 {
         return;
     }
-    // The table as the walk last saw it; its start is the walk's lower bound.
-    let mut end = e.mem.u32(ONEXIT_END);
+    let encoded = e.mem.u32(ONEXIT_END);
+    let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+    // The table as the walk last saw it (EBP-0x1c, EBP-0x20).
+    let (mut seen_begin, mut seen_end) = (low, end);
     let mut at = end;
     loop {
         at = at.wrapping_sub(4);
-        if at < begin {
+        if at < low {
             break;
         }
-        if e.mem.u32(at) == 0 {
+        let null = e.call(ENCODED_NULL, &args![]).u32();
+        if e.mem.u32(at) == null {
             continue;
         }
-        // The exe compares `at` with the start a second time here (`JC`);
-        // it cannot differ from the test above.
-        if at < begin {
+        // The exe compares `at` with the start a second time here (`JC`).
+        if at < low {
             break;
         }
-        let f = e.mem.u32(at);
-        e.mem.set_u32(at, 0);
+        let word = e.mem.u32(at);
+        let f = e.call(DECODE_POINTER, &args![word]).u32();
+        let null = e.call(ENCODED_NULL, &args![]).u32();
+        e.mem.set_u32(at, null);
         exit_handler(e, f, report);
-        let (b, n) = (e.mem.u32(ONEXIT_BEGIN), e.mem.u32(ONEXIT_END));
-        if begin != b || end != n {
-            (begin, end, at) = (b, n, n);
+        let encoded = e.mem.u32(ONEXIT_BEGIN);
+        let begin = e.call(DECODE_POINTER, &args![encoded]).u32();
+        let encoded = e.mem.u32(ONEXIT_END);
+        let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+        if seen_begin != begin || seen_end != end {
+            (seen_begin, low, seen_end, at) = (begin, begin, end, end);
         }
     }
 }
@@ -6103,6 +6107,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
+        entry!(0x00ec_6468, onexit_nolock(u32) -> u32),
         (0x00eccd99, doexit_entry as AbiFn),
         entry!(0x00ec9e10, ceil(f64) -> f64),
         entry!(0x00ec605d, fn_00ec605d(bool, f64, u32, u32) -> f64),
@@ -6494,46 +6499,68 @@ mod exit_tests {
         order
     }
 
-    fn table_words(e: &Engine) -> Vec<u32> {
-        let (begin, end) = (e.mem.u32(ONEXIT_BEGIN), e.mem.u32(ONEXIT_END));
-        (begin..end).step_by(4).map(|a| e.mem.u32(a)).collect()
+    /// The exit table's functions, decoded as `doexit` decodes them.
+    fn table_words(e: &mut Engine) -> Vec<u32> {
+        let begin = table_begin(e);
+        let encoded = e.mem.u32(ONEXIT_END);
+        let end = e.call(DECODE_POINTER, &args![encoded]).u32();
+        (begin..end)
+            .step_by(4)
+            .map(|a| {
+                let word = e.mem.u32(a);
+                e.call(DECODE_POINTER, &args![word]).u32()
+            })
+            .collect()
+    }
+
+    /// The exit table's block (its start, decoded).
+    fn table_begin(e: &mut Engine) -> u32 {
+        let encoded = e.mem.u32(ONEXIT_BEGIN);
+        e.call(DECODE_POINTER, &args![encoded]).u32()
+    }
+
+    /// An engine after the start-up's exit-table set-up.
+    fn exit_engine() -> Engine {
+        let mut e = Engine::new();
+        start_up_test::exit_table(&mut e);
+        e
     }
 
     #[test]
     fn atexit_records_the_function_in_registration_order() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         assert_eq!(e.call(0x00ec658f, &[0x0090_0010]).i32(), 0);
         assert_eq!(e.call(0x00ec658f, &[0x0090_0020]).i32(), 0);
-        assert_eq!(table_words(&e), [0x0090_0010, 0x0090_0020]);
+        assert_eq!(table_words(&mut e), [0x0090_0010, 0x0090_0020]);
         // The exe's first table: 32 words of zeros, filled from the start.
-        let begin = e.mem.u32(ONEXIT_BEGIN);
+        let begin = table_begin(&mut e);
         assert_eq!(e.mem.block_size(begin), Some(128));
         assert_eq!(e.mem.u32(begin + 8), 0);
     }
 
     #[test]
     fn atexit_of_a_null_function_stores_it_and_answers_minus_one() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         assert_eq!(e.call(0x00ec658f, &[0]).i32(), -1);
-        assert_eq!(table_words(&e), [0]);
+        assert_eq!(table_words(&mut e), [0]);
     }
 
     #[test]
     fn the_table_grows_by_its_size_and_keeps_its_entries() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         for i in 0..100u32 {
             assert_eq!(atexit(&mut e, Ptr::new(0x0090_0000 + i)), 0);
         }
         let expect: Vec<u32> = (0..100).map(|i| 0x0090_0000 + i).collect();
-        assert_eq!(table_words(&e), expect);
+        assert_eq!(table_words(&mut e), expect);
         // 128 bytes, then 256 (full at 64 words), then 512 (128 words).
-        let begin = e.mem.u32(ONEXIT_BEGIN);
+        let begin = table_begin(&mut e);
         assert_eq!(e.mem.block_size(begin), Some(512));
     }
 
     #[test]
     fn doexit_runs_the_exit_functions_last_first_then_the_two_tables() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(
             &mut e,
             &[
@@ -6572,7 +6599,7 @@ mod exit_tests {
         assert!(report.open.is_empty() && report.stopped.is_empty());
         assert_eq!(report.exit_process, Some(5));
         // Each exit function was cleared before it ran.
-        assert_eq!(table_words(&e), [0, 0, 0]);
+        assert_eq!(table_words(&mut e), [0, 0, 0]);
         assert_eq!(e.mem.u32(EXIT_STARTED), 1);
         assert_eq!(e.mem.u32(EXIT_DONE), 1);
         assert_eq!(e.mem.u8(EXIT_RETURNS), 0);
@@ -6580,7 +6607,7 @@ mod exit_tests {
 
     #[test]
     fn a_quick_exit_runs_only_the_terminators() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010, 0x0090_1000, 0x0090_2000]);
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.mem.map(PRE_TERMINATORS.0, 0x20);
@@ -6590,12 +6617,12 @@ mod exit_tests {
         assert_eq!(*order.borrow(), [0x0090_2000]);
         assert_eq!(report.exit_process, Some(1));
         // The exit function is still registered.
-        assert_eq!(table_words(&e), [0x0090_0010]);
+        assert_eq!(table_words(&mut e), [0x0090_0010]);
     }
 
     #[test]
     fn a_second_exit_after_the_process_exit_began_runs_nothing() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_2000]);
         e.mem.map(PRE_TERMINATORS.0, 0x20);
         e.mem.set_u32(0x0101_1404, 0x0090_2000);
@@ -6608,7 +6635,7 @@ mod exit_tests {
 
     #[test]
     fn a_returning_exit_keeps_going_and_records_the_caller_flag() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_2000]);
         e.mem.map(PRE_TERMINATORS.0, 0x20);
         e.mem.set_u32(0x0101_1404, 0x0090_2000);
@@ -6622,7 +6649,7 @@ mod exit_tests {
 
     #[test]
     fn a_handler_that_registers_another_restarts_the_walk_at_the_new_end() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0020, 0x0090_0040]);
         let o = order.clone();
         e.register_double(0x0090_0030, move |e, _| {
@@ -6639,7 +6666,7 @@ mod exit_tests {
 
     #[test]
     fn handlers_nobody_translated_are_skipped_and_counted() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010]);
         // 00f00f00 is not translated; the handler at 00900030 stops in it.
         e.register(0x0090_0030, |e, _| e.call(0x00f0_0f00, &[]));
@@ -6658,7 +6685,7 @@ mod exit_tests {
     #[test]
     fn destructor_rows_run_through_the_exit_functions() {
         // 00fc7a70: call 00404a00 on 011c3264 (data/atexit_destructors.tsv).
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let seen: Order = Rc::default();
         let s = seen.clone();
         e.register_double(0x0040_4a00, move |_, a| {
@@ -6673,7 +6700,7 @@ mod exit_tests {
 
     #[test]
     fn doexit_is_callable_at_its_address() {
-        let mut e = Engine::new();
+        let mut e = exit_engine();
         let order = recorders(&mut e, &[0x0090_0010]);
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.call(0x00eccd99, &args![0u32, 0u32, 1u32]);

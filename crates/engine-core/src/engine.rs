@@ -35,6 +35,9 @@ macro_rules! assemble {
 /// The C runtime's `__sse2_available` and `__locale_changed` words ([`Engine::new`]).
 const CRT_SSE2_AVAILABLE: u32 = 0x0127_0a6c;
 const CRT_LOCALE_CHANGED: u32 = 0x0126_fdf4;
+/// The C runtime's math-error word (`011c2b60`, [`Engine::new`]) and its image value.
+const CRT_MATHERR_SKIP: u32 = 0x011c_2b60;
+const CRT_MATHERR_SKIP_IMAGE: u32 = 0x0000_2694;
 
 /// A test double that may keep state (see [`Engine::register_double`]).
 pub type Double = Rc<RefCell<dyn FnMut(&mut Engine, &[u32]) -> Ret>>;
@@ -131,6 +134,12 @@ impl Engine {
         // exe's non-SSE2 paths and the C locale.
         mem.map(CRT_SSE2_AVAILABLE, 4);
         mem.map(CRT_LOCALE_CHANGED, 4);
+        // The word `__handle_qnan1`, `__except1`, `__87except` and `__cintrindisp1/2` read
+        // before reporting a math error through `_umatherr` (`011c2b60`, `.data` inside its
+        // file contents): the image holds 0x2694 and nothing in the exe writes it, so it
+        // keeps that value for the whole run (nonzero: no report).
+        mem.map(CRT_MATHERR_SKIP, 4);
+        mem.write(CRT_MATHERR_SKIP, &CRT_MATHERR_SKIP_IMAGE.to_le_bytes());
         Engine {
             mem,
             funcs,
@@ -267,6 +276,12 @@ impl Engine {
 
     /// Registers (or replaces) the function at `addr`. Tests use this for
     /// doubles of callees that are not under test.
+    /// Whether something (a translation, a platform function or a double) is registered at
+    /// `addr`.
+    pub fn is_registered(&self, addr: u32) -> bool {
+        self.funcs.contains_key(&addr)
+    }
+
     pub fn register(&mut self, addr: u32, f: AbiFn) {
         self.funcs.insert(addr, Callable::Abi(f));
     }

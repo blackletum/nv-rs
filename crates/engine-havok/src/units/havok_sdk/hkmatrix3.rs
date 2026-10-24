@@ -1228,10 +1228,8 @@ mod tests {
     #[test]
     fn jacobi_rotation_of_a_zero_element_is_the_identity() {
         let mut e = Engine::new();
-        // The exe's sqrt/acos error path (a NaN or negative argument) reads 011c2b60 (nonzero
-        // skips the _umatherr report) and sets errno, a word of the thread's data: both set up.
-        e.mem.map(0x011c_2b60, 4);
-        e.mem.set_u32(0x011c_2b60, 1);
+        // The exe's sqrt/acos error path (a NaN or negative argument) sets errno, a word of
+        // the thread's data, which the bare engine does not have: doubled.
         let errno = e.mem.alloc(4);
         e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         setup_constants(&mut e);
@@ -1252,10 +1250,8 @@ mod tests {
     #[test]
     fn frobenius_norm() {
         let mut e = Engine::new();
-        // The exe's sqrt/acos error path (a NaN or negative argument) reads 011c2b60 (nonzero
-        // skips the _umatherr report) and sets errno, a word of the thread's data: both set up.
-        e.mem.map(0x011c_2b60, 4);
-        e.mem.set_u32(0x011c_2b60, 1);
+        // The exe's sqrt/acos error path (a NaN or negative argument) sets errno, a word of
+        // the thread's data, which the bare engine does not have: doubled.
         let errno = e.mem.alloc(4);
         e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         let m = matrix(&mut e, [[1.0, 2.0, 2.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);

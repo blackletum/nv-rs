@@ -5,8 +5,7 @@
 //! (`00ecd1be`), `__callnewh` (`00ede20b`), and the `__finally` block of the `eh vector
 //! destructor iterator` (`00ec6019`).
 //!
-//! `_atexit` (`00ec658f`) stays the platform stand-in in `crt.rs` (it does the work of
-//! `__onexit_nolock` itself and does not call `__onexit`). Every call is made by address, as
+//! `_atexit` (`00ec658f`) and `__onexit_nolock` (`00ec6468`) are in `crt.rs`. Every call is made by address, as
 //! the exe makes it, so a test can double each one.
 
 use super::*;
