@@ -2641,20 +2641,19 @@ pub fn fn_004492f0(e: &mut Engine, _this: Ptr, text: u32) -> u32 {
 
 // Translated from 004493d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Lower-cases the text into a 1000-byte buffer and runs [`fn_00449530`]
-/// with it and `argument`.
-pub fn fn_004493d0(e: &mut Engine, this: Ptr, text: u32, argument: u32) {
-    lowercase_into_buffer(e, text, |e, buffer| {
-        fn_00449530(e, this, buffer, argument);
-    });
+/// with it and `argument`, whose byte stays in `EAX` (the exe ends on that call; the cookie
+/// check after it keeps `EAX`): the map lookup's answer, which `ModelLoader::FindModel` reads.
+pub fn fn_004493d0(e: &mut Engine, this: Ptr, text: u32, argument: u32) -> u8 {
+    lowercase_into_buffer(e, text, |e, buffer| fn_00449530(e, this, buffer, argument))
 }
 
 // Translated from 00449460 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Lower-cases the text into a 1000-byte buffer and runs [`fn_00449580`]
-/// with it, `argument` and `flag`.
-pub fn fn_00449460(e: &mut Engine, this: Ptr, text: u32, argument: u32, flag: u8) {
+/// with it, `argument` and `flag`, whose byte stays in `EAX` (as in `fn_004493d0`).
+pub fn fn_00449460(e: &mut Engine, this: Ptr, text: u32, argument: u32, flag: u8) -> u8 {
     lowercase_into_buffer(e, text, |e, buffer| {
-        fn_00449580(e, this, buffer, argument, flag);
-    });
+        fn_00449580(e, this, buffer, argument, flag)
+    })
 }
 
 // Translated from 00449500 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3090,8 +3089,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00449280, fn_00449280(Ptr, u32) -> u8),
         entry!(0x004492c0, fn_004492c0(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x004492f0, fn_004492f0(Ptr, u32) -> u32),
-        entry!(0x004493d0, fn_004493d0(Ptr, u32, u32)),
-        entry!(0x00449460, fn_00449460(Ptr, u32, u32, u8)),
+        entry!(0x004493d0, fn_004493d0(Ptr, u32, u32) -> u8),
+        entry!(0x00449460, fn_00449460(Ptr, u32, u32, u8) -> u8),
         entry!(0x00449500, fn_00449500(Ptr, u32, Ptr)),
         entry!(0x00449530, fn_00449530(Ptr, u32, u32) -> u8),
         entry!(0x00449580, fn_00449580(Ptr, u32, u32, u8) -> u8),
@@ -5944,6 +5943,16 @@ mod tests {
         });
         e.call(0x0044_93d0, &args![this, source, 9u32]);
         assert_eq!(*seen.borrow(), vec!["abc"]);
+    }
+
+    #[test]
+    fn fn_004493d0_answers_the_lookups_byte() {
+        let mut e = engine();
+        lowering(&mut e);
+        let this = locked_wrapper(&mut e, 0x006e_c830, 0);
+        let source = text(&mut e, "AbC");
+        e.register(0x006e_c830, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x0044_93d0, &args![this, source, 9u32]).u8(), 1);
     }
 
     #[test]
