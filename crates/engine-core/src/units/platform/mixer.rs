@@ -103,7 +103,10 @@ pub fn render(voices: &mut [&mut Voice], out: &mut [f32]) {
                 let s = sample(&v.data, v.bits, at);
                 (s, s)
             } else {
-                (sample(&v.data, v.bits, 2 * at), sample(&v.data, v.bits, 2 * at + 1))
+                (
+                    sample(&v.data, v.bits, 2 * at),
+                    sample(&v.data, v.bits, 2 * at + 1),
+                )
             };
             frame[0] += if gl == 1.0 { l } else { l * gl };
             frame[1] += if gr == 1.0 { r } else { r * gr };
@@ -590,7 +593,10 @@ mod tests {
         let (l, r) = channel_gains(0, -1000);
         assert_eq!((l, r.to_bits()), (1.0, 0x3ea3c8a4));
         let (l, r) = channel_gains(-300, -700);
-        assert_eq!((l.to_bits(), r.to_bits()), (gain(-300).to_bits(), 0x3ea3c8a4));
+        assert_eq!(
+            (l.to_bits(), r.to_bits()),
+            (gain(-300).to_bits(), 0x3ea3c8a4)
+        );
     }
 
     #[test]

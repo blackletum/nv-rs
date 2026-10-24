@@ -92,6 +92,10 @@ pub struct Engine {
     pub trace: Option<std::collections::VecDeque<(u32, Vec<u32>, u32)>>,
     /// How many returned calls the trace keeps ([`TRACE_KEEP`] unless the host says otherwise).
     pub trace_keep: usize,
+    /// When set, how many more calls through [`Engine::call`] may run before the run stops with
+    /// "call budget spent" (a diagnostic for a run that loops for ever; the host's
+    /// `NV_MOVE_CALL_BUDGET`).
+    pub call_budget: Option<u64>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -155,6 +159,7 @@ impl Engine {
             on_open: None,
             trace: None,
             trace_keep: TRACE_KEEP,
+            call_budget: None,
         }
     }
 
@@ -325,6 +330,12 @@ impl Engine {
             }
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
         };
+        if let Some(budget) = &mut self.call_budget {
+            if *budget == 0 {
+                panic!("call budget spent (at {addr:08x})");
+            }
+            *budget -= 1;
+        }
         self.call_stack.push(addr);
         let ret = match f {
             Callable::Abi(f) => f(self, args),

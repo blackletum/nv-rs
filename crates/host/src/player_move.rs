@@ -416,6 +416,13 @@ impl PlayerMovement {
         let trace_file = std::env::var_os("NV_MOVE_TRACE");
         if trace_file.is_some() {
             e.trace = Some(Default::default());
+            // `NV_MOVE_CALL_BUDGET=N`: stop after N more calls (finds where a run loops).
+            if let Some(n) = std::env::var("NV_MOVE_CALL_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+            {
+                e.call_budget = Some(n);
+            }
             // `NV_MOVE_TRACE_KEEP=N`: keep the last N calls instead of `TRACE_KEEP`.
             if let Some(keep) = std::env::var("NV_MOVE_TRACE_KEEP")
                 .ok()

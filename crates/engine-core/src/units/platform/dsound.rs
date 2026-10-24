@@ -2328,7 +2328,10 @@ mod tests {
         let mut out = [0f32; 6];
         super::super::sound_out::Source::render(&mut *voices.lock().unwrap(), 22050, 2, &mut out);
         let x = |v: i16| f32::from(v) / 32768.0;
-        let (ga, gb) = (super::super::mixer::gain(-600), super::super::mixer::gain(-1000));
+        let (ga, gb) = (
+            super::super::mixer::gain(-600),
+            super::super::mixer::gain(-1000),
+        );
         for i in 0..3 {
             // b first (newest), its left side attenuated by the pan; then a at -6 dB.
             assert_eq!(out[2 * i], x(sb[i]) * gb + x(sa[i]) * ga);

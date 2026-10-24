@@ -68,7 +68,12 @@ mod wasapi {
     }
     #[link(name = "kernel32")]
     extern "system" {
-        fn CreateEventW(attributes: *mut c_void, manual: i32, initial: i32, name: *const u16) -> *mut c_void;
+        fn CreateEventW(
+            attributes: *mut c_void,
+            manual: i32,
+            initial: i32,
+            name: *const u16,
+        ) -> *mut c_void;
         fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
@@ -88,7 +93,8 @@ mod wasapi {
     type Fn2 = unsafe extern "system" fn(*mut Obj, usize, usize) -> u32;
     type Fn3 = unsafe extern "system" fn(*mut Obj, usize, usize, usize) -> u32;
     type Fn4 = unsafe extern "system" fn(*mut Obj, usize, usize, usize, usize) -> u32;
-    type FnInit = unsafe extern "system" fn(*mut Obj, u32, u32, i64, i64, *const u8, *const c_void) -> u32;
+    type FnInit =
+        unsafe extern "system" fn(*mut Obj, u32, u32, i64, i64, *const u8, *const c_void) -> u32;
 
     fn guid(s: &str) -> [u8; 16] {
         let h: Vec<u8> = s
@@ -141,7 +147,12 @@ mod wasapi {
             return None;
         }
         let mut dev: *mut Obj = std::ptr::null_mut();
-        let r = slot::<Fn3>(en, 0x10 * std::mem::size_of::<usize>() / 4)(en, 0, 0, &mut dev as *mut _ as usize);
+        let r = slot::<Fn3>(en, 0x10 * std::mem::size_of::<usize>() / 4)(
+            en,
+            0,
+            0,
+            &mut dev as *mut _ as usize,
+        );
         slot::<Fn0>(en, 2 * std::mem::size_of::<usize>())(en);
         if r != 0 {
             return None;
@@ -149,7 +160,13 @@ mod wasapi {
         let w = std::mem::size_of::<usize>();
         let mut client: *mut Obj = std::ptr::null_mut();
         let iid = guid("1cb9ad4c-dbfa-4c32-b178-c2f568a703b2");
-        let r = slot::<Fn4>(dev, 3 * w)(dev, iid.as_ptr() as usize, 0x17, 0, &mut client as *mut _ as usize);
+        let r = slot::<Fn4>(dev, 3 * w)(
+            dev,
+            iid.as_ptr() as usize,
+            0x17,
+            0,
+            &mut client as *mut _ as usize,
+        );
         slot::<Fn0>(dev, 2 * w)(dev);
         if r != 0 {
             return None;
@@ -179,7 +196,11 @@ mod wasapi {
         slot::<Fn1>(client, 4 * w)(client, &mut frames as *mut _ as usize);
         let mut render: *mut Obj = std::ptr::null_mut();
         let iid = guid("f294acfc-3146-4483-a7bf-addca7c260e2");
-        slot::<Fn2>(client, 14 * w)(client, iid.as_ptr() as usize, &mut render as *mut _ as usize);
+        slot::<Fn2>(client, 14 * w)(
+            client,
+            iid.as_ptr() as usize,
+            &mut render as *mut _ as usize,
+        );
         if render.is_null() {
             return None;
         }
