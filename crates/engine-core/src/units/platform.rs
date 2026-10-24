@@ -4,6 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+pub mod bink;
 pub mod d3d9;
 pub mod d3d9device;
 pub mod d3d9resource;
@@ -2332,6 +2333,53 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "WideCharToMultiByte",
             entry!(0, time::wide_char_to_multi_byte(u32, u32, Ptr, i32, Ptr, i32, Ptr, Ptr) -> u32).1,
         ),
+        // The Bink imports (`bink`, slot a11): begin.
+        (
+            "binkw32.dll",
+            "_BinkSetSoundSystem@8",
+            entry!(0, bink::set_sound_system(u32, u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkOpenDirectSound@4",
+            entry!(0, bink::open_direct_sound(u32) -> u32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkOpen@8",
+            entry!(0, bink::open(Ptr, u32) -> u32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkClose@4",
+            entry!(0, bink::close(u32)).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkDoFrame@4",
+            entry!(0, bink::do_frame(u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkNextFrame@4",
+            entry!(0, bink::next_frame(u32)).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkWait@4",
+            entry!(0, bink::wait(u32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkPause@8",
+            entry!(0, bink::pause(u32, i32) -> i32).1,
+        ),
+        (
+            "binkw32.dll",
+            "_BinkCopyToBufferRect@44",
+            entry!(0, bink::copy_to_buffer_rect(u32, Ptr, i32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32).1,
+        ),
+        // The Bink imports: end.
     ]
 }
 

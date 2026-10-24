@@ -12,3 +12,6 @@ description = "The core of the engine crates: the game's memory model, Engine, t
 test-support = []
 
 [dependencies]
+# The platform's Bink layer (units/platform/bink.rs) decodes with the
+# repository's own Bink 1 decoder.
+bink = { path = "../bink" }

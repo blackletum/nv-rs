@@ -68,6 +68,9 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+dependencies = [
+ "bink",
+]
 
 [[package]]
 name = "engine-fallout"
