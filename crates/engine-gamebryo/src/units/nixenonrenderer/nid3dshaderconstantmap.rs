@@ -5150,7 +5150,7 @@ pub fn ni_d3d_shader_constant_map_get_dynamic_effect_data(
                 put_four(e, o, values);
                 true
             }
-            5 | 6 | 7 => {
+            5..=7 => {
                 if l == 0 {
                     return zero_one(e);
                 }
