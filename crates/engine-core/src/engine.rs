@@ -32,6 +32,10 @@ macro_rules! assemble {
     };
 }
 
+/// The C runtime's `__sse2_available` and `__locale_changed` words ([`Engine::new`]).
+const CRT_SSE2_AVAILABLE: u32 = 0x0127_0a6c;
+const CRT_LOCALE_CHANGED: u32 = 0x0126_fdf4;
+
 /// A test double that may keep state (see [`Engine::register_double`]).
 pub type Double = Rc<RefCell<dyn FnMut(&mut Engine, &[u32]) -> Ret>>;
 
@@ -112,8 +116,17 @@ impl Engine {
         // too (a test that ran earlier on this host thread may have left
         // another word in it).
         crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        let mut mem = Mem::new();
+        // The C runtime words its string and memory routines read first, as the image
+        // holds them before the CRT start-up: `__sse2_available` (`01270a6c`) and
+        // `__locale_changed` (`0126fdf4`) lie in `.data` past its file contents, so they
+        // start as 0. In a real run the start-up's CPU check sets `__sse2_available` from
+        // the machine's CPUID answers; a fresh engine (the tests) therefore takes the
+        // exe's non-SSE2 paths and the C locale.
+        mem.map(CRT_SSE2_AVAILABLE, 4);
+        mem.map(CRT_LOCALE_CHANGED, 4);
         Engine {
-            mem: Mem::new(),
+            mem,
             funcs,
             call_log: None,
             tls: 0,

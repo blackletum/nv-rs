@@ -936,7 +936,7 @@ fn input_directive(e: &mut Engine, s: &mut Input) -> In {
                 d.reject = 0xff;
             }
             let table = s.ebp - IN_SCANSET;
-            memset(e, Ptr::new(table), 0, 0x20);
+            mem::memset(e, table, 0, 0x20);
             let mut last = if e.mem.u8(at) == b']' {
                 at = at.wrapping_add(1);
                 e.mem.set_u8(table + 0xb, 0x20);

@@ -19,6 +19,8 @@ pub mod fpinit;
 pub mod glue;
 pub mod lowio;
 pub mod math;
+pub mod mem;
+pub mod num2;
 pub mod printf;
 pub mod rtti;
 pub mod runtime;
@@ -28,45 +30,12 @@ pub mod sort;
 pub mod startup;
 pub mod stat;
 pub mod stdio;
+pub mod str2;
 pub mod string;
 pub mod time;
 pub mod trig;
 
 // ---- Memory ---------------------------------------------------------------
-
-// Platform: replaces 00ec44d0 (_memcpy, LIBCMT)
-pub fn memcpy(e: &mut Engine, dst: Ptr, src: Ptr, n: u32) -> Ptr {
-    let b = e.mem.bytes(src.addr(), n);
-    e.mem.write(dst.addr(), &b);
-    dst
-}
-
-// Platform: replaces 00ec7230 (memmove, LIBCMT)
-pub fn memmove(e: &mut Engine, dst: Ptr, src: Ptr, n: u32) -> Ptr {
-    memcpy(e, dst, src, n)
-}
-
-// Platform: replaces 00ec61c0 (_memset, LIBCMT)
-pub fn memset(e: &mut Engine, dst: Ptr, c: i32, n: u32) -> Ptr {
-    e.mem.write(dst.addr(), &vec![c as u8; n as usize]);
-    dst
-}
-
-// Platform: replaces 00ec4835 (_memcmp, LIBCMT)
-pub fn memcmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let (x, y) = (e.mem.bytes(a.addr(), n), e.mem.bytes(b.addr(), n));
-    sign(x.cmp(&y))
-}
-
-fn sign(o: std::cmp::Ordering) -> i32 {
-    o as i32
-}
-
-// Platform: replaces 00ec3bad (_byteswap_ulong, LIBCMT)
-/// Reverses the byte order of a 32-bit value (cdecl, one word).
-pub fn byteswap_ulong(_e: &mut Engine, value: u32) -> u32 {
-    value.swap_bytes()
-}
 
 // Platform: replaces 00ec3bf0 (_byteswap_uint64, LIBCMT)
 /// Reverses the byte order of a 64-bit value (cdecl, two words, low word
@@ -182,24 +151,6 @@ pub fn msize(e: &mut Engine, block: Ptr) -> u32 {
 
 // ---- Strings --------------------------------------------------------------
 
-// Platform: replaces 00ec6130 (_strlen, LIBCMT)
-pub fn strlen(e: &mut Engine, s: Ptr) -> u32 {
-    e.mem.cstr(s.addr()).len() as u32
-}
-
-// Platform: replaces 00ec6370 (strcpy, LIBCMT)
-pub fn strcpy(e: &mut Engine, dst: Ptr, src: Ptr) -> Ptr {
-    let s = e.mem.cstr(src.addr());
-    e.mem.set_cstr(dst.addr(), &s);
-    dst
-}
-
-/// The `_s` functions' failure: MSVC calls the invalid-parameter handler,
-/// which in a release build ends the program.
-fn invalid_parameter(what: &str) -> ! {
-    panic!("CRT invalid parameter: {what}")
-}
-
 /// `__gcvt_s` (`00ecdbf6`, cdecl: buffer, size, the double's two words, digits).
 const GCVT_S: u32 = 0x00ec_dbf6;
 
@@ -243,142 +194,8 @@ pub fn eh_vector_destructor_iterator(
     }
 }
 
-// Platform: replaces 00ec6bd2 (_strcat_s, LIBCMT)
-pub fn strcat_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr) -> i32 {
-    let mut d = e.mem.cstr(dst.addr());
-    d.extend(e.mem.cstr(src.addr()));
-    if d.len() as u32 >= size {
-        invalid_parameter("strcat_s");
-    }
-    e.mem.set_cstr(dst.addr(), &d);
-    0
-}
-
 /// `_TRUNCATE` for the `count` of `strncpy_s`.
 pub const TRUNCATE: u32 = 0xffff_ffff;
-
-// Platform: replaces 00ec8d5f (_strncpy_s, LIBCMT)
-pub fn strncpy_s(e: &mut Engine, dst: Ptr, size: u32, src: Ptr, count: u32) -> i32 {
-    let mut s = e.mem.cstr(src.addr());
-    if count != TRUNCATE {
-        s.truncate(count as usize);
-    }
-    if s.len() as u32 >= size {
-        if count == TRUNCATE && size > 0 {
-            s.truncate(size as usize - 1);
-            e.mem.set_cstr(dst.addr(), &s);
-            return 80; // STRUNCATE
-        }
-        invalid_parameter("strncpy_s");
-    }
-    e.mem.set_cstr(dst.addr(), &s);
-    0
-}
-
-fn cmp_bytes(a: &[u8], b: &[u8]) -> i32 {
-    sign(a.cmp(b))
-}
-
-// Platform: replaces 00ec8a19 (strncmp, LIBCMT)
-pub fn strncmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let mut x = e.mem.cstr(a.addr());
-    let mut y = e.mem.cstr(b.addr());
-    x.truncate(n as usize);
-    y.truncate(n as usize);
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec68e4 (__stricmp, LIBCMT; C locale)
-pub fn stricmp(e: &mut Engine, a: Ptr, b: Ptr) -> i32 {
-    let x: Vec<u8> = e
-        .mem
-        .cstr(a.addr())
-        .iter()
-        .map(u8::to_ascii_lowercase)
-        .collect();
-    let y: Vec<u8> = e
-        .mem
-        .cstr(b.addr())
-        .iter()
-        .map(u8::to_ascii_lowercase)
-        .collect();
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec7ec0 (__strnicmp, LIBCMT; C locale)
-pub fn strnicmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
-    let low = |s: Vec<u8>| -> Vec<u8> {
-        s.iter()
-            .take(n as usize)
-            .map(u8::to_ascii_lowercase)
-            .collect()
-    };
-    let x = low(e.mem.cstr(a.addr()));
-    let y = low(e.mem.cstr(b.addr()));
-    cmp_bytes(&x, &y)
-}
-
-// Platform: replaces 00ec7690 (strchr, LIBCMT)
-pub fn strchr(e: &mut Engine, s: Ptr, c: i32) -> Ptr {
-    let bytes = e.mem.cstr(s.addr());
-    let c = c as u8;
-    if c == 0 {
-        return Ptr::new(s.addr() + bytes.len() as u32);
-    }
-    match bytes.iter().position(|&b| b == c) {
-        Some(i) => Ptr::new(s.addr() + i as u32),
-        None => Ptr::NULL,
-    }
-}
-
-// Platform: replaces 00ec67aa (tolower, LIBCMT; C locale)
-pub fn tolower(_e: &mut Engine, c: i32) -> i32 {
-    if (b'A' as i32..=b'Z' as i32).contains(&c) {
-        c + 32
-    } else {
-        c
-    }
-}
-
-// Platform: replaces 00eca7f4 (toupper, LIBCMT; C locale)
-pub fn toupper(_e: &mut Engine, c: i32) -> i32 {
-    if (b'a' as i32..=b'z' as i32).contains(&c) {
-        c - 32
-    } else {
-        c
-    }
-}
-
-/// C `atol`/`strtol` base 10: optional space, sign, digits; wraps like
-/// MSVC's `atol` on overflow is not relied on by the game.
-fn parse_long(s: &[u8]) -> i32 {
-    let mut i = 0;
-    while i < s.len() && (s[i] == b' ' || (9..=13).contains(&s[i])) {
-        i += 1;
-    }
-    let mut neg = false;
-    if i < s.len() && (s[i] == b'-' || s[i] == b'+') {
-        neg = s[i] == b'-';
-        i += 1;
-    }
-    let mut v: i64 = 0;
-    while i < s.len() && s[i].is_ascii_digit() {
-        v = (v * 10 + (s[i] - b'0') as i64).min(i64::from(i32::MAX) + 1);
-        i += 1;
-    }
-    let v = if neg { -v } else { v };
-    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
-}
-
-// Platform: replaces 00eca6d3 (atol, LIBCMT)
-pub fn atol(e: &mut Engine, s: Ptr) -> i32 {
-    parse_long(&e.mem.cstr(s.addr()))
-}
-
-// Platform: replaces 00eca6bd (_atol's body, strtol(s, NULL, 10), LIBCMT; 00eca6d3 jumps here)
-pub fn atol_body(e: &mut Engine, s: Ptr) -> i32 {
-    parse_long(&e.mem.cstr(s.addr()))
-}
 
 /// `_LocaleUpdate::_LocaleUpdate` (`00ec660e`, thiscall, one word: the
 /// locale or null): fills the 0x10-byte object (locale info, multibyte
@@ -1585,7 +1402,7 @@ fn string_type_wide(
     count: u32,
     result_slot: u32,
 ) -> u32 {
-    memset(e, Ptr::new(buffer), 0, count.wrapping_mul(2));
+    mem::memset(e, buffer, 0, count.wrapping_mul(2));
     let converted = e
         .call(
             IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
@@ -2002,7 +1819,7 @@ pub fn ansicp(e: &mut Engine, lcid: u32) -> u32 {
         {
             u32::MAX
         } else {
-            atol_body(e, Ptr::new(buffer)) as u32
+            str2::atol_body(e, buffer) as u32
         }
     })
 }
@@ -2116,7 +1933,7 @@ struct ConvertArgs {
 /// out to the target code page; releases the wide buffer.
 fn convert_wide(e: &mut Engine, wide: u32, a: ConvertArgs) -> u32 {
     let mut result = 0;
-    memset(e, Ptr::new(wide), 0, a.count.wrapping_mul(2));
+    mem::memset(e, wide, 0, a.count.wrapping_mul(2));
     let converted = e
         .call(
             IMPORT_MULTI_BYTE_TO_WIDE_CHAR,
@@ -2289,52 +2106,7 @@ pub fn freefls(e: &mut Engine, block: u32) {
     free(e, Ptr::new(block));
 }
 
-/// C `atof`: the longest prefix that is a decimal floating-point number.
-fn parse_double(s: &[u8]) -> f64 {
-    let t: Vec<u8> = s
-        .iter()
-        .copied()
-        .skip_while(|c| *c == b' ' || (9..=13).contains(c))
-        .collect();
-    let mut end = 0;
-    let mut best = 0.0;
-    for i in 1..=t.len() {
-        if let Ok(v) = std::str::from_utf8(&t[..i]).unwrap_or("x").parse::<f64>() {
-            best = v;
-            end = i;
-        }
-    }
-    let _ = end;
-    best
-}
-
-// Platform: replaces 00eca573 (atof, LIBCMT)
-pub fn atof(e: &mut Engine, s: Ptr) -> f64 {
-    parse_double(&e.mem.cstr(s.addr()))
-}
-
 // ---- Numbers --------------------------------------------------------------
-
-// Platform: replaces 00ec62c0 (_ftol2, LIBCMT)
-/// Float to 64-bit integer, truncating toward zero. The value comes in
-/// x87 `ST0`, so in the uniform form it is a leading `f64`.
-pub fn ftol2(_e: &mut Engine, v: f64) -> u64 {
-    if v.is_nan() || v >= 9_223_372_036_854_775_808.0 || v < -9_223_372_036_854_775_808.0 {
-        0x8000_0000_0000_0000 // the x87 "integer indefinite"
-    } else {
-        v.trunc() as i64 as u64
-    }
-}
-
-// Platform: replaces 00ec6040 (_CIsqrt, LIBCMT): argument in ST0.
-pub fn ci_sqrt(_e: &mut Engine, v: f64) -> f64 {
-    v.sqrt()
-}
-
-// Platform: replaces 00ec6054 (sqrt, LIBCMT): argument on the stack.
-pub fn sqrt(_e: &mut Engine, v: f64) -> f64 {
-    v.sqrt()
-}
 
 // Platform: replaces 00ec782f (`eh vector constructor iterator', MSVC runtime;
 // stdcall: array, element size, count, constructor, destructor): runs the
@@ -2400,7 +2172,7 @@ pub fn ctrlfp(e: &mut Engine, newctrl: u32, mask: u32) -> i32 {
     i32::from(old as i16)
 }
 
-// Platform: replaces 00ec8660 (__alloca_probe, LIBCMT)
+// Translated from 00ec8660 (disassembled, FalloutNV.exe 1.4.0.525)
 /// The stack probe the compiler calls before a large frame. It takes its inputs in
 /// registers, so they come first: `size` is `EAX` (the bytes wanted) and `esp` the value
 /// of `ESP` at entry (it points at the return address). It touches each page between the
@@ -2428,7 +2200,7 @@ pub fn alloca_probe(e: &mut Engine, size: u32, esp: u32) -> u32 {
 const GET_SYSTEM_TIME_AS_FILE_TIME_SLOT: u32 = 0x00fd_f184;
 const AULLDIV: u32 = 0x00ec_c590;
 
-// Platform: replaces 00ecadda (__time64, LIBCMT)
+// Translated from 00ecadda (disassembled, FalloutNV.exe 1.4.0.525)
 /// `__time64(__time64_t *)` (cdecl): the seconds since 1970-01-01. The `FILETIME` from
 /// `GetSystemTimeAsFileTime` (100 ns units since 1601) has 116444736000000000 added (as the
 /// exe does, `0xfe624e212ac18000` modulo 2^64) and is divided by 10000000 through
@@ -2692,11 +2464,6 @@ pub fn doexit(e: &mut Engine, code: i32, quick: i32, retcaller: i32) -> ExitRepo
 fn doexit_entry(e: &mut Engine, words: &[u32]) -> Ret {
     doexit(e, words[0] as i32, words[1] as i32, words[2] as i32);
     Ret::default()
-}
-
-// Platform: replaces 00ec7c56 (the invalid-parameter path, LIBCMT)
-pub fn invalid_parameter_noinfo(_e: &mut Engine) {
-    invalid_parameter("noinfo")
 }
 
 // ---- The physics step's remaining runtime functions ----------------------------------------
@@ -4662,7 +4429,7 @@ pub fn fwrite_nolock(e: &mut Engine, buffer: Ptr, size: u32, count: u32, stream:
             }
             let chunk = if left < room { left } else { room };
             let target = e.mem.u32(stream);
-            memcpy(e, Ptr::new(target), Ptr::new(data), chunk);
+            mem::memcpy(e, target, data, chunk);
             e.mem.set_u32(stream + 4, room.wrapping_sub(chunk));
             e.mem.set_u32(stream, target.wrapping_add(chunk));
             left = left.wrapping_sub(chunk);
@@ -6266,29 +6033,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00401000, operator_new(u32) -> Ptr),
         entry!(0x00401460, memcpy_wrapper(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00403d30, memset_wrapper(Ptr, i32, u32) -> Ptr),
-        entry!(0x00ec44d0, memcpy(Ptr, Ptr, u32) -> Ptr),
-        entry!(0x00ec7230, memmove(Ptr, Ptr, u32) -> Ptr),
-        entry!(0x00ec61c0, memset(Ptr, i32, u32) -> Ptr),
-        entry!(0x00ec4835, memcmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec3bad, byteswap_ulong(u32) -> u32),
         entry!(0x00ec3bf0, byteswap_uint64(u64) -> u64),
         entry!(0x00ed0cdf, malloc(u32) -> Ptr),
         entry!(0x00ecd291, free(Ptr)),
         entry!(0x00ec_cf5d, realloc(Ptr, u32) -> Ptr),
         entry!(0x00ec_d31f, msize(Ptr) -> u32),
         entry!(0x00ed0d24, calloc_crt(u32, u32) -> Ptr),
-        entry!(0x00ec6130, strlen(Ptr) -> u32),
-        entry!(0x00ec6370, strcpy(Ptr, Ptr) -> Ptr),
-        entry!(0x00ec6bd2, strcat_s(Ptr, u32, Ptr) -> i32),
-        entry!(0x00ec8d5f, strncpy_s(Ptr, u32, Ptr, u32) -> i32),
-        entry!(0x00ec8a19, strncmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec68e4, stricmp(Ptr, Ptr) -> i32),
-        entry!(0x00ec7ec0, strnicmp(Ptr, Ptr, u32) -> i32),
-        entry!(0x00ec7690, strchr(Ptr, i32) -> Ptr),
-        entry!(0x00ec67aa, tolower(i32) -> i32),
-        entry!(0x00eca7f4, toupper(i32) -> i32),
-        entry!(0x00eca6d3, atol(Ptr) -> i32),
-        entry!(0x00eca6bd, atol_body(Ptr) -> i32),
         entry!(0x00ec8d08, strtol(u32, u32, i32) -> i32),
         entry!(0x00ec8ad9, strtoxl(u32, u32, u32, i32, u32) -> u32),
         entry!(0x00ed1165, getptd_noexit() -> u32),
@@ -6339,10 +6089,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ecd1c7, malloc_body(u32) -> u32),
         entry!(0x00ec8e14, freea(u32)),
         entry!(0x00ed11f8, freefls(u32)),
-        entry!(0x00eca573, atof(Ptr) -> f64),
-        entry!(0x00ec62c0, ftol2(f64) -> u64),
-        entry!(0x00ec6040, ci_sqrt(f64) -> f64),
-        entry!(0x00ec6054, sqrt(f64) -> f64),
         entry!(
             0x00ec782f,
             eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
@@ -6352,7 +6098,6 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ecadda, time64(Ptr) -> u64),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
         (0x00eccd99, doexit_entry as AbiFn),
-        entry!(0x00ec7c56, invalid_parameter_noinfo()),
         entry!(0x00ec9e10, ceil(f64) -> f64),
         entry!(0x00ec605d, fn_00ec605d(bool, f64, u32, u32) -> f64),
         entry!(0x00ec85e3, errno() -> Ptr),
@@ -6417,6 +6162,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(glue::funcs());
     table.extend(lowio::funcs());
     table.extend(math::funcs());
+    table.extend(mem::funcs());
+    table.extend(num2::funcs());
     table.extend(printf::funcs());
     table.extend(rtti::funcs());
     table.extend(runtime::funcs());
@@ -6424,6 +6171,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(search::funcs());
     table.extend(sort::funcs());
     table.extend(stdio::funcs());
+    table.extend(str2::funcs());
     table.extend(string::funcs());
     table.extend(startup::funcs());
     table.extend(stat::funcs());
@@ -6599,6 +6347,17 @@ mod tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00ec_62c0, &args![-2.75f64]).u64() as i64, -2);
         assert_eq!(e.call(0x00ec_62c0, &args![f64::NAN]).u64(), 1 << 63);
+        // `atol` and `atof` hand their text to `strtol(text, NULL, 10)` (`00ec8d08`) and
+        // `_atof_l(text, NULL)` (`00eca4c8`), which read the locale data of the exe image:
+        // doubled here to answer -42 and 150.
+        e.register(0x00ec_8d08, |_, a| {
+            assert_eq!(&a[1..], &[0, 10]);
+            (-42i32).into_ret()
+        });
+        e.register(0x00ec_a4c8, |_, a| {
+            assert_eq!(a[1], 0);
+            150.0f64.into_ret()
+        });
         let s = cstr(&mut e, b"  -42xyz");
         assert_eq!(e.call(0x00ec_a6d3, &args![s]).i32(), -42);
         let f = cstr(&mut e, b"1.5e2 rest");
@@ -8991,6 +8750,13 @@ mod runtime_support_tests {
     #[test]
     fn ansicp_reads_the_locales_code_page() {
         let mut e = engine();
+        // `atol`'s body hands the text to `strtol(text, NULL, 10)` (`00ec8d08`), which reads
+        // the exe image's locale data: doubled to parse the decimal digits.
+        e.register(0x00ec_8d08, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            let digits: String = text.iter().map(|&c| c as char).collect();
+            digits.parse::<u32>().unwrap_or(0).into_ret()
+        });
         e.register(IMPORT_GET_LOCALE_INFO_A, |e, a| {
             assert_eq!((a[0], a[1], a[3]), (0x409, 0x1004, 6));
             e.mem.write(a[2], b"1252\0");

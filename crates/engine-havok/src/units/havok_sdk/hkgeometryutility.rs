@@ -2666,6 +2666,12 @@ mod tests {
     #[test]
     fn the_axes_are_the_solved_rows_made_right_handed() {
         let mut e = numeric_engine();
+        // The exe's sqrt/acos error path (a NaN or negative argument) reads 011c2b60 (nonzero
+        // skips the _umatherr report) and sets errno, a word of the thread's data: both set up.
+        e.mem.map(0x011c_2b60, 4);
+        e.mem.set_u32(0x011c_2b60, 1);
+        let errno = e.mem.alloc(4);
+        e.register_double(0x00ec_85e3, move |_, _| errno.into_ret());
         let record = e.mem.alloc(4);
         let original = [
             [4.0f32, 1.0, 2.0, 0.0],
