@@ -3,6 +3,7 @@ use crate::mem::Mem;
 use crate::ptr::{Field, Layout, Ptr, Scalar};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -54,10 +55,56 @@ enum Callable {
     Double(Double),
 }
 
+/// The hasher of the function table and the call profile: their keys are exe addresses (and
+/// caller/address pairs), so a multiply whose high half is folded back into the low one
+/// spreads them well, at a fraction of SipHash's cost ([`Engine::call`] runs millions of
+/// times a second).
+#[derive(Default, Clone, Copy)]
+pub struct AddrHasher(u64);
+
+impl Hasher for AddrHasher {
+    fn finish(&self) -> u64 {
+        let p = self.0.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        p ^ (p >> 32)
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.0 = self.0.rotate_left(32) ^ u64::from(n);
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = self.0.rotate_left(32) ^ n;
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+/// A map keyed by exe address (or a caller/address pair) with [`AddrHasher`].
+pub type AddrMap<K, V> = HashMap<K, V, BuildHasherDefault<AddrHasher>>;
+
+/// How many entries [`Engine::call`]'s direct-mapped cache of plain functions has (a power of
+/// two).
+const CALL_CACHE_LEN: usize = 1 << 14;
+
+/// The cache slot of `addr` (Fibonacci hashing: the top bits of the product).
+#[inline(always)]
+fn cache_slot(addr: u32) -> usize {
+    (addr.wrapping_mul(0x9e37_79b1) >> (32 - CALL_CACHE_LEN.trailing_zeros())) as usize
+}
+
 /// The game's memory plus every translated function, by exe address.
 pub struct Engine {
     pub mem: Mem,
-    funcs: HashMap<u32, Callable>,
+    funcs: AddrMap<u32, Callable>,
+    /// A direct-mapped cache in front of `funcs` for plain functions (doubles never enter it):
+    /// (address, function) at [`cache_slot`] of the address, `None` when empty.
+    /// [`Engine::register`] and [`Engine::register_double`] empty the slot of the address they
+    /// change, so it always answers as `funcs` does.
+    call_cache: Box<[(u32, Option<AbiFn>)]>,
     /// When `Some`, every call made through [`Engine::call`] is recorded
     /// as (address, argument words). Tests use it to check what a
     /// translation called.
@@ -100,7 +147,7 @@ pub struct Engine {
     /// [`Engine::call`], keyed `caller << 32 | address` (the caller is the innermost function on
     /// the call stack, 0 at a stage's top): where a long run spends its calls (the host's
     /// `NV_MOVE_CALL_PROFILE`).
-    pub call_counts: Option<std::collections::HashMap<u64, u64>>,
+    pub call_counts: Option<AddrMap<u64, u64>>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -125,7 +172,7 @@ impl Engine {
         // `assemble!` defines in the crate assembling the engine; it only
         // appends to `list`.
         unsafe { nv_engine_assembled_funcs(&mut list) };
-        let mut funcs = HashMap::with_capacity(list.len());
+        let mut funcs = AddrMap::with_capacity_and_hasher(list.len(), Default::default());
         for (addr, f) in list {
             if funcs.insert(addr, Callable::Abi(f)).is_some() {
                 panic!("{addr:08x} is registered twice");
@@ -154,6 +201,7 @@ impl Engine {
         Engine {
             mem,
             funcs,
+            call_cache: vec![(0, None); CALL_CACHE_LEN].into_boxed_slice(),
             call_log: None,
             tls: 0,
             clock_ms: 0,
@@ -298,6 +346,7 @@ impl Engine {
 
     pub fn register(&mut self, addr: u32, f: AbiFn) {
         self.funcs.insert(addr, Callable::Abi(f));
+        self.call_cache[cache_slot(addr)] = (0, None);
     }
 
     /// Registers a test double that keeps state (counts calls, returns a
@@ -310,6 +359,7 @@ impl Engine {
     ) {
         self.funcs
             .insert(addr, Callable::Double(Rc::new(RefCell::new(f))));
+        self.call_cache[cache_slot(addr)] = (0, None);
     }
 
     /// Calls the function at exe address `addr` with argument words in
@@ -321,6 +371,12 @@ impl Engine {
     pub fn call(&mut self, addr: u32, args: &[u32]) -> Ret {
         if let Some(log) = &mut self.call_log {
             log.push((addr, args.to_vec()));
+        }
+        let slot = cache_slot(addr);
+        if let (cached, Some(f)) = self.call_cache[slot] {
+            if cached == addr {
+                return self.run(addr, args, Callable::Abi(f));
+            }
         }
         let Some(f) = self.funcs.get(&addr).cloned() else {
             if let Some(row) = crate::static_exit::row(addr) {
@@ -336,6 +392,16 @@ impl Engine {
             }
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
         };
+        if let Callable::Abi(plain) = f {
+            self.call_cache[slot] = (addr, Some(plain));
+        }
+        self.run(addr, args, f)
+    }
+
+    /// The rest of [`Engine::call`] once the callee is found: the budget, the profile, the
+    /// call stack, the call itself and the trace.
+    #[inline(always)]
+    fn run(&mut self, addr: u32, args: &[u32], f: Callable) -> Ret {
         if let Some(budget) = &mut self.call_budget {
             if *budget == 0 {
                 panic!("call budget spent (at {addr:08x})");
@@ -344,7 +410,9 @@ impl Engine {
         }
         if let Some(counts) = &mut self.call_counts {
             let caller = self.call_stack.last().copied().unwrap_or(0);
-            *counts.entry(u64::from(caller) << 32 | u64::from(addr)).or_default() += 1;
+            *counts
+                .entry(u64::from(caller) << 32 | u64::from(addr))
+                .or_default() += 1;
         }
         self.call_stack.push(addr);
         let ret = match f {
@@ -353,10 +421,16 @@ impl Engine {
         };
         self.call_stack.pop();
         if let Some(trace) = &mut self.trace {
-            if trace.len() >= self.trace_keep {
-                trace.pop_front();
-            }
-            trace.push_back((addr, args.to_vec(), ret.eax));
+            // A full ring hands its oldest entry's word buffer to the newest: no allocation
+            // per call once full.
+            let mut words = if trace.len() >= self.trace_keep {
+                trace.pop_front().map(|(_, w, _)| w).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            words.clear();
+            words.extend_from_slice(args);
+            trace.push_back((addr, words, ret.eax));
         }
         ret
     }
@@ -372,10 +446,19 @@ impl Engine {
     pub fn vcall(&mut self, this: u32, slot: u32, args: &[u32]) -> Ret {
         let vtable = self.mem.u32(this);
         let target = self.mem.u32(vtable.wrapping_add(slot));
-        let mut words = Vec::with_capacity(args.len() + 1);
-        words.push(this);
-        words.extend_from_slice(args);
-        self.call(target, &words)
+        // `this` and the arguments on the stack when they fit (no allocation per call).
+        const INLINE: usize = 15;
+        if args.len() <= INLINE {
+            let mut words = [0u32; INLINE + 1];
+            words[0] = this;
+            words[1..=args.len()].copy_from_slice(args);
+            self.call(target, &words[..=args.len()])
+        } else {
+            let mut words = Vec::with_capacity(args.len() + 1);
+            words.push(this);
+            words.extend_from_slice(args);
+            self.call(target, &words)
+        }
     }
 
     /// Field read through a typed pointer.
@@ -457,6 +540,101 @@ mod tests {
         });
         assert_eq!(e.call(0x0040_1000, &args![2u32]).u32(), 2);
         assert_eq!(e.call(0x0040_1000, &args![3u32]).u32(), 5);
+    }
+
+    /// A one-line getter in the uniform form, as the game's field getters are translated.
+    fn field_getter(e: &mut Engine, this: Ptr) -> u32 {
+        e.mem.u32(this.addr() + 4)
+    }
+
+    /// A function registered or replaced after it was called answers from then on (the
+    /// call cache follows the table).
+    #[test]
+    fn replacing_a_called_function_takes_effect() {
+        let mut e = Engine::new();
+        e.register(0x0040_2000, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0040_2000, &[]).u32(), 1);
+        e.register(0x0040_2000, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0040_2000, &[]).u32(), 2);
+        e.register_double(0x0040_2000, |_, _| Ret {
+            eax: 3,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0040_2000, &[]).u32(), 3);
+        e.register(0x0040_2000, |_, _| Ret {
+            eax: 4,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0040_2000, &[]).u32(), 4);
+    }
+
+    /// The trace keeps the last `trace_keep` returned calls with their words, oldest first.
+    #[test]
+    fn the_trace_keeps_the_last_calls() {
+        let mut e = Engine::new();
+        e.register(0x0040_3000, |_, a| Ret {
+            eax: a.iter().sum(),
+            ..Ret::default()
+        });
+        e.trace = Some(Default::default());
+        e.trace_keep = 3;
+        e.call(0x0040_3000, &[1, 2, 3]);
+        e.call(0x0040_3000, &[4]);
+        e.call(0x0040_3000, &[]);
+        e.call(0x0040_3000, &[5, 6]);
+        let trace: Vec<_> = e.trace.take().unwrap().into_iter().collect();
+        assert_eq!(
+            trace,
+            vec![
+                (0x0040_3000, vec![4], 4),
+                (0x0040_3000, vec![], 0),
+                (0x0040_3000, vec![5, 6], 11)
+            ]
+        );
+    }
+
+    /// Times calls of a registered one-line getter through [`Engine::call`] (the dispatch
+    /// cost): `cargo test --release -p engine-core --lib -- --ignored --nocapture
+    /// dispatch_speed`; `NV_BENCH_CALLS` sets how many (default 300M).
+    #[test]
+    #[ignore]
+    fn dispatch_speed() {
+        let n: u64 = std::env::var("NV_BENCH_CALLS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300_000_000);
+        let mut e = Engine::new();
+        let (addr, f) = crate::entry!(0x0055_9450, field_getter(Ptr) -> u32);
+        e.register(addr, f);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 1);
+        e.trace = Some(Default::default());
+        e.call_budget = Some(u64::MAX);
+        for (name, with_args) in [("&[this]", false), ("&args![this]", true)] {
+            let start = std::time::Instant::now();
+            let mut sum = 0u32;
+            for _ in 0..n {
+                let ret = if with_args {
+                    e.call(addr, &args![std::hint::black_box(this)])
+                } else {
+                    e.call(addr, &[std::hint::black_box(this)])
+                };
+                sum = sum.wrapping_add(ret.eax);
+            }
+            let secs = start.elapsed().as_secs_f64();
+            assert_eq!(sum, n as u32);
+            println!(
+                "{name}: {n} calls in {secs:.2} s: {:.1} M calls/s, {:.1} ns per call (trace and budget on)",
+                n as f64 / secs / 1e6,
+                secs * 1e9 / n as f64
+            );
+        }
     }
 
     #[test]

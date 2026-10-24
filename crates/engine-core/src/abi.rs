@@ -70,8 +70,21 @@ fn word(words: &[u32], i: &mut usize) -> u32 {
     w
 }
 
+/// The one argument word of a one-word type ([`Arg::put`]'s word without a buffer): what
+/// [`RetVal::into_ret`] puts in `EAX`.
+trait OneWord {
+    fn one_word(self) -> u32;
+}
+
 macro_rules! word_arg {
     ($($t:ty => |$w:ident| $from:expr, |$v:ident| $to:expr;)*) => {$(
+        impl OneWord for $t {
+            #[inline(always)]
+            fn one_word(self) -> u32 {
+                let $v = self;
+                $to
+            }
+        }
         impl Arg for $t {
             const WORDS: usize = 1;
             fn take(words: &[u32], i: &mut usize) -> Self {
@@ -139,9 +152,7 @@ macro_rules! int_ret {
     ($($t:ty),*) => {$(
         impl RetVal for $t {
             fn into_ret(self) -> Ret {
-                let mut v = Vec::with_capacity(1);
-                self.put(&mut v);
-                Ret { eax: v[0], ..Ret::default() }
+                Ret { eax: self.one_word(), ..Ret::default() }
             }
             fn from_ret(r: Ret) -> Self {
                 <$t as Arg>::take(&[r.eax], &mut 0)
