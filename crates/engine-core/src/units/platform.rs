@@ -1511,19 +1511,21 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
 /// once (`WAIT_OBJECT_0`), resetting an auto-reset event or counting a
 /// semaphore down; an ended thread's handle is signalled. Otherwise the wait
 /// is a switch point (`crate::thread_host`): the other game threads run until
-/// the object is signalled or none can go on. Still not signalled, a finite
-/// wait times out (`WAIT_TIMEOUT`; the clock is not advanced) and an
-/// `INFINITE` one would block forever and stops the engine. An unknown handle
-/// gives `WAIT_FAILED`.
+/// the object is signalled, none can go on, or (on the main thread) the clock
+/// passes the timeout (after one pass, so a timeout of 0 gives each one
+/// turn). Still not signalled, a finite wait times out (`WAIT_TIMEOUT`; the
+/// clock is not advanced) and an `INFINITE` one would block forever and
+/// stops the engine. An unknown handle gives `WAIT_FAILED`.
 fn wait_for_single_object(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
+    let finite = timeout != INFINITE;
+    let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
     loop {
         match take(e, handle) {
             None => return WAIT_FAILED,
             Some(true) => return WAIT_OBJECT_0,
             Some(false) => {}
         }
-        let finite = timeout != INFINITE;
-        if crate::thread_host::host().block(e, &[handle], false, finite, signalled) {
+        if crate::thread_host::host().block(e, &[handle], false, deadline, signalled) {
             continue;
         }
         if finite {
@@ -1563,6 +1565,8 @@ fn wait_for_multiple_objects(
         return WAIT_FAILED;
     }
     let all = all != 0;
+    let finite = timeout != INFINITE;
+    let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
     loop {
         if all {
             if list.iter().all(|&h| signalled(e, h)) {
@@ -1575,8 +1579,7 @@ fn wait_for_multiple_objects(
             take(e, list[i]);
             return WAIT_OBJECT_0 + i as u32;
         }
-        let finite = timeout != INFINITE;
-        if crate::thread_host::host().block(e, &list, all, finite, signalled) {
+        if crate::thread_host::host().block(e, &list, all, deadline, signalled) {
             continue;
         }
         if finite {

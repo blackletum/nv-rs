@@ -22,7 +22,8 @@
 //! - The main thread waits on an object that is not signalled
 //!   (`WaitForSingleObject`, `WaitForMultipleObjects`, any timeout) or calls
 //!   `Sleep`: the host runs the other threads ([`run_until`]) until the object
-//!   is signalled, or until a whole pass changes no object's state.
+//!   is signalled, until a whole pass changes no object's state, or, for a
+//!   timed wait, after one pass, once the clock passes its timeout.
 //! - A game thread waits on an object that is not signalled, or sleeps: it
 //!   yields back to the main thread, which goes on with the next thread of the
 //!   pass.
@@ -143,16 +144,17 @@ pub type Signalled = fn(&Engine, u32) -> bool;
 
 /// The seam: how game threads run. The cooperative host is the one in use.
 pub trait ThreadHost {
-    /// The current thread would wait on `handles` (all or any); `finite`
-    /// when the wait has a timeout. Returns whether they may now be
-    /// signalled (the caller takes them and tries again), false when nothing
-    /// can signal them.
+    /// The current thread would wait on `handles` (all or any); `deadline` is
+    /// the clock time ([`Engine::clock_now_us`]) a timed wait ends at, `None`
+    /// for `INFINITE`. Returns whether they may now be signalled (the caller
+    /// takes them and tries again), false when nothing can signal them or the
+    /// wait timed out.
     fn block(
         &self,
         e: &mut Engine,
         handles: &[u32],
         all: bool,
-        finite: bool,
+        deadline: Option<u64>,
         signalled: Signalled,
     ) -> bool;
     /// The current thread gives up its turn (`Sleep`).
@@ -293,6 +295,17 @@ pub fn run_until(
         if !ran || e.kernel.threads.signals == before {
             return until(e);
         }
+    }
+}
+
+/// One pass from the main thread: each runnable thread, in creation order, runs until it yields.
+fn one_pass(e: &mut Engine, signalled: Signalled) {
+    let mut i = 1;
+    while i < e.kernel.threads.list.len() {
+        if runnable(e, i, signalled) {
+            switch_to(e, i);
+        }
+        i += 1;
     }
 }
 
@@ -458,7 +471,7 @@ impl ThreadHost for Cooperative {
         e: &mut Engine,
         handles: &[u32],
         all: bool,
-        finite: bool,
+        deadline: Option<u64>,
         signalled: Signalled,
     ) -> bool {
         let ready = |e: &Engine| {
@@ -470,7 +483,14 @@ impl ThreadHost for Cooperative {
         };
         ensure_main(e);
         if on_main(e) {
-            return run_until(e, signalled, &mut |e| ready(e));
+            // One pass gives the others a turn; then they run on until the
+            // objects are signalled or the clock passes the deadline. A timed
+            // wait (the timeout 0 poll in 00b020a0) so ends even while a
+            // thread sleeps in a loop (the loading menu's, Sleep(50) a round).
+            one_pass(e, signalled);
+            let past = |e: &mut Engine| deadline.is_some_and(|d| e.clock_now_us() >= d);
+            run_until(e, signalled, &mut |e| ready(e) || past(e));
+            return ready(e);
         }
         let i = e.kernel.threads.current;
         loop {
@@ -480,7 +500,7 @@ impl ThreadHost for Cooperative {
             };
             yield_to_main(Yield::Paused);
             load_fpu(e);
-            if ready(e) || finite {
+            if ready(e) || deadline.is_some() {
                 return ready(e);
             }
         }
@@ -489,14 +509,7 @@ impl ThreadHost for Cooperative {
     fn sleep(&self, e: &mut Engine, signalled: Signalled) {
         ensure_main(e);
         if on_main(e) {
-            // One pass: the main thread gives the others a turn.
-            let mut i = 1;
-            while i < e.kernel.threads.list.len() {
-                if runnable(e, i, signalled) {
-                    switch_to(e, i);
-                }
-                i += 1;
-            }
+            one_pass(e, signalled);
             return;
         }
         let i = e.kernel.threads.current;
