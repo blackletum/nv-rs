@@ -3095,15 +3095,11 @@ fn idle_split(e: &mut Engine, this: Ptr, ebp: u32) {
 fn idle_play(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     let flag = |e: &mut Engine, mask: u32| fn_00734d30(e, this, mask);
-    if e.mem.u32(base + 0x2c) != 0 {
-        if !flag(e, 8) || e.mem.u32(base + 0x30) != 0 {
-            e.mem.set_u32(base + 0x28, 8);
-        }
+    if e.mem.u32(base + 0x2c) != 0 && (!flag(e, 8) || e.mem.u32(base + 0x30) != 0) {
+        e.mem.set_u32(base + 0x28, 8);
     }
-    if flag(e, 0x400) {
-        if !flag(e, 8) || flag(e, 0x800) {
-            e.mem.set_u32(base + 0x28, 8);
-        }
+    if flag(e, 0x400) && (!flag(e, 8) || flag(e, 0x800)) {
+        e.mem.set_u32(base + 0x28, 8);
     }
 }
 
