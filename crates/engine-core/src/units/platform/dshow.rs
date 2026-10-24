@@ -27,6 +27,8 @@
 //!   `E_INVALIDARG`; past the end it is the duration.
 //! - `GetEvent` with nothing queued answers `E_ABORT`. `put_Volume` takes -10000..0, else
 //!   `E_INVALIDARG`.
+//! - The decoded samples (the MP3 Decoder DMO's output, grabbed in the graph): see
+//!   [`windows_samples`]: this layer's samples are Windows' for 99.9748% of all 199 tracks' samples.
 //!
 //! What this layer does differently, as nothing of it is visible to the game's own code but the
 //! calls into its filter: Windows' splitter reads the stream as it plays (requests of its own);
@@ -481,15 +483,13 @@ fn render(e: &mut Engine, this: Ptr, out_pin: Ptr) -> u32 {
     );
     let data = e.mem.bytes(buffer, total as u32);
     e.mem.free(buffer);
-    let decoder = ::mp3::Decoder::new(&data[..]).unwrap_or_else(|err| {
+    let mut decoder = ::mp3::Decoder::new(&data[..]).unwrap_or_else(|err| {
         panic!("IGraphBuilder::Render of a stream mp3 cannot read ({err}): not provided")
     });
     let bitrate = u64::from(decoder.info().bitrate);
     assert!(bitrate != 0, "a free-format MP3 is not provided");
     let (rate, channels) = (decoder.sample_rate(), decoder.channels());
-    let samples = ::mp3::decode_all(&data[..])
-        .unwrap_or_else(|err| panic!("decoding the music failed ({err}): not provided"))
-        .samples;
+    let samples = windows_samples(&mut decoder);
     let g = graph(e, at);
     g.stream_bytes = total;
     g.duration = (total * 8 * 10_000_000 / bitrate) as i64;
@@ -497,6 +497,28 @@ fn render(e: &mut Engine, this: Ptr, out_pin: Ptr) -> u32 {
     g.sample_rate = rate;
     g.channels = channels;
     S_OK
+}
+
+/// The samples Windows' graph gives for a stream (measured against the MP3 Decoder DMO's
+/// output in the player's graph on all 199 tracks: same length, 99.9748% of the samples the same
+/// and the rest one step apart, the decoders' own rounding): every frame decoded, the Xing/Info
+/// frame too (silence: its side information is empty), the first 528 frames of output dropped
+/// (the decoder's delay), each sample scaled by 32768 and cut toward zero.
+fn windows_samples<B: AsRef<[u8]>>(decoder: &mut ::mp3::Decoder<B>) -> Vec<i16> {
+    decoder.set_gapless(false);
+    let channels = usize::from(decoder.channels());
+    let mut all: Vec<f32> = Vec::new();
+    if decoder.info().xing.is_some() {
+        all.resize(decoder.info().samples_per_frame * channels, 0.0);
+    }
+    while let Some(frame) = decoder.next_frame() {
+        all.extend_from_slice(&frame.samples);
+    }
+    let skip = (528 * channels).min(all.len());
+    all[skip..]
+        .iter()
+        .map(|&x| ((x * 32768.0).trunc() as i32).clamp(-32768, 32767) as i16)
+        .collect()
 }
 
 /// The stream position now (100 ns), queueing `EC_COMPLETE` when a run reached the end.
@@ -910,6 +932,10 @@ mod tests {
         let size = data.len() as u64;
         let f = fake(&mut e, data);
         let [fg, control, pos, audio, ev] = start(&mut e, &f);
+        // The samples: 100 frames of 1152 less the decoder's 528, all silent.
+        let samples = &e.kernel.sound.show.graphs[&fg].samples;
+        assert_eq!(samples.len(), 100 * 1152 - 528);
+        assert!(samples.iter().all(|&s| s == 0));
         // Duration: size * 8 * 10^7 / 128000 in 100 ns.
         let out = e.mem.alloc(8);
         e.vcall(pos, 0x1c, &[out]);
