@@ -130,9 +130,7 @@ pub fn set_sb_up_low(e: &mut Engine, info: u32) {
         let upper = frame + 0x214;
         let lower = frame + 0x314;
         let bytes = frame + 0x414;
-        let ok = e
-            .call(API_GET_CP_INFO, &args![code_page, cpinfo])
-            .u32();
+        let ok = e.call(API_GET_CP_INFO, &args![code_page, cpinfo]).u32();
         if ok != 0 {
             for i in 0..0x100u32 {
                 e.mem.set_u8(bytes + i, i as u8);
@@ -288,8 +286,7 @@ pub fn setmbcp_nolock(e: &mut Engine, code_page: u32, info: u32) -> i32 {
     if code_page == 65000 || code_page == 65001 {
         return -1;
     }
-    if e
-        .call(API_IS_VALID_CODE_PAGE, &args![code_page & 0xffff])
+    if e.call(API_IS_VALID_CODE_PAGE, &args![code_page & 0xffff])
         .u32()
         == 0
     {
@@ -514,7 +511,12 @@ pub fn getlocaleinfo(
         if e.call(ISDIGIT, &args![u32::from(c)]).u32() == 0 {
             break;
         }
-        let value = e.mem.u8(out).wrapping_mul(10).wrapping_add(c).wrapping_sub(0x30);
+        let value = e
+            .mem
+            .u8(out)
+            .wrapping_mul(10)
+            .wrapping_add(c)
+            .wrapping_sub(0x30);
         e.mem.set_u8(out, value);
     }
     0
@@ -727,7 +729,13 @@ mod tests {
     #[test]
     fn cp_to_lcid_knows_the_east_asian_pages() {
         let mut e = Engine::new();
-        for (page, lcid) in [(932, 0x411), (936, 0x804), (949, 0x412), (950, 0x404), (1252, 0)] {
+        for (page, lcid) in [
+            (932, 0x411),
+            (936, 0x804),
+            (949, 0x412),
+            (950, 0x404),
+            (1252, 0),
+        ] {
             assert_eq!(e.call(CP_TO_LCID, &[page]).u32(), lcid);
         }
     }
@@ -865,7 +873,9 @@ mod tests {
     fn setmbcp_nolock_asks_windows_for_other_pages() {
         let (mut e, _) = engine();
         nothing(&mut e, &[SET_SB_UP_LOW, SET_SBCS]);
-        e.register(API_IS_VALID_CODE_PAGE, |_, a| u32::from(a[0] != 1).into_ret());
+        e.register(API_IS_VALID_CODE_PAGE, |_, a| {
+            u32::from(a[0] != 1).into_ret()
+        });
         e.register(API_GET_CP_INFO, |e, a| {
             if a[0] == 2 {
                 return 0u32.into_ret();
@@ -990,7 +1000,9 @@ mod tests {
             }
             3u32.into_ret()
         });
-        e.register(ISDIGIT, |_, a| u32::from((a[0] as u8).is_ascii_digit()).into_ret());
+        e.register(ISDIGIT, |_, a| {
+            u32::from((a[0] as u8).is_ascii_digit()).into_ret()
+        });
         assert_eq!(e.call(0x00ed_2af0, &[0, 0, 0x409, 0x14, out]).i32(), 0);
         assert_eq!(e.mem.u8(out), 12);
         assert_eq!(e.call(0x00ed_2af0, &[0, 2, 0x409, 0x14, out]).i32(), -1);
@@ -1031,8 +1043,14 @@ mod tests {
         e.register(GET_LOCALE_INFO_A_WORKER, |_, a| (a[1] + a[5]).into_ret());
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00ee_1df7, &[0, 0x409, 2, 0x900, 4]).u32(), 0x40d);
-        assert_eq!(calls(&e, API_GET_LOCALE_INFO_W), vec![vec![0x409, 2, 0x900, 4]]);
-        assert_eq!(e.call(0x00ee_1f6a, &[0, 0x409, 2, 0x900, 4, 7]).u32(), 0x410);
+        assert_eq!(
+            calls(&e, API_GET_LOCALE_INFO_W),
+            vec![vec![0x409, 2, 0x900, 4]]
+        );
+        assert_eq!(
+            e.call(0x00ee_1f6a, &[0, 0x409, 2, 0x900, 4, 7]).u32(),
+            0x410
+        );
         let worker = calls(&e, GET_LOCALE_INFO_A_WORKER);
         assert_eq!(worker[0][1..], [0x409, 2, 0x900, 4, 7]);
     }
@@ -1050,7 +1068,10 @@ mod tests {
         e.call(0x00ee_02c9, &[0]);
         let freed: Vec<u32> = calls(&e, FREE).into_iter().map(|c| c[0]).collect();
         assert_eq!(freed.len(), 43);
-        assert_eq!(freed[..8], [0x1001, 0x1002, 0x1003, 0x1004, 0x1005, 0x1006, 0x1000, 0x1008]);
+        assert_eq!(
+            freed[..8],
+            [0x1001, 0x1002, 0x1003, 0x1004, 0x1005, 0x1006, 0x1000, 0x1008]
+        );
         assert_eq!(freed[13], 0x1007);
         let lconv = e.mem.alloc(0x30);
         for i in 0..10 {
@@ -1070,7 +1091,10 @@ mod tests {
     fn towlower_lowers_in_each_locale_kind() {
         let (mut e, info) = engine();
         assert_eq!(e.call(0x00ed_d3f0, &[0xffff, 0]).u32(), 0xffff);
-        assert_eq!(e.call(0x00ed_d3f0, &[u32::from(b'Q'), 0]).u32(), u32::from(b'q'));
+        assert_eq!(
+            e.call(0x00ed_d3f0, &[u32::from(b'Q'), 0]).u32(),
+            u32::from(b'q')
+        );
         assert_eq!(e.call(0x00ed_d3f0, &[0xc9, 0]).u32(), 0xc9);
         // A real locale: the map below 0x100, LCMapStringW above.
         e.mem.set_u32(info + 0x14, 0x409);

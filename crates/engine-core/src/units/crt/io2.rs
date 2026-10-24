@@ -39,7 +39,9 @@ const LOCALE_INFO_API: u32 = 0x0127_0818;
 
 /// The `ioinfo` record of handle `fh`, and the address of its block pointer.
 fn ioinfo(e: &Engine, fh: u32) -> u32 {
-    let block = e.mem.u32(PIOINFO + ((fh as i32 >> 5) as u32).wrapping_mul(4));
+    let block = e
+        .mem
+        .u32(PIOINFO + ((fh as i32 >> 5) as u32).wrapping_mul(4));
     block.wrapping_add((fh & 0x1f) << 6)
 }
 
@@ -256,8 +258,7 @@ pub fn crt_get_locale_info_a_stat(
 ) -> u32 {
     let mut api = e.mem.u32(LOCALE_INFO_API);
     if api == 0 {
-        if e
-            .call(API_GET_LOCALE_INFO_W, &args![0u32, 1u32, 0u32, 0u32])
+        if e.call(API_GET_LOCALE_INFO_W, &args![0u32, 1u32, 0u32, 0u32])
             .u32()
             != 0
         {
@@ -296,8 +297,7 @@ pub fn crt_get_locale_info_a_stat(
     let bytes = count.wrapping_mul(2).wrapping_add(8);
     let convert = |e: &mut Engine, wide: u32| -> u32 {
         let mut result = 0;
-        if e
-            .call(API_GET_LOCALE_INFO_W, &args![lcid, field, wide, count])
+        if e.call(API_GET_LOCALE_INFO_W, &args![lcid, field, wide, count])
             .u32()
             != 0
         {
@@ -305,7 +305,16 @@ pub fn crt_get_locale_info_a_stat(
             result = e
                 .call(
                     API_WIDE_CHAR_TO_MULTI_BYTE,
-                    &args![code_page, 0u32, wide, 0xffff_ffffu32, out, out_size, 0u32, 0u32],
+                    &args![
+                        code_page,
+                        0u32,
+                        wide,
+                        0xffff_ffffu32,
+                        out,
+                        out_size,
+                        0u32,
+                        0u32
+                    ],
                 )
                 .u32();
         }
@@ -609,7 +618,10 @@ mod tests {
         assert_eq!(wide[0][3..], [0xffff_ffff, out, 8, 0, 0]);
         // The narrow API once chosen.
         e.mem.set_u32(LOCALE_INFO_API, 2);
-        assert_eq!(e.call(0x00ee_1e2b, &[update, 0x409, 3, out, 8, 0]).u32(), 99);
+        assert_eq!(
+            e.call(0x00ee_1e2b, &[update, 0x409, 3, out, 8, 0]).u32(),
+            99
+        );
     }
 
     #[test]
@@ -642,9 +654,21 @@ mod tests {
         let text = e.mem.alloc(16);
         e.mem.write(text, &[0x61, 0, 0x62, 0, 0, 0, 0x63, 0]);
         // Cut at the terminator: 2; without one in range: the length; -1 passes.
-        assert_eq!(e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 4, 0, 0, 0]).u32(), 2);
-        assert_eq!(e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 2, 0, 0, 0]).u32(), 2);
-        assert_eq!(e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 1, 0, 0, 0]).u32(), 1);
+        assert_eq!(
+            e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 4, 0, 0, 0])
+                .u32(),
+            2
+        );
+        assert_eq!(
+            e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 2, 0, 0, 0])
+                .u32(),
+            2
+        );
+        assert_eq!(
+            e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 1, 0, 0, 0])
+                .u32(),
+            1
+        );
         assert_eq!(
             e.call(0x00ee_4774, &[0, 0x409, 0x100, text, 0xffff_ffff, 0, 0, 0])
                 .u32(),

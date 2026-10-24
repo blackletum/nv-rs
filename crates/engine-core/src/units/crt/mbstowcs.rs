@@ -208,7 +208,8 @@ pub fn mbstowcs_s_l(
                         }
                     }
                     if failed.is_none() {
-                        e.mem.set_u16(out.wrapping_add(length.wrapping_sub(1) * 2), 0);
+                        e.mem
+                            .set_u16(out.wrapping_add(length.wrapping_sub(1) * 2), 0);
                     }
                 }
                 match failed {
@@ -341,7 +342,10 @@ mod tests {
         assert_eq!(e.mem.u16(out), 0);
         assert_eq!(e.mem.u32(n), 0);
         // With _TRUNCATE: cut to the size, STRUNCATE.
-        assert_eq!(e.call(0x00ec_f205, &[n, out, 3, s, 0xffff_ffff, 0]).u32(), STRUNCATE);
+        assert_eq!(
+            e.call(0x00ec_f205, &[n, out, 3, s, 0xffff_ffff, 0]).u32(),
+            STRUNCATE
+        );
         assert_eq!(wide(&e, out, 3), [0x61, 0x62, 0]);
         assert_eq!(e.mem.u32(n), 3);
         // Size checks.

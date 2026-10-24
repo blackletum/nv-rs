@@ -449,20 +449,86 @@ fn interlocked_compare_exchange(e: &mut Engine, target: Ptr, exchange: i32, comp
     old
 }
 
-// Platform: replaces KERNEL32.DLL critical sections (imports): one thread.
-fn critical_section_nop(_e: &mut Engine, _section: Ptr) {}
+// Platform: replaces KERNEL32.DLL critical sections (imports)
+// A critical section belongs to one thread at a time, as Windows has it: each is a mutex
+// kernel object of this table (by the section's address; `RTL_CRITICAL_SECTION` itself is left
+// as the game made it). Entering one another thread holds is a switch point (the thread waits
+// as on an unsignalled object until the owner leaves); the owner may enter again (counted).
+// Why it matters here: the IO thread holds an archive's lock across a seek and a read while
+// the main thread reads the same archive; without the lock the reads interleaved (p112).
+
+/// The mutex standing for the critical section at `section` (made on first use).
+fn critical_section_mutex(e: &mut Engine, section: Ptr) -> u32 {
+    if let Some(&handle) = e.kernel.critical_sections.get(&section.addr()) {
+        return handle;
+    }
+    let handle = e.kernel.insert(KernelObject::Mutex {
+        name: Vec::new(),
+        owner: 0,
+        count: 0,
+    });
+    e.kernel.critical_sections.insert(section.addr(), handle);
+    handle
+}
+
+// Platform: replaces KERNEL32.DLL InitializeCriticalSection and DeleteCriticalSection (imports)
+/// Makes the section new (unowned) / forgets it.
+fn critical_section_reset(e: &mut Engine, section: Ptr) {
+    if let Some(handle) = e.kernel.critical_sections.remove(&section.addr()) {
+        e.kernel.objects.remove(&handle);
+    }
+}
+
+// Platform: replaces KERNEL32.DLL EnterCriticalSection (import)
+/// Takes the section for the running thread, waiting (a switch point) while another holds it.
+fn enter_critical_section(e: &mut Engine, section: Ptr) {
+    let handle = critical_section_mutex(e, section);
+    wait_for_single_object(e, handle, INFINITE);
+}
+
+// Platform: replaces KERNEL32.DLL LeaveCriticalSection (import)
+/// Counts the owner's hold down; at 0 the section is free and its waiters may go on.
+fn leave_critical_section(e: &mut Engine, section: Ptr) {
+    let Some(&handle) = e.kernel.critical_sections.get(&section.addr()) else {
+        return;
+    };
+    let freed = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Mutex { owner, count, .. }) if *count > 0 => {
+            *count -= 1;
+            if *count == 0 {
+                *owner = 0;
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+    if freed {
+        crate::thread_host::signal(e);
+    }
+}
 
 // Platform: replaces KERNEL32.DLL TryEnterCriticalSection (import)
-fn try_enter_critical_section(_e: &mut Engine, _section: Ptr) -> i32 {
+/// Takes the section when it is free or the running thread's (1), else 0 without waiting.
+fn try_enter_critical_section(e: &mut Engine, section: Ptr) -> i32 {
+    let handle = critical_section_mutex(e, section);
+    if signalled(e, handle) {
+        take(e, handle);
+        1
+    } else {
+        0
+    }
+}
+
+// Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
+fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spin: u32) -> i32 {
+    critical_section_reset(e, section);
     1
 }
 
 // Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount
 // (import, slot 00fdf130): one thread, nothing to set up; nonzero is success.
-fn initialize_critical_section_and_spin_count(_e: &mut Engine, _section: Ptr, _spin: u32) -> i32 {
-    1
-}
-
 // Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the running
 // game thread's id (`crate::thread_host`; the main thread's is 1).
 pub const MAIN_THREAD_ID: u32 = crate::thread_host::MAIN_THREAD_ID;
@@ -997,6 +1063,8 @@ pub struct Kernel {
     pub windows: window::Windows,
     /// The files the game made in this run ([`files`]).
     pub disk: files::Disk,
+    /// The critical sections by address: the mutex object standing for each.
+    pub critical_sections: std::collections::BTreeMap<u32, u32>,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -1889,22 +1957,22 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         (
             k,
             "EnterCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, enter_critical_section(Ptr)).1,
         ),
         (
             k,
             "LeaveCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, leave_critical_section(Ptr)).1,
         ),
         (
             k,
             "InitializeCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, critical_section_reset(Ptr)).1,
         ),
         (
             k,
             "DeleteCriticalSection",
-            entry!(0, critical_section_nop(Ptr)).1,
+            entry!(0, critical_section_reset(Ptr)).1,
         ),
         (
             k,
@@ -2956,6 +3024,41 @@ mod tests {
         e.mem.map(0x2000, 0x1000);
         e.register(0x00ab_0000, waiting_thread);
         e
+    }
+
+    /// A thread that takes the critical section at 0x2e00, gives up its turn while it holds
+    /// it, then leaves it.
+    fn locking_thread(e: &mut Engine, a: &[u32]) -> Ret {
+        enter_critical_section(e, Ptr::new(0x2e00));
+        log(e, a[0]);
+        sleep(e, 0);
+        log(e, a[0] + 1);
+        leave_critical_section(e, Ptr::new(0x2e00));
+        Ret::default()
+    }
+
+    #[test]
+    fn a_critical_section_held_by_another_thread_makes_the_main_thread_wait() {
+        let mut e = thread_engine();
+        e.register(0x00ab_0600, locking_thread);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0600, 20, 0, 0]);
+        // A switch point lets the thread take the section and give up its turn.
+        sleep(&mut e, 0);
+        assert_eq!(logged(&e), [(20, 2)]);
+        // The main thread waits for it to leave before it gets the section.
+        enter_critical_section(&mut e, Ptr::new(0x2e00));
+        log(&mut e, 30);
+        assert_eq!(logged(&e), [(20, 2), (21, 2), (30, MAIN_THREAD_ID)]);
+        // The owner may enter again; it leaves as many times.
+        enter_critical_section(&mut e, Ptr::new(0x2e00));
+        assert_eq!(try_enter_critical_section(&mut e, Ptr::new(0x2e00)), 1);
+        for _ in 0..3 {
+            leave_critical_section(&mut e, Ptr::new(0x2e00));
+        }
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]),
+            WAIT_OBJECT_0
+        );
     }
 
     #[test]

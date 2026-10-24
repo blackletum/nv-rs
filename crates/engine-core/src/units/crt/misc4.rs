@@ -128,7 +128,8 @@ pub fn purecall(e: &mut Engine) {
 /// (`011c1cac`) become those of `flags`. Answers the old value.
 pub fn set_abort_behavior(e: &mut Engine, flags: u32, mask: u32) -> u32 {
     let old = e.mem.u32(ABORT_BEHAVIOR);
-    e.mem.set_u32(ABORT_BEHAVIOR, (!mask & old) | (flags & mask));
+    e.mem
+        .set_u32(ABORT_BEHAVIOR, (!mask & old) | (flags & mask));
     old
 }
 
@@ -639,10 +640,7 @@ mod tests {
         e.register_double(ERRNO, move |_, _| errno.into_ret());
         e.register(STBUF, |_, _| 7u32.into_ret());
         e.register(0x0040_7000, |_, a| (a[1] + a[3]).into_ret());
-        nothing(
-            &mut e,
-            &[INVALID_PARAMETER, LOCK_FILE, FTBUF, UNLOCK_FILE],
-        );
+        nothing(&mut e, &[INVALID_PARAMETER, LOCK_FILE, FTBUF, UNLOCK_FILE]);
         e.call_log = Some(vec![]);
         let r = e.call(0x00ec_bdd0, &[0x0040_7000, 0x100, 0, 0x20]).i32();
         assert_eq!(r, 0x120);
@@ -681,7 +679,13 @@ mod tests {
         let mut e = Engine::new();
         nothing(&mut e, &[UNLOCK_FILE, UNLOCK]);
         e.call_log = Some(vec![]);
-        for addr in [0x00ec_d4c6, 0x00ec_d627, 0x00ec_d72d, 0x00ec_d8dc, 0x00ec_f05a] {
+        for addr in [
+            0x00ec_d4c6,
+            0x00ec_d627,
+            0x00ec_d72d,
+            0x00ec_d8dc,
+            0x00ec_f05a,
+        ] {
             e.call(addr, &[0x700]);
         }
         e.call(0x00ed_1709, &[]);
@@ -694,7 +698,10 @@ mod tests {
     fn the_exit_paths_call_their_steps() {
         let mut e = Engine::new();
         e.map(ERROR_MODE, 4);
-        nothing(&mut e, &[DOEXIT, FF_MSGBANNER, NMSG_WRITE, CRT_EXIT_PROCESS]);
+        nothing(
+            &mut e,
+            &[DOEXIT, FF_MSGBANNER, NMSG_WRITE, CRT_EXIT_PROCESS],
+        );
         e.call_log = Some(vec![]);
         e.call(0x00ec_cef1, &[]);
         assert_eq!(calls(&e, DOEXIT), vec![vec![0, 0, 1]]);
