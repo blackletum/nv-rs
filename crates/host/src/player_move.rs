@@ -431,6 +431,18 @@ impl PlayerMovement {
                 e.trace_keep = keep;
             }
         }
+        // `NV_MOVE_CALL_PROFILE=FILE`: how many times each address was called in this stage, most
+        // first, appended to FILE (where a long run spends its calls).
+        let profile_file = std::env::var_os("NV_MOVE_CALL_PROFILE");
+        if profile_file.is_some() {
+            e.call_counts = Some(Default::default());
+            if let Some(n) = std::env::var("NV_MOVE_CALL_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+            {
+                e.call_budget = Some(n);
+            }
+        }
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
@@ -479,6 +491,34 @@ impl PlayerMovement {
             for (addr, args, eax) in trace {
                 let words: Vec<String> = args.iter().map(|w| format!("{w:08x}")).collect();
                 let _ = writeln!(text, "{addr:08x}({}) -> {eax:08x}", words.join(","));
+            }
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = file.write_all(text.as_bytes());
+            }
+        }
+        if let (Some(path), Some(counts)) = (profile_file, e.call_counts.take()) {
+            let mut by_addr: HashMap<u32, u64> = HashMap::new();
+            for (&key, &n) in &counts {
+                *by_addr.entry(key as u32).or_default() += n;
+            }
+            let mut rows: Vec<(u32, u64)> = by_addr.into_iter().collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let total: u64 = rows.iter().map(|r| r.1).sum();
+            let mut text = format!("== {stage}: {total} calls
+");
+            for (addr, n) in rows.iter().take(200) {
+                let _ = writeln!(text, "{addr:08x}	{n}");
+            }
+            let mut pairs: Vec<(u64, u64)> = counts.into_iter().collect();
+            pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let _ = writeln!(text, "-- {stage}: caller -> address");
+            for (key, n) in pairs.iter().take(200) {
+                let _ = writeln!(text, "{:08x} -> {:08x}	{n}", key >> 32, *key as u32);
             }
             use std::io::Write as _;
             if let Ok(mut file) = std::fs::OpenOptions::new()

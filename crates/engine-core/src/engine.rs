@@ -96,6 +96,11 @@ pub struct Engine {
     /// "call budget spent" (a diagnostic for a run that loops for ever; the host's
     /// `NV_MOVE_CALL_BUDGET`).
     pub call_budget: Option<u64>,
+    /// When `Some`, how many times each (caller, address) pair was called through
+    /// [`Engine::call`], keyed `caller << 32 | address` (the caller is the innermost function on
+    /// the call stack, 0 at a stage's top): where a long run spends its calls (the host's
+    /// `NV_MOVE_CALL_PROFILE`).
+    pub call_counts: Option<std::collections::HashMap<u64, u64>>,
 }
 
 /// How many returned calls [`Engine::trace`] keeps.
@@ -160,6 +165,7 @@ impl Engine {
             trace: None,
             trace_keep: TRACE_KEEP,
             call_budget: None,
+            call_counts: None,
         }
     }
 
@@ -335,6 +341,10 @@ impl Engine {
                 panic!("call budget spent (at {addr:08x})");
             }
             *budget -= 1;
+        }
+        if let Some(counts) = &mut self.call_counts {
+            let caller = self.call_stack.last().copied().unwrap_or(0);
+            *counts.entry(u64::from(caller) << 32 | u64::from(addr)).or_default() += 1;
         }
         self.call_stack.push(addr);
         let ret = match f {
