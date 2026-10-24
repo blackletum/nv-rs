@@ -584,6 +584,8 @@ pub struct Sound {
     com_initialized: u32,
     /// The sound table ([`load_table`]).
     table: Option<Table>,
+    /// The DirectShow filter graphs ([`super::dshow`]).
+    pub(crate) show: super::dshow::Show,
 }
 
 type Slots<const N: usize> = [(u32, crate::AbiFn); N];
@@ -738,21 +740,17 @@ pub fn co_initialize(e: &mut Engine, reserved: u32) -> u32 {
 
 // Platform: replaces OLE32.DLL CoCreateInstance (import)
 /// `CoCreateInstance(clsid, outer, context, iid, out)`: the game asks only for DirectShow's
-/// filter graph (the music thread `00830b30`) and filter mapper (the filter registration
-/// `009fba40`/`009fbab0`); DirectShow waits for the maintainer, so every class stops the run.
+/// filter graph (the music thread `00830b30`), which [`super::dshow`] provides, and the filter
+/// mapper (the filter registration `009fba40`/`009fbab0`), which stops the run as any other class.
 pub fn co_create_instance(
     e: &mut Engine,
     clsid: Ptr,
-    _outer: u32,
-    _context: u32,
-    _iid: Ptr,
-    _out: Ptr,
+    outer: u32,
+    context: u32,
+    iid: Ptr,
+    out: Ptr,
 ) -> u32 {
-    let id = e.mem.bytes(clsid.addr(), 16);
-    panic!(
-        "CoCreateInstance({}) is not provided (DirectShow waits for the maintainer)",
-        hex_string(&id)
-    )
+    super::dshow::co_create_instance(e, clsid, outer, context, iid, out)
 }
 
 // Platform: replaces DSOUND.DLL DirectSoundCreate8 (import by ordinal 11)
@@ -2111,7 +2109,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "DirectShow waits")]
+    #[should_panic(expected = "is not provided")]
     fn co_create_instance_stops() {
         let mut e = engine();
         co_create_instance(

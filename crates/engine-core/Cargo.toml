@@ -15,3 +15,4 @@ test-support = []
 # The platform's Bink layer (units/platform/bink.rs) decodes with the
 # repository's own Bink 1 decoder.
 bink = { path = "../bink" }
+mp3 = { path = "../mp3" }

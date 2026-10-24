@@ -10,6 +10,7 @@ pub mod d3d9device;
 pub mod d3d9resource;
 pub mod d3dx;
 pub mod dinput;
+pub mod dshow;
 pub mod dsound;
 pub mod files;
 pub mod loader;
