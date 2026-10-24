@@ -80,6 +80,13 @@ impl Host {
         load_adapter_table(&mut engine);
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
+        // A skipped initializer leaves its global (a setting among them) unbuilt, silently
+        // null for the code that reads it later: a strict run names each one on stderr.
+        if !movement.probe {
+            for line in static_init.skip_lines(&engine::static_init::table()) {
+                eprintln!("static initializer skipped: {line}");
+            }
+        }
         let ni_init = if engine.is_translated(WIN_MAIN) {
             // The game's own `main` (`WinMain`, after the CRT start-up above) as its main
             // thread: `NiInit`, the INI files, the window, `Main`, the renderer, the scene
