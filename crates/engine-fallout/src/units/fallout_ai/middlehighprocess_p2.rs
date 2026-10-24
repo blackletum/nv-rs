@@ -1485,8 +1485,9 @@ pub fn middle_high_process_load_game_ov2(
         let changes = e.call(GET_CONTAINER_CHANGES, &args![list]).u32();
         if changes != 0 {
             let worn = e.call(GET_WORN_ITEM, &args![changes, 5u32, 0u32]).u32();
-            let model = e.vcall(actor, 0x1d0, &args![0u32]).u32();
-            e.vcall(p, 0x160, &args![worn, model]);
+            // 0092752b: the 0 pushed before slot 0x1d0 (which takes none) is 0x160's third word.
+            let model = e.vcall(actor, 0x1d0, &args![]).u32();
+            e.vcall(p, 0x160, &args![worn, model, 0u32]);
             let item = e.mem.u32(p + 0x114);
             let form = if item != 0 {
                 e.call(ITEM_CHANGE_FORM, &args![item]).u32()
