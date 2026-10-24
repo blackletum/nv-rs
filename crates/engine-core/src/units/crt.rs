@@ -20,6 +20,8 @@ pub mod glue;
 pub mod lowio;
 pub mod math;
 pub mod mem;
+pub mod misc2;
+pub mod misc3;
 pub mod num2;
 pub mod printf;
 pub mod rtti;
@@ -6163,6 +6165,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(lowio::funcs());
     table.extend(math::funcs());
     table.extend(mem::funcs());
+    table.extend(misc2::funcs());
+    table.extend(misc3::funcs());
     table.extend(num2::funcs());
     table.extend(printf::funcs());
     table.extend(rtti::funcs());
