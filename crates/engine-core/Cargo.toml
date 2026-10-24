@@ -16,3 +16,4 @@ test-support = []
 # repository's own Bink 1 decoder.
 bink = { path = "../bink" }
 mp3 = { path = "../mp3" }
+vorbis = { path = "../vorbis" }

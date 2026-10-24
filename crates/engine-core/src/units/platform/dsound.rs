@@ -599,6 +599,8 @@ pub struct Sound {
     table: Option<Table>,
     /// The DirectShow filter graphs ([`super::dshow`]).
     pub(crate) show: super::dshow::Show,
+    /// The open Ogg Vorbis files ([`super::vorbisfile`]).
+    pub(crate) vorbis: super::vorbisfile::Files,
     /// The voices heard on the device, once the host started the output ([`start_output`]).
     mix: Option<Mix>,
 }

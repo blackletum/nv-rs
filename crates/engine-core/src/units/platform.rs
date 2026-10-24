@@ -19,6 +19,7 @@ pub mod mmio;
 pub mod nvapi;
 pub mod sound_out;
 pub mod time;
+pub mod vorbisfile;
 pub mod window;
 pub mod zone;
 
@@ -2572,6 +2573,38 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, bink::copy_to_buffer_rect(u32, Ptr, i32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32).1,
         ),
         // The Bink imports: end.
+        // The Ogg Vorbis imports (`vorbisfile`, slot a11): begin.
+        (
+            "libvorbisfile.dll",
+            "ov_open_callbacks",
+            entry!(0, vorbisfile::ov_open_callbacks(u32, Ptr, u32, i32, u32, u32, u32, u32) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_info",
+            entry!(0, vorbisfile::ov_info(Ptr, i32) -> u32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_seekable",
+            entry!(0, vorbisfile::ov_seekable(Ptr) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_pcm_total",
+            entry!(0, vorbisfile::ov_pcm_total(Ptr, i32) -> u64).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_read",
+            entry!(0, vorbisfile::ov_read(Ptr, u32, i32, i32, i32, i32, Ptr) -> i32).1,
+        ),
+        (
+            "libvorbisfile.dll",
+            "ov_clear",
+            entry!(0, vorbisfile::ov_clear(Ptr) -> i32).1,
+        ),
+        // The Ogg Vorbis imports: end.
         // The sound imports (`mmio`, `dsound`, slot a11): begin.
         (
             "WINMM.dll",
