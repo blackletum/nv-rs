@@ -48,7 +48,10 @@ pub fn fn_00a85580(e: &mut Engine, this: Ptr) {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_5580, fn_00a85580(Ptr))]
+    vec![
+        entry!(0x00a8_5580, fn_00a85580(Ptr)),
+        entry!(0x00a8_6280, fn_00a86280(u32, u32) -> i32),
+    ]
 }
 
 #[cfg(test)]
@@ -116,5 +119,73 @@ mod tests {
         assert!(calls_to(&e, 0x7000_0104).is_empty());
         assert!(calls_to(&e, INTERLOCKED_DECREMENT).is_empty());
         assert_eq!(calls_to(&e, BASE_DESTRUCTOR).len(), 1);
+    }
+}
+
+// Translated from 00a86280 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The `qsort` comparison of two string pointers (cdecl; passed to `qsort`,
+/// `00ec6f20`, by `GetViewerStrings`; Ghidra made no function of it): 1
+/// when `first` is null, -1 when `second` is, otherwise the inlined
+/// `strcmp` of `*first` and `*second` (0 when equal, else -1 or 1 by the
+/// first differing byte, unsigned).
+pub fn fn_00a86280(e: &mut Engine, first: u32, second: u32) -> i32 {
+    if first == 0 {
+        return 1;
+    }
+    if second == 0 {
+        return -1;
+    }
+    let mut right = e.mem.u32(second);
+    let mut left = e.mem.u32(first);
+    loop {
+        let a = e.mem.u8(left);
+        let b = e.mem.u8(right);
+        if a != b {
+            return if a < b { -1 } else { 1 };
+        }
+        if a == 0 {
+            return 0;
+        }
+        let a = e.mem.u8(left + 1);
+        let b = e.mem.u8(right + 1);
+        if a != b {
+            return if a < b { -1 } else { 1 };
+        }
+        left = left.wrapping_add(2);
+        right = right.wrapping_add(2);
+        if a == 0 {
+            return 0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod n079_tests {
+    use super::*;
+
+    #[test]
+    fn strings_compare_like_strcmp() {
+        let mut e = Engine::new();
+        let text = |e: &mut Engine, s: &[u8]| {
+            let p = e.mem.alloc(s.len() as u32 + 1);
+            e.mem.write(p, s);
+            let holder = e.mem.alloc(4);
+            e.mem.set_u32(holder, p);
+            holder
+        };
+        let abc = text(&mut e, b"abc");
+        let abd = text(&mut e, b"abd");
+        let ab = text(&mut e, b"ab");
+        let high = text(&mut e, &[0xe9]);
+        let compare = |e: &mut Engine, a: u32, b: u32| e.call(0x00a8_6280, &[a, b]).i32();
+        assert_eq!(compare(&mut e, abc, abc), 0);
+        assert_eq!(compare(&mut e, abc, abd), -1);
+        assert_eq!(compare(&mut e, abd, abc), 1);
+        assert_eq!(compare(&mut e, ab, abc), -1);
+        assert_eq!(compare(&mut e, abc, ab), 1);
+        assert_eq!(compare(&mut e, high, abc), 1);
+        assert_eq!(compare(&mut e, 0, abc), 1);
+        assert_eq!(compare(&mut e, abc, 0), -1);
+        assert_eq!(compare(&mut e, 0, 0), 1);
     }
 }
