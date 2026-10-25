@@ -588,8 +588,285 @@ pub fn add_loose_files(e: &mut Engine, pattern: u32, path: u32, list: u32) {
     })
 }
 
+/// More KERNEL32 import slots (`stdcall`): `DeleteCriticalSection`, `CompareFileTime` and
+/// `InterlockedCompareExchange`; the C runtime's `strcat_s` (`00ec6bd2`, cdecl); `"*.*"`
+/// (`010a4830`) and `"\"` (`010a4834`).
+const DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+const COMPARE_FILE_TIME: u32 = 0x00fd_f06c;
+const INTERLOCKED_COMPARE_EXCHANGE: u32 = 0x00fd_f1bc;
+const STRCAT_S: u32 = 0x00ec_6bd2;
+const ALL_FILES: u32 = 0x010a_4830;
+const BACKSLASH: u32 = 0x010a_4834;
+/// The callees of [`fn_00b01590`]: `00afd390` (`thiscall` on an 8-byte local, two words,
+/// `RET 8`), `00af9c50` and `00afac90` (`thiscall`, three words, `RET 0xc`; answer `AL`).
+const CALLEE_00AFD390: u32 = 0x00af_d390;
+const CALLEE_00AF9C50: u32 = 0x00af_9c50;
+const CALLEE_00AFAC90: u32 = 0x00af_ac90;
+/// A `WIN32_FIND_DATAA`'s fields: the attributes (+0), the last write time (+0x14) and the
+/// file name (+0x2c); the directory attribute bit.
+const FIND_ATTRIBUTES: u32 = 0;
+const FIND_LAST_WRITE: u32 = 0x14;
+const FIND_NAME: u32 = 0x2c;
+const DIRECTORY: u32 = 0x10;
+const NO_HANDLE: u32 = 0xffff_ffff;
+
+// Translated from 00b01510 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b01510 - the /GS security cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (`thiscall`, one word it does not read, `RET 4`): whether the
+/// object's file exists: its own vtable slot +0x18 gives the name, `FindFirstFileA` on it
+/// (into a find data on the stack); a found file's search is closed (`FindClose`). Answers 1
+/// when found, else 0 (`AL`).
+pub fn fn_00b01510(e: &mut Engine, this: u32, _unused: u32) -> u8 {
+    e.with_stack(0x140, |e, find| {
+        let name = e.vcall(this, 0x18, &args![]).u32();
+        let handle = e.call(FIND_FIRST_FILE_A, &args![name, find.addr()]).u32();
+        if handle == NO_HANDLE {
+            0
+        } else {
+            e.call(FIND_CLOSE, &args![handle]);
+            1
+        }
+    })
+}
+
+// Translated from 00b01590 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b01590 - the /GS security cookie check (00ec408c) is not translated.
+/// A walk over the files written after a time (unnamed in the engine map; `thiscall`, three
+/// words: a root, a folder under it and a `FILETIME` address, `RET 0xc`), recursive.
+/// `root + folder + "*.*"` (`strcpy_s`, `strcat_s`, 0x104) is searched (`FindFirstFileA`);
+/// nothing found answers 0. Otherwise the folder is copied (0x104) and, when its length's low
+/// byte is above 1, its last character cut; `00afd390` runs on an 8-byte local with the copy
+/// and 2, then `00af9c50` on `this` with that local, a local word and 0. Then for each entry:
+/// a directory whose name does not start with `'.'` is walked (`folder + name + "\"` as the
+/// new folder) and its count added; any other entry, when `00af9c50` answered nonzero and the
+/// entry was written after the time (`CompareFileTime` above 0), gets `00afd390` on a second
+/// 8-byte local with its name and 0, then `00afac90` on `this` with the local word's value,
+/// that local and 0, and is counted when that answers nonzero. `FindNextFileA` moves on;
+/// `FindClose` ends. Answers the count. The locals keep the exe's frame offsets (one
+/// 0x380-byte frame).
+pub fn fn_00b01590(e: &mut Engine, this: u32, root: u32, folder: u32, time: u32) -> u32 {
+    e.with_stack(0x380, |e, frame| {
+        let at = |offset: u32| frame.addr().wrapping_add(0x380 - offset);
+        let path = at(0x110);
+        let find = at(0x370);
+        let copy = at(0x218);
+        let folder_name = at(0x224);
+        let looked_up = at(0x21c);
+        let file_name = at(0x37c);
+        let mut count: u32 = 0;
+        e.call(STRCPY_S, &args![path, 0x104u32, root]);
+        e.call(STRCAT_S, &args![path, 0x104u32, folder]);
+        e.call(STRCAT_S, &args![path, 0x104u32, ALL_FILES]);
+        let handle = e.call(FIND_FIRST_FILE_A, &args![path, find]).u32();
+        if handle == NO_HANDLE {
+            return 0;
+        }
+        let mut more = true;
+        e.call(STRCPY_S, &args![copy, 0x104u32, folder]);
+        let length = e.call(STRLEN, &args![copy]).u32() as u8;
+        if i32::from(length) > 1 {
+            e.mem.set_u8(copy + u32::from(length) - 1, 0);
+        }
+        e.call(CALLEE_00AFD390, &args![folder_name, copy, 2u32]);
+        let found = e
+            .call(CALLEE_00AF9C50, &args![this, folder_name, looked_up, 0u32])
+            .u8()
+            != 0;
+        while more {
+            let attributes = e.mem.u32(find + FIND_ATTRIBUTES);
+            if attributes & DIRECTORY != 0 && e.mem.i8(find + FIND_NAME) != 0x2e {
+                e.call(STRCPY_S, &args![path, 0x104u32, folder]);
+                e.call(STRCAT_S, &args![path, 0x104u32, find + FIND_NAME]);
+                e.call(STRCAT_S, &args![path, 0x104u32, BACKSLASH]);
+                let inner = fn_00b01590(e, this, root, path, time);
+                count = inner.wrapping_add(count);
+            } else if found
+                && e.call(COMPARE_FILE_TIME, &args![find + FIND_LAST_WRITE, time])
+                    .i32()
+                    > 0
+            {
+                e.call(CALLEE_00AFD390, &args![file_name, find + FIND_NAME, 0u32]);
+                let word = e.mem.u32(looked_up);
+                if e.call(CALLEE_00AFAC90, &args![this, word, file_name, 0u32])
+                    .u8()
+                    != 0
+                {
+                    count = count.wrapping_add(1);
+                }
+            }
+            more = e.call(FIND_NEXT_FILE_A, &args![handle, find]).u32() != 0;
+        }
+        e.call(FIND_CLOSE, &args![handle]);
+        count
+    })
+}
+
+// Translated from 00b01af0 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b01af0 - the /GS security cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (`cdecl`, one word: a path): whether the path exists
+/// (`FindFirstFileA` into a find data on the stack; a found file's search closed). Answers 1
+/// or 0 (`AL`).
+pub fn fn_00b01af0(e: &mut Engine, path: u32) -> u8 {
+    e.with_stack(0x140, |e, find| {
+        let handle = e.call(FIND_FIRST_FILE_A, &args![path, find.addr()]).u32();
+        if handle == NO_HANDLE {
+            0
+        } else {
+            e.call(FIND_CLOSE, &args![handle]);
+            1
+        }
+    })
+}
+
+// Translated from 00b01b60 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b01b60 - the /GS security cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (`cdecl`, two words: a path and a `FILETIME` out): for a path that
+/// exists (`FindFirstFileA`), its last write time (both words) goes to the out and the search
+/// is closed; answers 1, else 0 (`AL`) with the out untouched.
+pub fn fn_00b01b60(e: &mut Engine, path: u32, time: u32) -> u8 {
+    e.with_stack(0x140, |e, find| {
+        let find = find.addr();
+        let handle = e.call(FIND_FIRST_FILE_A, &args![path, find]).u32();
+        if handle == NO_HANDLE {
+            return 0;
+        }
+        let low = e.mem.u32(find + FIND_LAST_WRITE);
+        e.mem.set_u32(time, low);
+        let high = e.mem.u32(find + FIND_LAST_WRITE + 4);
+        e.mem.set_u32(time.wrapping_add(4), high);
+        e.call(FIND_CLOSE, &args![handle]);
+        1
+    })
+}
+
+// Translated from 00b01f00 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The tasklet manager's destructor body (unnamed in the engine map; `thiscall`, plain
+/// `RET`): the vtable `010a4880`, the handle at +0x270 closed (`CloseHandle`), the critical
+/// section at +0x54 deleted; then the base vtable `010a48ac` and the handle at +0xc closed.
+pub fn fn_00b01f00(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this, MANAGER_VTABLE);
+    let work = e.mem.u32(this.wrapping_add(WORK + 4));
+    e.call(CLOSE_HANDLE, &args![work]);
+    e.call(DELETE_CRITICAL_SECTION, &args![this.wrapping_add(LOCK)]);
+    e.mem.set_u32(this, BASE_VTABLE);
+    let handle = e.mem.u32(this.wrapping_add(0xc));
+    e.call(CLOSE_HANDLE, &args![handle]);
+}
+
+// Translated from 00b02220 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A task's queueing (unnamed in the engine map; `thiscall` on the manager, three words: the
+/// group, the task and a flag whose low byte counts, `RET 0xc`). Under the group's critical
+/// section (+0x14): the task's word at +0x10 is claimed (`InterlockedCompareExchange(+0x10,
+/// 1, 0)`); a task already claimed answers 0. Otherwise, when the group runs (byte +0x2c),
+/// is open (byte +0x2d) and the task has no group (+8), the task takes the group and a clear
+/// byte +4, a set flag closes the group (+0x2d cleared), the task is queued
+/// ([`fn_00b02130`], whose answer is answered) and the group's task count (+0x34) goes up;
+/// else the claim is dropped (+0x10 cleared) and 0 answered.
+pub fn fn_00b02220(e: &mut Engine, this: u32, group: u32, task: u32, flag: u32) -> u8 {
+    e.call(ENTER_CRITICAL_SECTION, &args![group.wrapping_add(0x14)]);
+    let previous = e
+        .call(
+            INTERLOCKED_COMPARE_EXCHANGE,
+            &args![task.wrapping_add(0x10), 1u32, 0u32],
+        )
+        .u32();
+    let answer = if previous == 0 {
+        let ready = e.mem.u8(group.wrapping_add(0x2c)) != 0
+            && e.mem.u8(group.wrapping_add(0x2d)) != 0
+            && e.mem.u32(task.wrapping_add(8)) == 0;
+        if ready {
+            e.mem.set_u32(task.wrapping_add(8), group);
+            e.mem.set_u8(task.wrapping_add(4), 0);
+            if flag as u8 != 0 {
+                e.mem.set_u8(group.wrapping_add(0x2d), 0);
+            }
+            let queued = fn_00b02130(e, Ptr::new(this), task);
+            let tasks = e.mem.u32(group.wrapping_add(0x34)).wrapping_add(1);
+            e.mem.set_u32(group.wrapping_add(0x34), tasks);
+            queued
+        } else {
+            e.mem.set_u32(task.wrapping_add(0x10), 0);
+            0
+        }
+    } else {
+        0
+    };
+    e.call(LEAVE_CRITICAL_SECTION, &args![group.wrapping_add(0x14)]);
+    answer
+}
+
+// Translated from 00b02310 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `ECX` unused, one word: a group, `RET 4`): under the
+/// group's critical section (+0x14), when the group runs (byte +0x2c) it is closed (byte +0x2d
+/// cleared) and 1 answered; else 0 (`AL`).
+pub fn fn_00b02310(e: &mut Engine, _this: u32, group: u32) -> u8 {
+    e.call(ENTER_CRITICAL_SECTION, &args![group.wrapping_add(0x14)]);
+    let running = if e.mem.u8(group.wrapping_add(0x2c)) != 0 {
+        e.mem.set_u8(group.wrapping_add(0x2d), 0);
+        1
+    } else {
+        0
+    };
+    e.call(LEAVE_CRITICAL_SECTION, &args![group.wrapping_add(0x14)]);
+    running
+}
+
+// Translated from 00b02360 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `ECX` unused, one word: an object, `RET 4`): a
+/// non-null object is deleted through its vtable slot +0 with 1 (the scalar deleting
+/// destructor). The inner null test repeats the outer one, so its null branch cannot run; it is
+/// kept as the exe has it.
+pub fn fn_00b02360(e: &mut Engine, _this: u32, object: u32) {
+    if object != 0 {
+        let target = object;
+        if target != 0 {
+            e.vcall(target, 0x0, &args![1u32]);
+        }
+    }
+}
+
+// Translated from 00b02600 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): whether the word is one of the
+/// six words at +0x38 (the worker thread ids, first match ends the search). Answers 1 or 0
+/// (`AL`).
+pub fn fn_00b02600(e: &mut Engine, this: u32, value: u32) -> u8 {
+    for i in 0..6u32 {
+        if e.mem.u32(this.wrapping_add(i * 4 + THREAD_IDS)) == value {
+            return 1;
+        }
+    }
+    0
+}
+
+// Translated from 00b02640 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The tasklet manager's scalar deleting destructor (unnamed in the engine map; `thiscall`,
+/// one word: the flags, `RET 4`): [`fn_00b01f00`], then with bit 0 of the flags the block is
+/// freed (`00aa4060`). Answers `this`.
+pub fn fn_00b02640(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    fn_00b01f00(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00b02710 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words it does not read, `RET 8`): does nothing.
+pub fn fn_00b02710(_e: &mut Engine, _this: u32, _unused_1: u32, _unused_2: u32) {}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_1510, fn_00b01510(u32, u32) -> u8),
+        entry!(0x00b0_1590, fn_00b01590(u32, u32, u32, u32) -> u32),
+        entry!(0x00b0_1af0, fn_00b01af0(u32) -> u8),
+        entry!(0x00b0_1b60, fn_00b01b60(u32, u32) -> u8),
+        entry!(0x00b0_1f00, fn_00b01f00(u32)),
+        entry!(0x00b0_2220, fn_00b02220(u32, u32, u32, u32) -> u8),
+        entry!(0x00b0_2310, fn_00b02310(u32, u32) -> u8),
+        entry!(0x00b0_2360, fn_00b02360(u32, u32)),
+        entry!(0x00b0_2600, fn_00b02600(u32, u32) -> u8),
+        entry!(0x00b0_2640, fn_00b02640(u32, u32) -> u32),
+        entry!(0x00b0_2710, fn_00b02710(u32, u32, u32)),
         entry!(0x00b0_1930, add_loose_files(u32, u32, u32)),
         entry!(0x00b0_1800, fn_00b01800(Ptr, u32, u32) -> u32),
         entry!(0x00b0_1bc0, fn_00b01bc0(Ptr, u32, u32) -> u32),
@@ -1132,5 +1409,275 @@ mod tests_loose_files {
         assert!(names.borrow().is_empty());
         let log = e.call_log.as_ref().unwrap();
         assert!(log.iter().all(|c| c.0 != FIND_CLOSE && c.0 != STRLEN));
+    }
+}
+
+#[cfg(test)]
+mod tests_find_and_queue {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Texts = Rc<RefCell<Vec<(Vec<u8>, u32)>>>;
+
+    /// One search entry: attributes, last write time (low word) and name.
+    type Entry = (u32, u32, &'static [u8]);
+
+    fn count(e: &Engine, addr: u32) -> usize {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .count()
+    }
+
+    fn text(e: &mut Engine, s: &[u8]) -> u32 {
+        let p = e.mem.alloc(s.len() as u32 + 1);
+        e.mem.write(p, s);
+        p
+    }
+
+    fn put_entry(e: &mut Engine, find: u32, entry: Entry) {
+        e.mem.set_u32(find, entry.0);
+        e.mem.set_u32(find + 0x14, entry.1);
+        e.mem.set_u32(find + 0x18, 0x55);
+        e.mem.write(find + 0x2c, entry.2);
+        e.mem.set_u8(find + 0x2c + entry.2.len() as u32, 0);
+    }
+
+    /// Searches by pattern: each pattern's entries, handle `index + 1`; the cursor per handle
+    /// in `cursors`.
+    fn searches(e: &mut Engine, tree: &'static [(&'static [u8], &'static [Entry])]) {
+        let cursors = e.mem.alloc(0x40);
+        e.register_double(FIND_FIRST_FILE_A, move |e, a| {
+            let pattern = e.mem.cstr(a[0]);
+            match tree.iter().position(|t| t.0 == pattern.as_slice()) {
+                Some(i) if !tree[i].1.is_empty() => {
+                    put_entry(e, a[1], tree[i].1[0]);
+                    e.mem.set_u32(cursors + 4 * i as u32, 1);
+                    (i as u32 + 1).into_ret()
+                }
+                _ => NO_HANDLE.into_ret(),
+            }
+        });
+        e.register_double(FIND_NEXT_FILE_A, move |e, a| {
+            let i = a[0] - 1;
+            let at = e.mem.u32(cursors + 4 * i);
+            let entries = tree[i as usize].1;
+            if (at as usize) < entries.len() {
+                put_entry(e, a[1], entries[at as usize]);
+                e.mem.set_u32(cursors + 4 * i, at + 1);
+                1u32.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.register(FIND_CLOSE, |_, _| 1u32.into_ret());
+    }
+
+    #[test]
+    fn a_file_is_found_by_its_object_name_or_by_path() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        searches(&mut e, &[(b"x.esm", &[(0, 0x1234, b"x.esm")])]);
+        let this = e.mem.alloc(8);
+        let name = text(&mut e, b"x.esm");
+        let other = text(&mut e, b"y.esm");
+        e.put_vtable(0x0900_0000, &[0, 0, 0, 0, 0, 0, 0x0a00_0000]);
+        e.mem.set_u32(this, 0x0900_0000);
+        let mut names = vec![name, other].into_iter();
+        e.register_double(0x0a00_0000, move |_, _| names.next().unwrap().into_ret());
+        assert_eq!(e.call(0x00b0_1510, &args![this, 0u32]).u8(), 1);
+        assert_eq!(fn_00b01510(&mut e, this, 0), 0);
+        assert_eq!(e.call(0x00b0_1af0, &args![name]).u8(), 1);
+        assert_eq!(fn_00b01af0(&mut e, other), 0);
+        assert_eq!(count(&e, FIND_CLOSE), 2);
+        let time = e.mem.alloc(8);
+        e.mem.set_u32(time, 7);
+        assert_eq!(fn_00b01b60(&mut e, other, time), 0);
+        assert_eq!(e.mem.u32(time), 7);
+        assert_eq!(e.call(0x00b0_1b60, &args![name, time]).u8(), 1);
+        assert_eq!((e.mem.u32(time), e.mem.u32(time + 4)), (0x1234, 0x55));
+        assert_eq!(count(&e, FIND_CLOSE), 3);
+    }
+
+    #[test]
+    fn the_walk_counts_newer_files_through_subfolders() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        searches(
+            &mut e,
+            &[
+                (
+                    b"r\\a\\*.*",
+                    &[
+                        (0x10, 9, b"sub"),
+                        (0x20, 9, b"x"),
+                        (0x10, 1, b"."),
+                        (0x20, 1, b"y"),
+                    ],
+                ),
+                (b"r\\a\\sub\\*.*", &[(0x20, 9, b"z")]),
+            ],
+        );
+        let names: Texts = Rc::new(RefCell::new(vec![]));
+        let seen = names.clone();
+        e.register_double(CALLEE_00AFD390, move |e, a| {
+            let s = e.mem.cstr(a[1]);
+            e.mem.set_u8(a[0], s[0]);
+            seen.borrow_mut().push((s, a[2]));
+            Ret::default()
+        });
+        e.register_double(CALLEE_00AF9C50, |e, a| {
+            e.mem.set_u32(a[2], 0x77);
+            1u32.into_ret()
+        });
+        e.register_double(CALLEE_00AFAC90, |e, a| {
+            assert_eq!(a[1], 0x77);
+            u32::from(e.mem.u8(a[2]) != b'q').into_ret()
+        });
+        // Written after the time when the entry's low word is above it.
+        e.register_double(COMPARE_FILE_TIME, |e, a| {
+            let (entry, time) = (e.mem.u32(a[0]), e.mem.u32(a[1]));
+            (if entry > time { 1u32 } else { 0xffff_ffff }).into_ret()
+        });
+        // The exe's "*.*" and "\" (`.rdata`).
+        e.map(ALL_FILES, 8);
+        e.mem.write(ALL_FILES, b"*.*\0\\\0");
+        let this = e.mem.alloc(8);
+        let root = text(&mut e, b"r\\");
+        let folder = text(&mut e, b"a\\");
+        let time = e.mem.alloc(8);
+        e.mem.set_u32(time, 5);
+        assert_eq!(
+            e.call(0x00b0_1590, &args![this, root, folder, time]).u32(),
+            2
+        );
+        assert_eq!(
+            *names.borrow(),
+            vec![
+                (b"a".to_vec(), 2),
+                (b"a\\sub".to_vec(), 2),
+                (b"z".to_vec(), 0),
+                (b"x".to_vec(), 0)
+            ]
+        );
+        assert_eq!(count(&e, FIND_CLOSE), 2);
+        // Nothing to search: 0 and no other call.
+        e.call_log = Some(vec![]);
+        let none = text(&mut e, b"none\\");
+        assert_eq!(fn_00b01590(&mut e, this, root, none, time), 0);
+        assert_eq!(count(&e, CALLEE_00AFD390), 0);
+        assert_eq!(count(&e, FIND_CLOSE), 0);
+    }
+
+    #[test]
+    fn the_destructors_close_and_free() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        for slot in [
+            CLOSE_HANDLE,
+            DELETE_CRITICAL_SECTION,
+            MEMORY_MANAGER_DEALLOCATE,
+        ] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x280);
+        e.mem.set_u32(this + 0xc, 0x11);
+        e.mem.set_u32(this + 0x270, 0x22);
+        assert_eq!(e.call(0x00b0_2640, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), BASE_VTABLE);
+        let log = e.call_log.as_ref().unwrap();
+        let closes: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == CLOSE_HANDLE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(closes, vec![0x22, 0x11]);
+        assert_eq!(count(&e, DELETE_CRITICAL_SECTION), 1);
+        assert_eq!(count(&e, MEMORY_MANAGER_DEALLOCATE), 1);
+        fn_00b02640(&mut e, this, 0);
+        assert_eq!(count(&e, MEMORY_MANAGER_DEALLOCATE), 1);
+        // 00b02360 deletes through slot 0 with 1.
+        let object = e.mem.alloc(4);
+        e.put_vtable(0x0900_0000, &[0x0a00_0000]);
+        e.mem.set_u32(object, 0x0900_0000);
+        e.register(0x0a00_0000, |_, _| Ret::default());
+        e.call(0x00b0_2360, &args![0u32, object]);
+        e.call(0x00b0_2360, &args![0u32, 0u32]);
+        let log = e.call_log.as_ref().unwrap();
+        let deletes: Vec<_> = log.iter().filter(|c| c.0 == 0x0a00_0000).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].1, vec![object, 1]);
+        e.call(0x00b0_2710, &args![this, 1u32, 2u32]);
+    }
+
+    #[test]
+    fn the_thread_id_search_and_the_group_close() {
+        let mut e = Engine::new();
+        for slot in [ENTER_CRITICAL_SECTION, LEAVE_CRITICAL_SECTION] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x60);
+        for i in 0..6 {
+            e.mem.set_u32(this + 0x38 + 4 * i, 100 + i);
+        }
+        e.mem.set_u32(this + 0x50, 106);
+        assert_eq!(e.call(0x00b0_2600, &args![this, 105u32]).u8(), 1);
+        assert_eq!(fn_00b02600(&mut e, this, 106), 0);
+        let group = e.mem.alloc(0x40);
+        e.mem.set_u8(group + 0x2d, 1);
+        assert_eq!(e.call(0x00b0_2310, &args![0u32, group]).u8(), 0);
+        assert_eq!(e.mem.u8(group + 0x2d), 1);
+        e.mem.set_u8(group + 0x2c, 1);
+        assert_eq!(fn_00b02310(&mut e, 0, group), 1);
+        assert_eq!(e.mem.u8(group + 0x2d), 0);
+    }
+
+    #[test]
+    fn a_task_is_queued_once_on_a_running_open_group() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        for slot in [ENTER_CRITICAL_SECTION, LEAVE_CRITICAL_SECTION] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.register(INTERLOCKED_COMPARE_EXCHANGE, |e, a| {
+            let old = e.mem.u32(a[0]);
+            if old == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+            }
+            old.into_ret()
+        });
+        // The real queue (00b02130) on a manager: its semaphore release doubled.
+        for slot in [RELEASE_SEMAPHORE, INTERLOCKED_INCREMENT] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let manager = e.mem.alloc(0x280);
+        let group = e.mem.alloc(0x40);
+        let task = e.mem.alloc(0x18);
+        e.mem.set_u8(task + 4, 9);
+        // Not running: the claim is dropped.
+        assert_eq!(
+            e.call(0x00b0_2220, &args![manager, group, task, 1u32]).u8(),
+            0
+        );
+        assert_eq!(e.mem.u32(task + 0x10), 0);
+        assert_eq!(e.mem.u32(task + 8), 0);
+        // Running and open: queued, the flag (low byte) closes the group.
+        e.mem.set_u8(group + 0x2c, 1);
+        e.mem.set_u8(group + 0x2d, 1);
+        assert_eq!(fn_00b02220(&mut e, manager, group, task, 0x101), 1);
+        assert_eq!(e.mem.u32(task + 8), group);
+        assert_eq!(e.mem.u8(task + 4), 0);
+        assert_eq!(e.mem.u8(group + 0x2d), 0);
+        assert_eq!(e.mem.u32(group + 0x34), 1);
+        assert_eq!(e.mem.u32(task + 0x10), 1);
+        // The task heads the manager's first list.
+        assert_eq!(e.mem.u32(manager + LISTS), task);
+        // Claimed already: 0, nothing changes.
+        assert_eq!(fn_00b02220(&mut e, manager, group, task, 0), 0);
+        assert_eq!(e.mem.u32(group + 0x34), 1);
+        assert_eq!(e.mem.u32(task + 0x10), 1);
     }
 }

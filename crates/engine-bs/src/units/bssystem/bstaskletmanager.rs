@@ -223,9 +223,84 @@ pub fn fn_00b020a0(e: &mut Engine, _this: Ptr, group: u32) -> u8 {
     started
 }
 
+/// `BSTaskletManager::QInstance` (`00b00a00`, no arguments), the tasklet callback's vtable
+/// (`010a47b8`), and the memory manager's release (`00aa4060`, `thiscall`, one word).
+const Q_INSTANCE_00B00A00: u32 = 0x00b0_0a00;
+const CALLBACK_VTABLE_010A47B8: u32 = 0x010a_47b8;
+const DEALLOCATE_00AA4060: u32 = 0x00aa_4060;
+
+/// Adds `hook` to a hook array while the manager's word at +8 is 0 and the
+/// array holds fewer than 16 (signed compare, `JGE`); answers whether it was added.
+fn add_hook(e: &mut Engine, count: u32, hooks: u32, hook: u32) -> u8 {
+    let manager = e.call(Q_INSTANCE_00B00A00, &args![]).u32();
+    if e.mem.u32(manager.wrapping_add(8)) == 0 && e.mem.i32(count) < 0x10 {
+        let n = e.mem.u32(count);
+        e.mem.set_u32(hooks.wrapping_add(n.wrapping_mul(4)), hook);
+        let n = e.mem.u32(count).wrapping_add(1);
+        e.mem.set_u32(count, n);
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 00b00d50 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word: a hook object): while the manager
+/// (`00b00a00`) has 0 in its word at +8 and the enter-hook array holds fewer than
+/// 16 (`011f8af0`, signed), the object goes into the array (`011f8af8`) and the count up;
+/// answers 1 then, else 0.
+pub fn fn_00b00d50(e: &mut Engine, hook: u32) -> u8 {
+    add_hook(e, ENTER_COUNT, ENTER_HOOKS, hook)
+}
+
+// Translated from 00b00da0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word): as [`fn_00b00d50`] for the leave hooks
+/// (`011f8af4`, `011f8b38`).
+pub fn fn_00b00da0(e: &mut Engine, hook: u32) -> u8 {
+    add_hook(e, LEAVE_COUNT, LEAVE_HOOKS, hook)
+}
+
+// Translated from 00b00e40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The tasklet callback's constructor (unnamed in the engine map; `thiscall`, one word: 0 for
+/// an enter hook, otherwise a leave hook, `RET 4`): stores the vtable `010a47b8` and adds the
+/// object to that hook array ([`fn_00b00d50`] or [`fn_00b00da0`]; the answer is kept in a
+/// local nobody reads). Answers `this`.
+pub fn fn_00b00e40(e: &mut Engine, this: u32, leave: u32) -> u32 {
+    e.mem.set_u32(this, CALLBACK_VTABLE_010A47B8);
+    if leave == 0 {
+        fn_00b00d50(e, this);
+    } else {
+        fn_00b00da0(e, this);
+    }
+    this
+}
+
+// Translated from 00b00e90 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSTaskletManagerCallback`'s scalar deleting destructor (engine map; `thiscall`, one word:
+/// the flags, `RET 4`): stores the vtable `010a47b8`, then with bit 0 of the flags the block
+/// is freed (`00aa4060`). Answers `this`.
+pub fn bs_tasklet_manager_callback_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.mem.set_u32(this, CALLBACK_VTABLE_010A47B8);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE_00AA4060, &args![MEMORY_MANAGER_011F6238, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b0_0d50, fn_00b00d50(u32) -> u8),
+        entry!(0x00b0_0da0, fn_00b00da0(u32) -> u8),
+        entry!(0x00b0_0e40, fn_00b00e40(u32, u32) -> u32),
+        entry!(
+            0x00b0_0e90,
+            bs_tasklet_manager_callback_scalar_deleting_destructor(u32, u32) -> u32
+        ),
         entry!(0x00b0_0a80, bs_tasklet_manager_create_task_group(Ptr, u32) -> u8),
         entry!(0x00b0_2010, fn_00b02010(Ptr, u32) -> u8),
         entry!(0x00b0_27c0, fn_00b027c0(Ptr) -> Ptr),
@@ -507,5 +582,59 @@ mod start_tests {
             0,
             "already started"
         );
+    }
+}
+
+#[cfg(test)]
+mod callback_tests {
+    use super::*;
+
+    fn engine(manager: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(ENTER_COUNT, 0x88);
+        e.register_double(Q_INSTANCE_00B00A00, move |_, _| manager.into_ret());
+        e
+    }
+
+    #[test]
+    fn a_callback_joins_its_hook_array_until_16_or_a_running_manager() {
+        let manager = 0x0800_0000;
+        let mut e = engine(manager);
+        e.mem.map(manager, 0x10);
+        let a = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b0_0e40, &args![a, 0u32]).u32(), a);
+        assert_eq!(e.mem.u32(a), CALLBACK_VTABLE_010A47B8);
+        assert_eq!((e.mem.u32(ENTER_COUNT), e.mem.u32(ENTER_HOOKS)), (1, a));
+        let b = e.mem.alloc(4);
+        fn_00b00e40(&mut e, b, 7);
+        assert_eq!((e.mem.u32(LEAVE_COUNT), e.mem.u32(LEAVE_HOOKS)), (1, b));
+        // Full at 16 (and a negative count is below 16).
+        e.mem.set_u32(ENTER_COUNT, 0x10);
+        assert_eq!(e.call(0x00b0_0d50, &args![0x55u32]).u8(), 0);
+        e.mem.set_u32(LEAVE_COUNT, 0xffff_ffff);
+        e.mem.set_u32(LEAVE_HOOKS - 4, 0);
+        assert_eq!(fn_00b00da0(&mut e, 0x66), 1);
+        assert_eq!(e.mem.u32(LEAVE_HOOKS - 4), 0x66);
+        assert_eq!(e.mem.u32(LEAVE_COUNT), 0);
+        // A manager with its word at +8 set takes none.
+        e.mem.set_u32(manager + 8, 1);
+        e.mem.set_u32(ENTER_COUNT, 0);
+        assert_eq!(fn_00b00d50(&mut e, 0x77), 0);
+        assert_eq!(e.mem.u32(ENTER_COUNT), 0);
+    }
+
+    #[test]
+    fn the_callback_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(DEALLOCATE_00AA4060, |_, _| Ret::default());
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b0_0e90, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), CALLBACK_VTABLE_010A47B8);
+        assert_eq!(e.call(0x00b0_0e90, &args![this, 1u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log.iter().filter(|c| c.0 == DEALLOCATE_00AA4060).collect();
+        assert_eq!(frees.len(), 1);
+        assert_eq!(frees[0].1, vec![MEMORY_MANAGER_011F6238, this]);
     }
 }
