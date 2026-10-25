@@ -28,7 +28,10 @@ use std::path::{Path, PathBuf};
 
 /// The game's translated code, started on the player's executable.
 pub struct Host {
-    pub engine: Engine,
+    /// Boxed so it never moves: the thread host's coroutines keep the address they were
+    /// first handed (`engine::thread_host`), and a game thread started during [`Host::start`]
+    /// runs again after the engine went into the `Host`.
+    pub engine: Box<Engine>,
     /// The executable whose data sections are mapped.
     pub exe: PathBuf,
     /// What the static initializers' run did (entries run, skipped).
@@ -64,7 +67,7 @@ impl Host {
                 exe.display()
             ));
         }
-        let mut engine = Engine::with_exe(&exe)?;
+        let mut engine = Box::new(Engine::with_exe(&exe)?);
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         engine.start_real_clock();
