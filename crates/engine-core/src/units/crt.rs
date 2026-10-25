@@ -31,6 +31,7 @@ pub mod misc2;
 pub mod misc3;
 pub mod misc4;
 pub mod misc5;
+pub mod misc6;
 pub mod num2;
 pub mod printf;
 pub mod qualified;
@@ -6189,6 +6190,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     table.extend(misc3::funcs());
     table.extend(misc4::funcs());
     table.extend(misc5::funcs());
+    table.extend(misc6::funcs());
     table.extend(locale3::funcs());
     table.extend(mbstowcs::funcs());
     table.extend(io2::funcs());
