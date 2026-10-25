@@ -135,12 +135,148 @@ pub fn dlc_utility_report(e: &mut Engine, this: Ptr, _unused: u32, callback: u32
     0
 }
 
+/// The memory manager's release (`00aa4060`, `thiscall` on `011f6238`, one word), the
+/// utility's destructor body (`00af2850`), the found-DLC entry's destructor (`00b008a0`,
+/// `thiscall`), and the two simple-list clears (`00ae83e0` and `00470470`, `thiscall`, no
+/// stack words).
+const DEALLOCATE: u32 = 0x00aa_4060;
+const ENTRY_DESTRUCT: u32 = 0x00b0_08a0;
+const LIST_CLEAR: u32 = 0x00ae_83e0;
+const LIST_CLEAR_2: u32 = 0x0047_0470;
+
+// Translated from 00af2750 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSDLCSystemUtility::Initialize` (engine map; no arguments): makes the singleton
+/// ([`dlc_utility_instance`]) and answers 1 in `AL` over the rest of its answer (EAX keeps
+/// the singleton's upper three bytes).
+pub fn dlc_utility_initialize(e: &mut Engine) -> u32 {
+    let made = dlc_utility_instance(e);
+    (made & 0xffff_ff00) | 1
+}
+
+// Translated from 00af2760 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSDLCSystemUtility::Destroy` (engine map; no arguments): when the singleton (`011f7244`)
+/// is not null, its destructor body runs ([`fn_00af2850`]) and the block is freed (`00aa4060`;
+/// the inlined deleting destructor's flag is the constant 1, so the free always runs), and the
+/// singleton is set to null. The inner null test repeats the outer one, so its null branch
+/// cannot run; it is kept as the exe has it.
+pub fn dlc_utility_destroy(e: &mut Engine) {
+    if e.global::<u32>(INSTANCE) != 0 {
+        let object = e.global::<u32>(INSTANCE);
+        if object != 0 {
+            fn_00af2850(e, object);
+            e.call(DEALLOCATE, &args![MEMORY_MANAGER, object]);
+        }
+        e.set_global::<u32>(INSTANCE, 0);
+    }
+}
+
+// Translated from 00af27c0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The utility's constructor (no label; `thiscall`, plain `RET`): the words at +0, +4 and +8
+/// and the three two-word list heads at +0xc, +0x14 and +0x1c cleared. Answers `this`.
+pub fn fn_00af27c0(e: &mut Engine, this: u32) -> u32 {
+    for offset in [0u32, 4, 8, 0xc, 0x10, 0x14, 0x18, 0x1c, 0x20] {
+        e.mem.set_u32(this.wrapping_add(offset), 0);
+    }
+    this
+}
+
+// Translated from 00af2850 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af2850 - the SEH frame (FS:[0] handler 00f22fb7, states 2/1/0/-1 between the member destructors) is not translated.
+/// The utility's destructor body (no label; `thiscall`, plain `RET`): the found-DLC list is
+/// emptied ([`fn_00af2a60`] with 0), then the lists at +0x1c (`00470470`), +0x14 and +0xc
+/// (`00ae83e0`) are cleared.
+pub fn fn_00af2850(e: &mut Engine, this: u32) {
+    fn_00af2a60(e, this, 0);
+    e.call(LIST_CLEAR_2, &args![this.wrapping_add(0x1c)]);
+    e.call(LIST_CLEAR, &args![this.wrapping_add(0x14)]);
+    e.call(LIST_CLEAR, &args![this.wrapping_add(LIST)]);
+}
+
+// Translated from 00af28d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, three words: one it does not read, a callback and a value,
+/// `RET 0xc`): the callback (cdecl, three words) gets `(0, 0, value)`. Answers 1 (`AL`).
+pub fn fn_00af28d0(e: &mut Engine, _this: u32, _unused: u32, callback: u32, value: u32) -> u8 {
+    e.call(callback, &args![0u32, 0u32, value]);
+    1
+}
+
+// Translated from 00af2a60 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The found-DLC list's release (no label; `thiscall`, one word whose low byte is a flag,
+/// `RET 4`): with the flag set `00af2c20` first. Then for each node from the list head
+/// (`+0xc`) while the node is not null and not empty (item and next both null), a non-null
+/// item is destroyed (`00b008a0`) and freed (`00aa4060`; the inlined deleting destructor's
+/// flag is the constant 1, so the free always runs). Last the list is cleared (`00ae83e0`).
+pub fn fn_00af2a60(e: &mut Engine, this: u32, flag: u32) {
+    if flag as u8 != 0 {
+        e.call(FN_00AF2C20, &args![this]);
+    }
+    let mut node = this.wrapping_add(LIST);
+    while node != 0 {
+        let empty = e.mem.u32(node.wrapping_add(4)) == 0 && e.mem.u32(node) == 0;
+        if empty {
+            break;
+        }
+        let item = e.mem.u32(node);
+        if item != 0 {
+            e.call(ENTRY_DESTRUCT, &args![item]);
+            e.call(DEALLOCATE, &args![MEMORY_MANAGER, item]);
+        }
+        node = e.mem.u32(node.wrapping_add(4));
+    }
+    e.call(LIST_CLEAR, &args![this.wrapping_add(LIST)]);
+}
+
+// Translated from 00af2c20 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, plain `RET`): does nothing.
+pub fn fn_00af2c20(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00af2c30 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, plain `RET`): does nothing.
+pub fn fn_00af2c30(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00af2c40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, plain `RET`): answers 1 (`AL`).
+pub fn fn_00af2c40(_e: &mut Engine, _this: u32) -> u8 {
+    1
+}
+
+// Translated from 00af2c50 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, two words it does not read, `RET 8`): answers 0 (`AL`).
+pub fn fn_00af2c50(_e: &mut Engine, _this: u32, _unused_1: u32, _unused_2: u32) -> u8 {
+    0
+}
+
+// Translated from 00af2c60 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, plain `RET`): does nothing.
+pub fn fn_00af2c60(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00af2c70 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, plain `RET`): does nothing.
+pub fn fn_00af2c70(_e: &mut Engine, _this: u32) {}
+
+// Translated from 00af2c80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `BSDLCSystemUtility::Idle` (engine map; `thiscall`, plain `RET`): does nothing.
+pub fn dlc_utility_idle(_e: &mut Engine, _this: u32) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00af_26c0, dlc_utility_instance() -> u32),
         entry!(0x00af_2940, dlc_utility_scan(Ptr, u32, u32) -> u32),
         entry!(0x00af_2b10, dlc_utility_report(Ptr, u32, u32) -> u32),
+        entry!(0x00af_2750, dlc_utility_initialize() -> u32),
+        entry!(0x00af_2760, dlc_utility_destroy()),
+        entry!(0x00af_27c0, fn_00af27c0(u32) -> u32),
+        entry!(0x00af_2850, fn_00af2850(u32)),
+        entry!(0x00af_28d0, fn_00af28d0(u32, u32, u32, u32) -> u8),
+        entry!(0x00af_2a60, fn_00af2a60(u32, u32)),
+        entry!(0x00af_2c20, fn_00af2c20(u32)),
+        entry!(0x00af_2c30, fn_00af2c30(u32)),
+        entry!(0x00af_2c40, fn_00af2c40(u32) -> u8),
+        entry!(0x00af_2c50, fn_00af2c50(u32, u32, u32) -> u8),
+        entry!(0x00af_2c60, fn_00af2c60(u32)),
+        entry!(0x00af_2c70, fn_00af2c70(u32)),
+        entry!(0x00af_2c80, dlc_utility_idle(u32)),
     ]
 }
 
@@ -274,5 +410,117 @@ mod tests {
             calls(&e, CALLBACK),
             vec![vec![0xffff_ffff, 0xffff_ffff, 0, 0]]
         );
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    type Calls = Vec<Vec<u32>>;
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(INSTANCE, 4);
+        e.register(LIST_CLEAR, |_, _| Ret::default());
+        e.register(LIST_CLEAR_2, |_, _| Ret::default());
+        e.register(ENTRY_DESTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn initialize_makes_the_instance_and_answers_one_in_al() {
+        let mut e = engine();
+        let answer = e.call(0x00af_2750, &args![]).u32();
+        let made = e.global::<u32>(INSTANCE);
+        assert_ne!(made, 0);
+        assert_eq!(answer, (made & 0xffff_ff00) | 1);
+        // The real constructor cleared the nine words.
+        for offset in (0..0x24).step_by(4) {
+            assert_eq!(e.mem.u32(made + offset), 0);
+        }
+        // Destroy: the body, the free, a null singleton.
+        e.call(0x00af_2760, &args![]);
+        assert_eq!(e.global::<u32>(INSTANCE), 0);
+        assert_eq!(calls(&e, DEALLOCATE), vec![vec![MEMORY_MANAGER, made]]);
+        assert_eq!(calls(&e, LIST_CLEAR_2), vec![vec![made + 0x1c]]);
+        assert_eq!(
+            calls(&e, LIST_CLEAR),
+            vec![vec![made + 0xc], vec![made + 0x14], vec![made + 0xc]]
+        );
+        e.call(0x00af_2760, &args![]);
+        assert_eq!(calls(&e, DEALLOCATE).len(), 1);
+    }
+
+    #[test]
+    fn the_release_frees_each_item_until_an_empty_node() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x24);
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(this + 0xc, a);
+        e.mem.set_u32(this + 0x10, second);
+        e.mem.set_u32(second, b);
+        e.register(FN_00AF2C20, |_, _| Ret::default());
+        e.call(0x00af_2a60, &args![this, 0x100u32]);
+        // Only the low byte is the flag.
+        assert!(calls(&e, FN_00AF2C20).is_empty());
+        assert_eq!(calls(&e, ENTRY_DESTRUCT), vec![vec![a], vec![b]]);
+        assert_eq!(
+            calls(&e, DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, a], vec![MEMORY_MANAGER, b]]
+        );
+        assert_eq!(calls(&e, LIST_CLEAR), vec![vec![this + 0xc]]);
+        // An empty head: no frees, the flag calls 00af2c20.
+        let empty = e.mem.alloc(0x24);
+        e.call_log = Some(vec![]);
+        fn_00af2a60(&mut e, empty, 1);
+        assert_eq!(calls(&e, FN_00AF2C20), vec![vec![empty]]);
+        assert!(calls(&e, DEALLOCATE).is_empty());
+        // A null item with a next node is skipped, not freed.
+        let c = e.mem.alloc(8);
+        e.mem.set_u32(second, c);
+        e.mem.set_u32(empty + 0x10, second);
+        e.call_log = Some(vec![]);
+        fn_00af2a60(&mut e, empty, 0);
+        assert_eq!(calls(&e, ENTRY_DESTRUCT), vec![vec![c]]);
+    }
+
+    #[test]
+    fn the_callback_report_and_the_empty_slots() {
+        let mut e = engine();
+        e.register(0x0a00_0000, |_, _| 0xffff_ff00u32.into_ret());
+        assert_eq!(
+            e.call(0x00af_28d0, &args![1u32, 2u32, 0x0a00_0000u32, 9u32])
+                .u8(),
+            1
+        );
+        assert_eq!(calls(&e, 0x0a00_0000), vec![vec![0, 0, 9]]);
+        assert_eq!(e.call(0x00af_2c40, &args![1u32]).u8(), 1);
+        assert_eq!(e.call(0x00af_2c50, &args![1u32, 2u32, 3u32]).u8(), 0);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, 0x1234_5678);
+        for addr in [
+            0x00af_2c20u32,
+            0x00af_2c30,
+            0x00af_2c60,
+            0x00af_2c70,
+            0x00af_2c80,
+        ] {
+            e.call(addr, &args![this]);
+        }
+        assert_eq!(e.mem.u32(this), 0x1234_5678);
     }
 }
