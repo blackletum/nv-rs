@@ -499,8 +499,9 @@ const UNLOCK: u32 = 0x00ed_de5f;
 const BAD_EXCEPTION_VTABLE: u32 = 0x010f_20a8;
 
 // Translated from 00eccf00 (disassembled, FalloutNV.exe 1.4.0.525)
-/// `_c_exit` (LIBCMT/crt0dat.c; cdecl, no arguments): `doexit(0, 1, 1)` (`PUSH 1; PUSH 1;
-/// PUSH 0`), the C termination without the `atexit` table and without leaving the process.
+/// No Ghidra function (the shape of LIBCMT's `_c_exit`, unconfirmed; cdecl, no arguments):
+/// `doexit(0, 1, 1)` (`PUSH 1; PUSH 1; PUSH 0`), the C termination without the `atexit`
+/// table and without leaving the process.
 pub fn c_exit(e: &mut Engine) {
     e.call(DOEXIT, &args![0u32, 1u32, 1u32]);
 }
