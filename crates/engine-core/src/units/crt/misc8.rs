@@ -3,7 +3,7 @@
 //! `_WinMainCRTStartup` (`00ecc4db`), the `__except` filters of `__tmainCRTStartup` (`00ecc4c2`)
 //! and `__BuildCatchObject` (`00ece9e5`), the rethrow filter `00ece4ab` (`ExFilterRethrow`'s
 //! shape, unconfirmed), the `__finally` block of `__FrameUnwindToState` (`00ece490`) and
-//! `std::bad_exception`'s copy constructor (`00ecee9b`).
+//! `std::bad_exception`'s copy constructor (`00ecee9b`), and `__XcptFilter` (`00edd4f5`).
 //!
 //! Every call is made by address, as the exe makes it, so a test can double each one.
 
@@ -298,6 +298,99 @@ pub fn bad_exception_copy(e: &mut Engine, this: u32, other: u32) -> u32 {
     this
 }
 
+/// `_getptd_noexit` (`00ed1165`, no arguments), `_XcptActTabCount` (`011c289c`),
+/// `_First_FPE_Indx` (`011c2890`) and `_Num_FPE` (`011c2894`).
+const GETPTD_NOEXIT: u32 = 0x00ed_1165;
+const XCPT_ACT_TAB_COUNT: u32 = 0x011c_289c;
+const FIRST_FPE_INDEX: u32 = 0x011c_2890;
+const FPE_COUNT: u32 = 0x011c_2894;
+
+/// The floating-point exception codes `__XcptFilter` turns into `_FPE_*` codes for `SIGFPE`.
+const FPE_CODES: [(u32, u32); 7] = [
+    (0xc000_008e, 0x83),
+    (0xc000_0090, 0x81),
+    (0xc000_0091, 0x84),
+    (0xc000_0093, 0x85),
+    (0xc000_008d, 0x82),
+    (0xc000_008f, 0x86),
+    (0xc000_0092, 0x8a),
+];
+
+// Translated from 00edd4f5 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `__XcptFilter` (LIBCMT/winxfltr.c; cdecl: exception code, exception pointers): 0 without
+/// thread data (`_getptd_noexit`). The thread's action table (+0x5C, 12-byte entries:
+/// code, signal, action; `_XcptActTabCount` of them, the first code read before the bound
+/// is tested) is searched for the code; no entry or a default action (0) answers 0
+/// (`EXCEPTION_CONTINUE_SEARCH`), `SIG_DIE` (5) is reset and answers 1, `SIG_IGN` (1) answers
+/// -1. Otherwise, with the pointers in the thread's `_tpxcptinfoptrs` (+0x60) for the
+/// handler's time: for `SIGFPE` (8) every floating-point entry's action is reset, the thread's
+/// `_tfpecode` (+0x64) set from the code (kept for others) and the handler called with
+/// (8, that code), the old code then put back; for any other signal the entry's action is
+/// reset and the handler called with the signal. Answers -1 (`EXCEPTION_CONTINUE_EXECUTION`).
+pub fn xcpt_filter(e: &mut Engine, code: u32, pointers: u32) -> i32 {
+    let ptd = e.call(GETPTD_NOEXIT, &args![]).u32();
+    if ptd == 0 {
+        return 0;
+    }
+    let table = e.mem.u32(ptd.wrapping_add(0x5c));
+    let count = e.mem.u32(XCPT_ACT_TAB_COUNT);
+    let end = count.wrapping_mul(0xc).wrapping_add(table);
+    let mut entry = table;
+    loop {
+        if e.mem.u32(entry) == code {
+            break;
+        }
+        entry = entry.wrapping_add(0xc);
+        if entry >= end {
+            break;
+        }
+    }
+    if entry >= end || e.mem.u32(entry) != code {
+        return 0;
+    }
+    let handler = e.mem.u32(entry.wrapping_add(8));
+    if handler == 0 {
+        return 0;
+    }
+    if handler == 5 {
+        e.mem.set_u32(entry.wrapping_add(8), 0);
+        return 1;
+    }
+    if handler == 1 {
+        return -1;
+    }
+    let old_pointers = e.mem.u32(ptd.wrapping_add(0x60));
+    e.mem.set_u32(ptd.wrapping_add(0x60), pointers);
+    let signal = e.mem.u32(entry.wrapping_add(4));
+    if signal == 8 {
+        let mut index = e.mem.u32(FIRST_FPE_INDEX);
+        let mut slot = index.wrapping_mul(0xc);
+        while (index as i32)
+            < (e.mem
+                .u32(FPE_COUNT)
+                .wrapping_add(e.mem.u32(FIRST_FPE_INDEX)) as i32)
+        {
+            let table = e.mem.u32(ptd.wrapping_add(0x5c));
+            e.mem.set_u32(slot.wrapping_add(table).wrapping_add(8), 0);
+            index = index.wrapping_add(1);
+            slot = slot.wrapping_add(0xc);
+        }
+        let exception = e.mem.u32(entry);
+        let old_code = e.mem.u32(ptd.wrapping_add(0x64));
+        if let Some((_, fpe)) = FPE_CODES.iter().find(|(c, _)| *c == exception) {
+            e.mem.set_u32(ptd.wrapping_add(0x64), *fpe);
+        }
+        let fpe = e.mem.u32(ptd.wrapping_add(0x64));
+        e.call(handler, &args![8u32, fpe]);
+        e.mem.set_u32(ptd.wrapping_add(0x64), old_code);
+    } else {
+        e.mem.set_u32(entry.wrapping_add(8), 0);
+        e.call(handler, &args![signal]);
+    }
+    e.mem.set_u32(ptd.wrapping_add(0x60), old_pointers);
+    -1
+}
+
 /// This file's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -308,6 +401,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_e4ab, ex_filter_rethrow(u32) -> u32),
         entry!(0x00ec_e9e5, build_catch_object_filter() -> u32),
         entry!(0x00ec_ee9b, bad_exception_copy(u32, u32) -> u32),
+        entry!(0x00ed_d4f5, xcpt_filter(u32, u32) -> i32),
     ]
 }
 
@@ -548,5 +642,78 @@ mod tests {
         assert_eq!(e.mem.u32(a), BAD_EXCEPTION_VTABLE);
         assert_eq!(calls(&e, EXCEPTION_COPY), vec![vec![a, 0x0600_0000]]);
         assert_eq!(e.call(0x00ec_e9e5, &[]).u32(), 1);
+    }
+    /// An engine with thread data whose action table has `entries` (code, signal, action).
+    fn xcpt_engine(entries: &[(u32, u32, u32)]) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x011c_2000, 0x1000);
+        let ptd = e.mem.alloc(0x100);
+        e.register_double(GETPTD_NOEXIT, move |_, _| ptd.into_ret());
+        let table = e.mem.alloc(entries.len() as u32 * 0xc + 0xc);
+        for (i, (c, s, a)) in entries.iter().enumerate() {
+            let at = table + i as u32 * 0xc;
+            e.mem.set_u32(at, *c);
+            e.mem.set_u32(at + 4, *s);
+            e.mem.set_u32(at + 8, *a);
+        }
+        e.mem.set_u32(ptd + 0x5c, table);
+        e.mem.set_u32(XCPT_ACT_TAB_COUNT, entries.len() as u32);
+        (e, ptd, table)
+    }
+
+    #[test]
+    fn xcpt_filter_follows_the_action_table() {
+        const HANDLER: u32 = 0x00a0_0000;
+        let (mut e, ptd, table) = xcpt_engine(&[
+            (0xc000_0005, 0xb, HANDLER),
+            (0xc000_001d, 4, 5),
+            (0xc000_0096, 4, 1),
+            (0xc000_008e, 8, HANDLER),
+            (0xc000_0090, 8, 0x77),
+            (0xc000_0094, 8, 0),
+        ]);
+        e.mem.set_u32(FIRST_FPE_INDEX, 3);
+        e.mem.set_u32(FPE_COUNT, 2);
+        let seen = e.mem.alloc(8);
+        e.register_double(HANDLER, move |e, a| {
+            let (ptd_pointers, code) = (e.mem.u32(ptd + 0x60), e.mem.u32(ptd + 0x64));
+            e.mem.set_u32(seen, ptd_pointers);
+            e.mem.set_u32(seen + 4, code);
+            assert!(a[0] == 0xb || a[0] == 8);
+            Ret::default()
+        });
+        e.mem.set_u32(ptd + 0x60, 0x11);
+        e.mem.set_u32(ptd + 0x64, 0x22);
+        e.call_log = Some(vec![]);
+        // Unknown code, default action.
+        assert_eq!(e.call(0x00ed_d4f5, &[0x1234, 0x0600_0000]).i32(), 0);
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_0094, 0x0600_0000]).i32(), 0);
+        // SIG_IGN and SIG_DIE.
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_0096, 0x0600_0000]).i32(), -1);
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_001d, 0x0600_0000]).i32(), 1);
+        assert_eq!(e.mem.u32(table + 0xc + 8), 0);
+        // A handler for another signal: its action reset, called with the signal.
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_0005, 0x0600_0000]).i32(), -1);
+        assert_eq!(e.mem.u32(table + 8), 0);
+        assert_eq!(e.mem.u32(seen), 0x0600_0000);
+        assert_eq!(e.mem.u32(ptd + 0x60), 0x11);
+        // SIGFPE: every FPE entry reset, the code mapped for the handler and put back.
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_008e, 0x0700_0000]).i32(), -1);
+        assert_eq!(e.mem.u32(seen + 4), 0x83);
+        assert_eq!(e.mem.u32(ptd + 0x64), 0x22);
+        assert_eq!(e.mem.u32(table + 3 * 0xc + 8), 0);
+        assert_eq!(e.mem.u32(table + 4 * 0xc + 8), 0);
+        let handled: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == HANDLER)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(handled, vec![vec![0xb], vec![8, 0x83]]);
+        // No thread data.
+        e.register(GETPTD_NOEXIT, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ed_d4f5, &[0xc000_0005, 0]).i32(), 0);
     }
 }
