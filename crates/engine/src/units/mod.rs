@@ -35,6 +35,7 @@ pub use engine_fallout::units::fallout_shared_speedtree;
 pub use engine_fallout::units::fallout_shared_tempeffects;
 pub use engine_fallout::units::remotelog;
 pub use engine_fallout::units::unplaced;
+pub use engine_fallout::units::xapilib;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
 pub use engine_gamebryo::units::nimain;

@@ -23,6 +23,7 @@ pub mod fallout_shared_speedtree;
 pub mod fallout_shared_tempeffects;
 pub mod remotelog;
 pub mod unplaced;
+pub mod xapilib;
 
 // The units of the crates below this one, so `crate::units::<subsystem>` reaches them.
 pub use engine_bs::units::bsaudio;
@@ -70,6 +71,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_shared_tempeffects::funcs(out);
     remotelog::funcs(out);
     unplaced::funcs(out);
+    xapilib::funcs(out);
 }
 
 // This crate's unit tests: `Engine::new()` registers the core's functions,
