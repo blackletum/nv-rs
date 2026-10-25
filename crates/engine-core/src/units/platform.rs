@@ -166,6 +166,49 @@ pub fn fn_00af2f20(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), SAVE_DATA_UTILITY_VTABLE);
 }
 
+/// `BSNetworkSystemUtility` (`BSSystemUtilities`): the instance pointer (`011f7270`, null until
+/// the first [`bs_network_system_utility_q_instance`]).
+const NETWORK_UTILITY_INSTANCE: u32 = 0x011f_7270;
+
+// Translated from 00af2c90 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af2c90 - the SEH frame (FS:[0] handler 00f2300b, state -1/0 around the constructor call) is not translated.
+/// `BSNetworkSystemUtility::QInstance` (engine map): when the pointer at `011f7270` is null, an
+/// 8-byte block from the memory manager (`00aa3e40` on `011f6238`) constructed by
+/// [`fn_00af2d40`] (null when the allocation fails) is stored there; answers the pointer.
+pub fn bs_network_system_utility_q_instance(e: &mut Engine) -> Ptr {
+    if e.mem.u32(NETWORK_UTILITY_INSTANCE) == 0 {
+        let block = e.call(0x00aa_3e40, &args![MEMORY_MANAGER, 8u32]).u32();
+        let made = if block != 0 {
+            fn_00af2d40(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.mem.set_u32(NETWORK_UTILITY_INSTANCE, made);
+    }
+    Ptr::new(e.mem.u32(NETWORK_UTILITY_INSTANCE))
+}
+
+// Translated from 00af2d40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The `BSNetworkSystemUtility` constructor (`thiscall`, plain `RET`; the map gives no name):
+/// the byte at +0 and the word at +4 cleared; answers `this`.
+pub fn fn_00af2d40(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u8(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00af2d70 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Sets the `BSNetworkSystemUtility`'s callback (`thiscall`, `RET 4`; the map gives no name):
+/// stores it at +4 and, when it is not null, calls it at once (cdecl) with 0 and whether the
+/// byte at +0 is nonzero.
+pub fn fn_00af2d70(e: &mut Engine, this: Ptr, callback: u32) {
+    e.mem.set_u32(this.addr() + 4, callback);
+    if callback != 0 {
+        let on = u32::from(e.mem.u8(this.addr()) != 0);
+        e.call(callback, &args![0u32, on]);
+    }
+}
+
 /// `BSMsgDialogSystemUtility` singleton (`BSSystemUtilities`): its storage in `.data`
 /// (`011f72ec`, 8 bytes), the function-local static's guard word (`011f72f4`, bit 0 =
 /// constructed), its vtable (`010a42cc`) and its `atexit` destructor stub (`00fdc310`).
@@ -400,6 +443,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
+        entry!(0x00af2c90, bs_network_system_utility_q_instance() -> Ptr),
+        entry!(0x00af2d40, fn_00af2d40(Ptr) -> Ptr),
+        entry!(0x00af2d70, fn_00af2d70(Ptr, u32)),
         entry!(0x00af30a0, fn_00af30a0(Ptr) -> Ptr),
         entry!(0x00af2e50, bs_save_data_system_utility_instance() -> Ptr),
         entry!(0x00af2ed0, fn_00af2ed0(Ptr) -> Ptr),
@@ -3193,6 +3239,32 @@ mod tests {
             "RPC_E_CHANGED_MODE"
         );
         assert_eq!(co_initialize_ex(&mut e, 4, 0), 0x8007_0057, "E_INVALIDARG");
+    }
+
+    #[test]
+    fn the_network_utility_is_made_once_and_its_callback_hears_the_state() {
+        let mut e = thread_engine();
+        e.mem.map(NETWORK_UTILITY_INSTANCE, 4);
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(block, 0xffff_ffff);
+        e.register_double(0x00aa_3e40, move |_, words| {
+            assert_eq!(words, &[MEMORY_MANAGER, 8]);
+            Ret { eax: block, ..Ret::default() }
+        });
+        let made = bs_network_system_utility_q_instance(&mut e).addr();
+        assert_eq!(made, block);
+        assert_eq!((e.mem.u8(block), e.mem.u32(block + 4)), (0, 0));
+        assert_eq!(bs_network_system_utility_q_instance(&mut e).addr(), block);
+        let heard = e.mem.alloc(8);
+        e.register_double(0x0012_3450, move |e, words| {
+            e.mem.set_u32(heard, words[0] + 0x10);
+            e.mem.set_u32(heard + 4, words[1]);
+            Ret::default()
+        });
+        e.mem.set_u8(block, 1);
+        fn_00af2d70(&mut e, Ptr::new(block), 0x0012_3450);
+        assert_eq!(e.mem.u32(block + 4), 0x0012_3450);
+        assert_eq!((e.mem.u32(heard), e.mem.u32(heard + 4)), (0x10, 1));
     }
 
     #[test]
