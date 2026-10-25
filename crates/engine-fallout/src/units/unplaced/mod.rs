@@ -3,6 +3,7 @@
 
 pub mod atexit_irregular;
 pub mod atexit_irregular_b;
+pub mod atexit_irregular_c;
 pub mod run_00401000;
 pub mod run_004012a0;
 pub mod run_004019b0;
@@ -486,6 +487,7 @@ pub mod static_init_irregular_j;
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(atexit_irregular::funcs());
     out.extend(atexit_irregular_b::funcs());
+    out.extend(atexit_irregular_c::funcs());
     out.extend(run_00401000::funcs());
     out.extend(run_004012a0::funcs());
     out.extend(run_004019b0::funcs());
