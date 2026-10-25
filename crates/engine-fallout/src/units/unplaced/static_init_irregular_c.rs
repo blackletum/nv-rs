@@ -53,7 +53,7 @@ fn register_at_exit(e: &mut Engine, exit_fn: u32) {
 
 /// One step of the long object initializers below, in the code's order.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum InitStep {
+pub(super) enum InitStep {
     /// `PUSH 0xc; CALL 00401000`; when that answers a block, `PUSH second; PUSH first; MOV
     /// ECX,block; CALL 0040c150`; its answer, or 0 for a null block, stored in the global
     /// (through two frame locals, with the `FS:[0]` state set around the constructor):
@@ -64,7 +64,7 @@ enum InitStep {
 }
 
 /// Runs the steps of a long object initializer in order.
-fn run_steps(e: &mut Engine, steps: &[InitStep]) {
+pub(super) fn run_steps(e: &mut Engine, steps: &[InitStep]) {
     for step in steps {
         match *step {
             InitStep::Object(global, first, second) => {
