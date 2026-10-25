@@ -288,9 +288,127 @@ pub fn movie_player_play_sequence(e: &mut Engine, this: Ptr, files: u32) {
     e.mem.set_u32(tls + TLS_CONTEXT, saved);
 }
 
+/// The movie's open (`00ec0cd0`, `thiscall`, four words; answer `AL`), its update
+/// (`00ec1060`, `thiscall`, three words; answer `AL`) and the `Sleep` import slot.
+const MOVIE_OPEN: u32 = 0x00ec_0cd0;
+const MOVIE_UPDATE: u32 = 0x00ec_1060;
+const SLEEP: u32 = 0x00fd_f104;
+
+// Translated from 00ec1f60 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer.obj`; `thiscall` on a movie, two words: a file and
+/// a flag whose low byte is passed zero-extended, `RET 8`): the word at +0x20 becomes 2 and the
+/// byte at +0x24 is set while the movie is opened (`00ec0cd0(file, 1, flag, 0)`), then cleared.
+/// Answers whether the open answered nonzero (`AL`).
+pub fn fn_00ec1f60(e: &mut Engine, this: Ptr, file: u32, flag: u32) -> bool {
+    let at = this.addr();
+    e.mem.set_u32(at + 0x20, 2);
+    e.mem.set_u8(at + 0x24, 1);
+    let flag = u32::from(flag as u8);
+    let opened = e
+        .call(MOVIE_OPEN, &args![this, file, 1u32, flag, 0u32])
+        .u8()
+        != 0;
+    e.mem.set_u8(at + 0x24, 0);
+    opened
+}
+
+// Translated from 00ec2490 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec2490 - the SEH frame (FS:[0] handler 00f34bf8, states 0/1 around the allocation and the movie's construction) is not translated.
+/// Unnamed in the engine map (`movieplayer.obj`; `thiscall`, two words: a file and a flag,
+/// `RET 8`): with the thread block's allocation context (+0x2b4) set to 0x14 the player pauses
+/// its movie ([`movie_player_pause`]); a movie kept at +0x14 with the byte at +0x18 set
+/// becomes the current one (+0xc), the word and the byte cleared; otherwise a new 0x28-byte
+/// movie (`00aa3e40`, made by [`fn_00ec1f20`]; null when the allocation fails) does. That movie
+/// opens the file ([`fn_00ec1f60`] with the flag's low byte); when that fails the player stops
+/// ([`movie_player_stop`]). The context is restored; answers whether the open succeeded.
+pub fn fn_00ec2490(e: &mut Engine, this: Ptr, file: u32, flag: u32) -> bool {
+    let at = this.addr();
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, MOVIE_CONTEXT);
+    movie_player_pause(e, this);
+    if e.mem.u8(at + 0x18) != 0 && e.mem.u32(at + 0x14) != 0 {
+        let kept = e.mem.u32(at + 0x14);
+        e.mem.set_u32(at + 0xc, kept);
+        e.mem.set_u32(at + 0x14, 0);
+        e.mem.set_u8(at + 0x18, 0);
+    } else {
+        let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 0x28u32]).u32();
+        let movie = if block != 0 {
+            fn_00ec1f20(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.mem.set_u32(at + 0xc, movie);
+    }
+    let movie = e.mem.u32(at + 0xc);
+    let opened = fn_00ec1f60(e, Ptr::new(movie), file, u32::from(flag as u8));
+    if !opened {
+        movie_player_stop(e, this);
+    }
+    let tls = e.tls();
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+    opened
+}
+
+// Translated from 00ec2650 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec2650 - the SEH frame (FS:[0] handler 00f34c1b, state 0 while the context is set) is not translated.
+/// Unnamed in the engine map (`movieplayer.obj`; `thiscall`, two words whose low bytes are
+/// passed zero-extended, `RET 8`): with the thread block's allocation context (+0x2b4) set to
+/// 0x14, a current movie (+0xc) whose word at +0x20 is not 0 is updated (`00ec1060(first,
+/// second, 0)`), whose `AL` is answered; otherwise 0. The context is restored either way.
+pub fn fn_00ec2650(e: &mut Engine, this: Ptr, first: u32, second: u32) -> bool {
+    let at = this.addr();
+    let tls = e.tls();
+    let saved = e.mem.u32(tls + TLS_CONTEXT);
+    e.mem.set_u32(tls + TLS_CONTEXT, MOVIE_CONTEXT);
+    let movie = e.mem.u32(at + 0xc);
+    let answer = if movie != 0 && e.mem.u32(movie + 0x20) != 0 {
+        let movie = e.mem.u32(at + 0xc);
+        let (first, second) = (u32::from(first as u8), u32::from(second as u8));
+        e.call(MOVIE_UPDATE, &args![movie, first, second, 0u32])
+            .u8()
+            != 0
+    } else {
+        false
+    };
+    let tls = e.tls();
+    e.mem.set_u32(tls + TLS_CONTEXT, saved);
+    answer
+}
+
+// Translated from 00ec29b0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `MoviePlayer::StopSequence` (engine map; `thiscall`, plain `RET`): sets the byte at +0x21.
+pub fn movie_player_stop_sequence(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x21, 1);
+}
+
+// Translated from 00ec29d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer.obj`; `thiscall`, plain `RET`): while a thread
+/// handle is set (+8) and there is no current movie (+0xc) or its byte at +0x24 is set, sleeps
+/// 1 ms (`Sleep(1)`), everything read again each time.
+pub fn fn_00ec29d0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    loop {
+        if e.mem.u32(at + 8) == 0 {
+            break;
+        }
+        let movie = e.mem.u32(at + 0xc);
+        if movie != 0 && e.mem.u8(movie + 0x24) == 0 {
+            break;
+        }
+        e.call(SLEEP, &args![1u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_1f60, fn_00ec1f60(Ptr, u32, u32) -> bool),
+        entry!(0x00ec_2490, fn_00ec2490(Ptr, u32, u32) -> bool),
+        entry!(0x00ec_2650, fn_00ec2650(Ptr, u32, u32) -> bool),
+        entry!(0x00ec_29b0, movie_player_stop_sequence(Ptr)),
+        entry!(0x00ec_29d0, fn_00ec29d0(Ptr)),
         entry!(0x00ec_25e0, movie_player_stop(Ptr)),
         entry!(0x00ec_1f20, fn_00ec1f20(Ptr) -> Ptr),
         entry!(0x00ec_1f40, fn_00ec1f40(Ptr)),
@@ -694,5 +812,114 @@ mod play_tests {
         e.call(0x00ec_2760, &args![player, files]);
         assert_eq!(calls_at(&e, LOG).len(), 1);
         assert!(calls_at(&e, SEQUENCE_RELEASE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_movie_opens_with_its_busy_byte_set() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let movie = e.mem.alloc(0x28);
+        e.register_double(MOVIE_OPEN, move |e, a| {
+            assert_eq!(e.mem.u8(movie + 0x24), 1);
+            u32::from(a[1] == 0x10).into_ret()
+        });
+        assert!(e.call(0x00ec_1f60, &args![movie, 0x10u32, 0x201u32]).bool());
+        assert_eq!(e.mem.u32(movie + 0x20), 2);
+        assert_eq!(e.mem.u8(movie + 0x24), 0);
+        assert!(!fn_00ec1f60(&mut e, Ptr::new(movie), 0x11, 0));
+        assert_eq!(
+            calls(&e, MOVIE_OPEN),
+            vec![vec![movie, 0x10, 1, 1, 0], vec![movie, 0x11, 1, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn open_reuses_a_kept_movie_or_makes_one_and_restores_the_context() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        for slot in [MOVIE_RESET, AFTER_STOP, MOVIE_DESTRUCT] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_CONTEXT, 7);
+        e.register_double(MOVIE_OPEN, move |e, a| {
+            assert_eq!(e.mem.u32(tls + TLS_CONTEXT), MOVIE_CONTEXT);
+            u32::from(a[1] == 1).into_ret()
+        });
+        let player = e.mem.alloc(0x40);
+        let kept = e.mem.alloc(0x28);
+        e.mem.set_u32(player + 0x14, kept);
+        e.mem.set_u8(player + 0x18, 1);
+        assert!(e.call(0x00ec_2490, &args![player, 1u32, 0u32]).bool());
+        assert_eq!(e.mem.u32(player + 0xc), kept);
+        assert_eq!((e.mem.u32(player + 0x14), e.mem.u8(player + 0x18)), (0, 0));
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 7);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        // No kept movie: a new 0x28-byte one; a failed open stops the player.
+        e.mem.set_u32(player + 0xc, 0);
+        assert!(!fn_00ec2490(&mut e, Ptr::new(player), 2, 0));
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![MEMORY_MANAGER, 0x28]]);
+        assert_eq!(calls(&e, MOVIE_RESET).len(), 1);
+        assert_eq!(calls(&e, MOVIE_DESTRUCT).len(), 1);
+        assert_eq!(e.mem.u32(player + 0xc), 0);
+        assert_eq!(e.mem.u32(tls + TLS_CONTEXT), 7);
+    }
+
+    #[test]
+    fn update_needs_a_movie_with_its_word_at_0x20() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(MOVIE_UPDATE, |_, _| 0x101u32.into_ret());
+        let player = e.mem.alloc(0x40);
+        assert!(!e.call(0x00ec_2650, &args![player, 1u32, 1u32]).bool());
+        let movie = e.mem.alloc(0x28);
+        e.mem.set_u32(player + 0xc, movie);
+        assert!(!fn_00ec2650(&mut e, Ptr::new(player), 1, 1));
+        e.mem.set_u32(movie + 0x20, 1);
+        assert!(fn_00ec2650(&mut e, Ptr::new(player), 0x301, 0x200));
+        assert_eq!(calls(&e, MOVIE_UPDATE), vec![vec![movie, 1, 0, 0]]);
+    }
+
+    #[test]
+    fn stop_sequence_and_the_wait_for_a_movie() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let player = e.mem.alloc(0x40);
+        e.call(0x00ec_29b0, &args![player]);
+        assert_eq!(e.mem.u8(player + 0x21), 1);
+        // No thread: no wait.
+        e.call(0x00ec_29d0, &args![player]);
+        assert!(calls(&e, SLEEP).is_empty());
+        e.mem.set_u32(player + 8, 0x55);
+        let movie = e.mem.alloc(0x28);
+        e.mem.set_u8(movie + 0x24, 1);
+        let mut n = 0;
+        e.register_double(SLEEP, move |e, _| {
+            n += 1;
+            if n == 2 {
+                e.mem.set_u32(player + 0xc, movie);
+            }
+            if n == 3 {
+                e.mem.set_u8(movie + 0x24, 0);
+            }
+            Ret::default()
+        });
+        fn_00ec29d0(&mut e, Ptr::new(player));
+        assert_eq!(calls(&e, SLEEP), vec![vec![1], vec![1], vec![1]]);
     }
 }

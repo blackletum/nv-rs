@@ -3,10 +3,16 @@
 
 pub mod movieplayer;
 pub mod movieplayer_xenon;
+pub mod run_00ec1fd0;
+pub mod run_00ec2200;
 pub mod run_00ec2aa0;
+pub mod run_00ec2f00;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(movieplayer::funcs());
     out.extend(movieplayer_xenon::funcs());
+    out.extend(run_00ec1fd0::funcs());
+    out.extend(run_00ec2200::funcs());
     out.extend(run_00ec2aa0::funcs());
+    out.extend(run_00ec2f00::funcs());
 }

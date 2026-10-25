@@ -323,9 +323,29 @@ pub fn wait_for_handle(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(base + 0x20, 0);
 }
 
+/// `00a24080` (`thiscall`, one word; answers a mask in `EAX`) and the 16-bit words at +4 of the
+/// pad state (`011f35ac`) and of last frame's copy (`011f35bc`).
+const CALLEE_00A24080: u32 = 0x00a2_4080;
+const PAD_WORD: u32 = PAD_STATE + 4;
+const PAD_LAST_WORD: u32 = PAD_LAST + 4;
+
+// Translated from 00a25560 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`xcontrols.obj`; `thiscall`, one word, `RET 4`): the mask
+/// `00a24080(word)` answers picks which bits of last frame's pad word (`011f35bc`) take the
+/// current pad word's (`011f35ac`): `last = (last & !mask) | (current & mask)`, in 16 bits.
+pub fn fn_00a25560(e: &mut Engine, this: Ptr, word: u32) {
+    let mask = e.call(CALLEE_00A24080, &args![this, word]).u32();
+    let kept = u32::from(e.mem.u16(PAD_LAST_WORD)) & !mask;
+    e.mem.set_u16(PAD_LAST_WORD, kept as u16);
+    let taken = u32::from(e.mem.u16(PAD_WORD)) & mask;
+    let last = u32::from(e.mem.u16(PAD_LAST_WORD)) | taken;
+    e.mem.set_u16(PAD_LAST_WORD, last as u16);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a2_5560, fn_00a25560(Ptr, u32)),
         entry!(0x00a2_3010, controls_poll(Ptr)),
         entry!(0x00a2_32c0, fn_00a232c0(Ptr)),
         entry!(0x00a2_53d0, controls_clear_user_actions(Ptr)),
@@ -618,5 +638,25 @@ mod tests_actions_rumble {
             vec![(WAIT_FOR_SINGLE_OBJECT, vec![0x44, 0xffff_ffff])]
         );
         assert_eq!((e.mem.u32(this + 8), e.mem.u8(this + 0x20)), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod pad_word_tests {
+    use super::*;
+
+    #[test]
+    fn the_mask_picks_the_bits_last_frame_takes() {
+        let mut e = Engine::new();
+        e.map(PAD_STATE, 0x20);
+        e.mem.set_u32(PAD_WORD, 0xffff_00f0);
+        e.mem.set_u32(PAD_LAST_WORD, 0xeeee_0f0f);
+        e.register(CALLEE_00A24080, |_, a| {
+            assert_eq!(a[1], 3);
+            0xffff_00ffu32.into_ret()
+        });
+        e.call(0x00a2_5560, &args![0x100u32, 3u32]);
+        // Low byte from the current word, the rest kept; the word above untouched.
+        assert_eq!(e.mem.u32(PAD_LAST_WORD), 0xeeee_0ff0);
     }
 }

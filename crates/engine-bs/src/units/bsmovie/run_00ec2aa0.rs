@@ -105,9 +105,107 @@ pub fn movie_find_path(e: &mut Engine, this: Ptr, name: u32, buffer: u32) -> boo
     })
 }
 
+/// The sequence thread's priority setter (`00ec18a0`, `thiscall`, one word), the default
+/// priority setting's word (`0126fae4`, inside the object at `0126fae0`) and the fallback word
+/// `01202800` the exe uses when that object's address is null (it never is).
+const SET_PRIORITY: u32 = 0x00ec_18a0;
+const DEFAULT_PRIORITY_HOLDER: u32 = 0x0126_fae0;
+const DEFAULT_PRIORITY: u32 = 0x0126_fae4;
+const NULL_PRIORITY: u32 = 0x0120_2800;
+/// The memory manager (`011f6238`) and its allocation (`00aa3e40`), the movie's constructor
+/// (`00ec1f20`) and its open (`00ec0ac0`, four words; answer `AL`), the movie settings object
+/// (`0126fac4`), `strlen` (`00ec6130`) and the player's name map set (`00ec2f00`, on +0x40).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const ALLOCATE: u32 = 0x00aa_3e40;
+const MOVIE_CONSTRUCT: u32 = 0x00ec_1f20;
+const MOVIE_OPEN_FILE: u32 = 0x00ec_0ac0;
+const MOVIE_SETTINGS: u32 = 0x0126_fac4;
+const STRLEN: u32 = 0x00ec_6130;
+const NAME_MAP_SET: u32 = 0x00ec_2f00;
+
+// Translated from 00ec2c10 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): a priority setting (+0x2c) below 5
+/// (signed) goes one up (`00ec18a0` with it plus 1).
+pub fn fn_00ec2c10(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    if e.mem.i32(at + 0x2c) < 5 {
+        let setting = e.mem.u32(at + 0x2c).wrapping_add(1);
+        e.call(SET_PRIORITY, &args![this, setting]);
+    }
+}
+
+// Translated from 00ec2c40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): a priority setting (+0x2c) above the
+/// default one (the word at `0126fae4`, signed compare; the exe tests the constant address
+/// `0126fae0` for null first, and when it is, which it never is, clears `01202800` and reads
+/// that) goes one down (`00ec18a0` with it less 1).
+pub fn fn_00ec2c40(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    let word = if DEFAULT_PRIORITY_HOLDER != 0 {
+        DEFAULT_PRIORITY
+    } else {
+        // Never taken: the exe tests a constant address.
+        e.mem.set_u32(NULL_PRIORITY, 0);
+        NULL_PRIORITY
+    };
+    if e.mem.i32(at + 0x2c) > e.mem.i32(word) {
+        let setting = e.mem.u32(at + 0x2c).wrapping_sub(1);
+        e.call(SET_PRIORITY, &args![this, setting]);
+    }
+}
+
+// Translated from 00ec2ca0 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec2ca0 - the SEH frame (FS:[0] handler 00f34c64, state 0 around the movie's construction) is not translated.
+/// The movie thread's procedure (unnamed in the engine map; `stdcall`, its parameter, a file
+/// name): a 0x28-byte movie (`00aa3e40`, made by `00ec1f20`; null when the allocation fails)
+/// opens the file (`00ec0ac0(file, 1, 1, 1)`) and is handed to the movie settings object
+/// (`0126fac4`) by [`fn_00ec2d40`]. Answers 0.
+pub fn fn_00ec2ca0(e: &mut Engine, file: u32) -> u32 {
+    let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 0x28u32]).u32();
+    let movie = if block != 0 {
+        e.call(MOVIE_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    e.call(MOVIE_OPEN_FILE, &args![movie, file, 1u32, 1u32, 1u32]);
+    let settings = e.mem.u32(MOVIE_SETTINGS);
+    fn_00ec2d40(e, Ptr::new(settings), movie);
+    0
+}
+
+// Translated from 00ec2d40 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: a movie, `RET 4`): the movie goes to +0x14,
+/// the word at +4 is cleared, the callback at +0x1c runs (no stack words; `ECX` holds the
+/// callback's own address) and is cleared.
+pub fn fn_00ec2d40(e: &mut Engine, this: Ptr, movie: u32) {
+    let at = this.addr();
+    e.mem.set_u32(at + 0x14, movie);
+    e.mem.set_u32(at + 4, 0);
+    let callback = e.mem.u32(at + 0x1c);
+    e.call(callback, &args![]);
+    e.mem.set_u32(at + 0x1c, 0);
+}
+
+// Translated from 00ec2d80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, two words: a key and a string, `RET 8`): a copy of the
+/// string (a block of its length plus one from `00aa3e40`, not checked for null, filled by
+/// `strcpy_s` with that size) is set for the key in the name map at +0x40 (`00ec2f00`).
+pub fn fn_00ec2d80(e: &mut Engine, this: Ptr, key: u32, text: u32) {
+    let length = e.call(STRLEN, &args![text]).u32();
+    let size = length.wrapping_add(1);
+    let copy = e.call(ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+    e.call(STRCPY_S, &args![copy, size, text]);
+    e.call(NAME_MAP_SET, &args![this.addr() + 0x40, key, copy]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_2c10, fn_00ec2c10(Ptr)),
+        entry!(0x00ec_2c40, fn_00ec2c40(Ptr)),
+        entry!(0x00ec_2ca0, fn_00ec2ca0(u32) -> u32),
+        entry!(0x00ec_2d40, fn_00ec2d40(Ptr, u32)),
+        entry!(0x00ec_2d80, fn_00ec2d80(Ptr, u32, u32)),
         entry!(0x00ec_2aa0, movie_scale(Ptr, u32, u32, u32) -> f64),
         entry!(0x00ec_2b20, movie_offset_x(Ptr, u32, u32, u32) -> f64),
         entry!(0x00ec_2bb0, movie_offset_y(Ptr, u32, u32, u32) -> f64),
@@ -220,5 +318,84 @@ mod tests {
         e.register(FIND_PATH, |_, _| 0x100u32.into_ret());
         assert!(!movie_find_path(&mut e, Ptr::new(PLAYER), name, buffer));
         assert_eq!(calls(&e, STRCPY_S).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_priority_steps_up_to_5_and_down_to_the_default() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.map(DEFAULT_PRIORITY_HOLDER, 8);
+        e.mem.set_u32(DEFAULT_PRIORITY, 2);
+        e.register(SET_PRIORITY, |_, _| Ret::default());
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x2c, 4);
+        e.call(0x00ec_2c10, &args![this]);
+        e.mem.set_u32(this + 0x2c, 5);
+        fn_00ec2c10(&mut e, Ptr::new(this));
+        e.mem.set_u32(this + 0x2c, 0xffff_ffff);
+        fn_00ec2c10(&mut e, Ptr::new(this));
+        assert_eq!(calls(&e, SET_PRIORITY), vec![vec![this, 5], vec![this, 0]]);
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(this + 0x2c, 3);
+        e.call(0x00ec_2c40, &args![this]);
+        e.mem.set_u32(this + 0x2c, 2);
+        fn_00ec2c40(&mut e, Ptr::new(this));
+        assert_eq!(calls(&e, SET_PRIORITY), vec![vec![this, 2]]);
+    }
+
+    #[test]
+    fn the_movie_thread_opens_and_hands_over_its_movie() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.map(MOVIE_SETTINGS, 4);
+        let settings = e.mem.alloc(0x20);
+        e.mem.set_u32(MOVIE_SETTINGS, settings);
+        e.mem.set_u32(settings + 4, 0x66);
+        e.mem.set_u32(settings + 0x1c, 0x0a00_0000);
+        e.register(0x0a00_0000, |_, _| Ret::default());
+        e.register(MOVIE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(MOVIE_OPEN_FILE, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x00ec_2ca0, &args![0x1234u32]).u32(), 0);
+        let movie = e.mem.u32(settings + 0x14);
+        assert_ne!(movie, 0);
+        assert_eq!(
+            calls(&e, MOVIE_OPEN_FILE),
+            vec![vec![movie, 0x1234, 1, 1, 1]]
+        );
+        assert_eq!(calls(&e, 0x0a00_0000).len(), 1);
+        assert_eq!(
+            (e.mem.u32(settings + 4), e.mem.u32(settings + 0x1c)),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn a_name_is_copied_into_the_name_map() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(NAME_MAP_SET, |_, _| Ret::default());
+        let this = e.mem.alloc(0x60);
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"intro\0");
+        e.call(0x00ec_2d80, &args![this, 7u32, text]);
+        let set = calls(&e, NAME_MAP_SET);
+        assert_eq!(set[0][..2], [this + 0x40, 7]);
+        assert_eq!(e.mem.cstr(set[0][2]), b"intro".to_vec());
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![MEMORY_MANAGER, 6]]);
     }
 }

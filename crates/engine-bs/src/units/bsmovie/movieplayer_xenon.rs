@@ -1166,9 +1166,105 @@ pub fn fn_00ec18a0(e: &mut Engine, this: Ptr, setting: u32) -> u32 {
     e.call(SET_THREAD_PRIORITY, &args![handle, priority]).u32()
 }
 
+/// The movie thread's procedure (`00ec2ca0`) and the name it gets (`010f1c94`).
+const MOVIE_THREAD_PROC: u32 = 0x00ec_2ca0;
+const MOVIE_THREAD_NAME: u32 = 0x010f_1c94;
+
+// Translated from 00ec1940 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer_xenon.obj`; `thiscall`, two words: the thread's
+/// parameter and a callback, `RET 8`): the callback goes to +0x1c; the movie thread is created
+/// suspended (`CreateThread(0, 0, 00ec2ca0, parameter, CREATE_SUSPENDED, &id)`, the handle to
+/// +4), named (`00aa2740(id, 010f1c94)`) and resumed (`ResumeThread`), whose answer stays in
+/// `EAX`; the id local is cleared.
+pub fn fn_00ec1940(e: &mut Engine, this: Ptr, parameter: u32, callback: u32) -> u32 {
+    let at = this.addr();
+    e.mem.set_u32(at + 0x1c, callback);
+    e.with_stack(4, |e, id| {
+        let handle = e
+            .call(
+                CREATE_THREAD,
+                &args![0u32, 0u32, MOVIE_THREAD_PROC, parameter, 4u32, id],
+            )
+            .u32();
+        e.mem.set_u32(at + 4, handle);
+        let thread_id = e.mem.u32(id.addr());
+        e.call(SET_THREAD_NAME, &args![thread_id, MOVIE_THREAD_NAME]);
+        let handle = e.mem.u32(at + 4);
+        let resumed = e.call(RESUME_THREAD, &args![handle]).u32();
+        e.mem.set_u32(id.addr(), 0);
+        resumed
+    })
+}
+
+// Translated from 00ec19a0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`movieplayer_xenon.obj`; `thiscall`, plain `RET`): with a thread
+/// handle at +4, waits on it without a time limit (`WaitForSingleObject`).
+pub fn fn_00ec19a0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    if e.mem.u32(at + 4) != 0 {
+        let handle = e.mem.u32(at + 4);
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![handle, 0xffff_ffffu32]);
+    }
+}
+
+// Translated from 00ec19d0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `MoviePlayer`'s scalar deleting destructor (engine map; `thiscall`, one word: the flags,
+/// `RET 4`): [`fn_00ec15e0`], then with bit 0 of the flags the block is freed (`00aa4060`).
+/// Answers `this`.
+pub fn movie_player_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00ec15e0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+// Translated from 00ec1b80 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the vtable
+/// `010f1ca4`, `00438af0` on `this`, then the bucket array at +8 freed (`00aa10f0`, cdecl).
+pub fn fn_00ec1b80(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00ec1bb0 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec1bb0 - the SEH frame (FS:[0] handler 00f34b18, state 0 around the first base destructor) is not translated.
+/// The derived map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the
+/// vtable `010f1cc4` and `00438af0`, then the vtable `010f1ca4`, `00438af0` again and the
+/// bucket array at +8 freed (`00aa10f0`).
+pub fn fn_00ec1bb0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, MAP_BASE_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    e.mem.set_u32(at, MAP_ROOT_VTABLE);
+    e.call(MAP_BASE_DESTRUCT, &args![at]);
+    let buckets = e.mem.u32(at + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00ec1d30 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The name map's destructor body (unnamed in the engine map; `thiscall`, plain `RET`): the
+/// vtable `010f1c20`, then `00ec1a90` ([`ni_t_string_template_map_destruct`]).
+pub fn fn_00ec1d30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), NAME_MAP_VTABLE);
+    fn_00ec1a90(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_1940, fn_00ec1940(Ptr, u32, u32) -> u32),
+        entry!(0x00ec_19a0, fn_00ec19a0(Ptr)),
+        entry!(
+            0x00ec_19d0,
+            movie_player_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00ec_1b80, fn_00ec1b80(Ptr)),
+        entry!(0x00ec_1bb0, fn_00ec1bb0(Ptr)),
+        entry!(0x00ec_1d30, fn_00ec1d30(Ptr)),
         entry!(0x00ec_16b0, fn_00ec16b0(u32) -> u32),
         entry!(
             0x00ec_16d0,
@@ -2142,5 +2238,105 @@ mod sequence_tests {
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x00ec_16b0, &args![0x1234u32]).u32(), 0);
         assert_eq!(calls(&e, SEQUENCE_RUN), vec![vec![0x5000, 0x1234]]);
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_movie_thread_starts_named_and_is_waited_for() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(CREATE_THREAD, |e, a| {
+            e.mem.set_u32(a[5], 0x77);
+            0x55u32.into_ret()
+        });
+        for slot in [SET_THREAD_NAME, WAIT_FOR_SINGLE_OBJECT] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        e.register(RESUME_THREAD, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x30);
+        let p = Ptr::new(this);
+        e.call(0x00ec_19a0, &args![this]);
+        assert!(calls(&e, WAIT_FOR_SINGLE_OBJECT).is_empty());
+        assert_eq!(e.call(0x00ec_1940, &args![this, 9u32, 0x1234u32]).u32(), 1);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x1234);
+        assert_eq!(e.mem.u32(this + 4), 0x55);
+        let created = calls(&e, CREATE_THREAD);
+        assert_eq!(created[0][..5], [0, 0, MOVIE_THREAD_PROC, 9, 4]);
+        assert_eq!(
+            calls(&e, SET_THREAD_NAME),
+            vec![vec![0x77, MOVIE_THREAD_NAME]]
+        );
+        assert_eq!(calls(&e, RESUME_THREAD), vec![vec![0x55]]);
+        fn_00ec19a0(&mut e, p);
+        assert_eq!(
+            calls(&e, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x55, 0xffff_ffff]]
+        );
+    }
+
+    #[test]
+    fn the_map_destructors_restore_their_vtables() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let vtables = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let seen = vtables.clone();
+        e.register_double(MAP_BASE_DESTRUCT, move |e, a| {
+            seen.borrow_mut().push(e.mem.u32(a[0]));
+            Ret::default()
+        });
+        e.register(NI_FREE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 8, 0x99);
+        e.call(0x00ec_1b80, &args![this]);
+        assert_eq!(*vtables.borrow(), vec![MAP_ROOT_VTABLE]);
+        e.call(0x00ec_1bb0, &args![this]);
+        assert_eq!(
+            *vtables.borrow(),
+            vec![MAP_ROOT_VTABLE, MAP_BASE_VTABLE, MAP_ROOT_VTABLE]
+        );
+        assert_eq!(calls(&e, NI_FREE), vec![vec![0x99], vec![0x99]]);
+        // The name map: its vtable, then the string map's destructor (keys not owned).
+        fn_00ec1d30(&mut e, Ptr::new(this));
+        assert_eq!(vtables.borrow().len(), 5);
+        assert_eq!(e.mem.u32(this), MAP_ROOT_VTABLE);
+    }
+
+    #[test]
+    fn the_player_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        // The real destructor body (00ec15e0) runs; its callees are doubled.
+        for slot in [
+            MEMORY_DEALLOCATE,
+            PLAYER_CLEAN_UP,
+            MAP_BASE_DESTRUCT,
+            NI_FREE,
+            CLOSE_HANDLE,
+        ] {
+            e.register(slot, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x60);
+        assert_eq!(e.call(0x00ec_19d0, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), PLAYER_VTABLE);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(e.call(0x00ec_19d0, &args![this, 1u32]).u32(), this);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
     }
 }
