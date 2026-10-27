@@ -6127,7 +6127,17 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     if (0..3).all(|lane| absolute[lane] <= tolerance) {
         return 0.0;
     }
-    let turn = e.mem.alloc(0x10);
+    // The exe's frame (`AND ESP,0xfffffff0`, `SUB ESP,0x44`, three pushes): 0x50 bytes from a
+    // 16-byte boundary; the turn at +0x30 (00c75650) and the axis / result at +0x20 (00c7569c).
+    e.with_stack(0x60, |e, raw| {
+        let frame = (raw.addr() + 0xf) & !0xf;
+        turn_bone_body(e, this, entry, target, frame + 0x30, frame + 0x20)
+    })
+}
+
+/// [`fn_00c755e0`] past its early exit, in its frame: `turn` and `axis` are its two locals.
+fn turn_bone_body(e: &mut Engine, this: u32, entry: u32, target: Ptr, turn: u32, axis: u32) -> f32 {
+    let current_at = entry.wrapping_add(0x120);
     fn_00c74ac0(e, Ptr::new(turn), target, Ptr::new(current_at));
     let mut angle = x87_store32(f64::from(fn_00c74c20(e, Ptr::new(turn))));
     let limit_at = if e.mem.u8(this + 0xb2) == 0 {
@@ -6138,7 +6148,6 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     let limit_degrees = x87_store32(x87_load32(e.mem.u32(limit_at)));
     let radians: f64 = e.global(DEGREES_TO_RADIANS);
     let limit = x87_mul(x87_load32(limit_degrees), radians);
-    let axis = e.mem.alloc(0x10);
     if x87_load32(angle) > limit {
         angle = x87_store32(limit);
         fn_00c74c90(e, Ptr::new(turn), Ptr::new(axis));
@@ -6154,8 +6163,6 @@ pub fn fn_00c755e0(e: &mut Engine, this: Ptr, index: u32, target: Ptr) -> f32 {
     let result = load4(e, axis);
     store4(e, transform + 0x10, result);
     store4(e, current_at, result);
-    e.mem.free(turn);
-    e.mem.free(axis);
     f32::from_bits(angle)
 }
 
@@ -13385,6 +13392,28 @@ mod quaternion_limit_tests {
         let angle = e.call(0x00c7_55e0, &args![this, 0u32, target]).f32();
         assert!((angle - 0.5).abs() < 1e-5);
         assert!(calls(&seen, SET_AXIS_ANGLE).is_empty());
+    }
+
+    #[test]
+    fn the_turn_and_the_axis_sit_in_one_aligned_frame_at_the_exe_offsets() {
+        let (mut e, seen, this, _) = turning(0);
+        let half = 0.25f32;
+        let target = vec4(&mut e, [0.0, 0.0, half.sin(), half.cos()]);
+        e.call(0x00c7_55e0, &args![this, 0u32, target]);
+        // The turn at frame +0x30 (16-byte aligned), the axis / product at +0x20.
+        let rebuilt = &calls(&seen, SET_AXIS_ANGLE)[0];
+        let (turn, axis) = (rebuilt[0], rebuilt[1]);
+        assert_eq!(turn & 0xf, 0);
+        assert_eq!(axis, turn - 0x10);
+        assert_eq!(
+            calls(&seen, QUATERNION_SET_MUL),
+            vec![vec![axis, turn, this + 0x120]]
+        );
+        assert_eq!(calls(&seen, NORMALISE_VECTOR)[0][0], axis);
+        // The frame is given back: the next run uses the same addresses.
+        store4(&mut e, this + 0x120, [0.0, 0.0, 0.0, 1.0]);
+        e.call(0x00c7_55e0, &args![this, 0u32, target]);
+        assert_eq!(calls(&seen, SET_AXIS_ANGLE)[1][0], turn);
     }
 }
 
