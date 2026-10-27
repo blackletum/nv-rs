@@ -794,47 +794,6 @@ pub fn doors(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `0093e860`'s skip table by `GetAnimAction` + 1: drawing, putting
-    /// away and reloading keep the sneak toggle off; attacking doesn't.
-    #[test]
-    fn the_sneak_toggle_waits_for_drawing_and_reloading() {
-        assert!(may_toggle_sneak(false, false, None));
-        assert!(!may_toggle_sneak(false, false, Some(0)));
-        assert!(!may_toggle_sneak(false, false, Some(1)));
-        assert!(may_toggle_sneak(false, false, Some(2)));
-        assert!(!may_toggle_sneak(false, false, Some(8)));
-        assert!(may_toggle_sneak(false, false, Some(9)));
-        assert!(!may_toggle_sneak(false, false, Some(10)));
-        assert!(may_toggle_sneak(false, false, Some(17)));
-        // Dead, or in a chair: no.
-        assert!(!may_toggle_sneak(true, false, None));
-        assert!(!may_toggle_sneak(false, true, None));
-    }
-
-    /// The first-person camera node drops from 118 (`mtidle.kf`) to 78
-    /// (`sneakmtidle.kf`) in the game's files: the eye goes 40 lower, part
-    /// way while the blend runs.
-    #[test]
-    fn sneaking_lowers_the_eye_by_the_camera_nodes_drop() {
-        let heights = Some((118.0, 78.0));
-        assert_eq!(eye_offset(heights, 0.0), 0.0);
-        assert_eq!(eye_offset(heights, 1.0), -40.0);
-        assert_eq!(eye_offset(heights, 0.5), -20.0);
-        assert_eq!(eye_offset(None, 1.0), 0.0);
-    }
-
-    #[test]
-    fn game_and_bevy_space_round_trip() {
-        let p = [100.0, -200.0, 300.0];
-        let back = game_point(Vec3::from(space::point(p)));
-        assert!(back.iter().zip(p).all(|(a, b)| (a - b).abs() < 1e-3));
-    }
-}
-
 /// The DirectInput key code (the keyboard scan code, `DIK_*`) of a physical key, for the game's
 /// DirectInput keyboard (`host::Host::set_keys_down`).
 fn dinput_code(key: KeyCode) -> Option<u8> {
@@ -957,4 +916,45 @@ fn mouse_buttons(mouse: &ButtonInput<MouseButton>) -> [bool; 8] {
         false,
         false,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `0093e860`'s skip table by `GetAnimAction` + 1: drawing, putting
+    /// away and reloading keep the sneak toggle off; attacking doesn't.
+    #[test]
+    fn the_sneak_toggle_waits_for_drawing_and_reloading() {
+        assert!(may_toggle_sneak(false, false, None));
+        assert!(!may_toggle_sneak(false, false, Some(0)));
+        assert!(!may_toggle_sneak(false, false, Some(1)));
+        assert!(may_toggle_sneak(false, false, Some(2)));
+        assert!(!may_toggle_sneak(false, false, Some(8)));
+        assert!(may_toggle_sneak(false, false, Some(9)));
+        assert!(!may_toggle_sneak(false, false, Some(10)));
+        assert!(may_toggle_sneak(false, false, Some(17)));
+        // Dead, or in a chair: no.
+        assert!(!may_toggle_sneak(true, false, None));
+        assert!(!may_toggle_sneak(false, true, None));
+    }
+
+    /// The first-person camera node drops from 118 (`mtidle.kf`) to 78
+    /// (`sneakmtidle.kf`) in the game's files: the eye goes 40 lower, part
+    /// way while the blend runs.
+    #[test]
+    fn sneaking_lowers_the_eye_by_the_camera_nodes_drop() {
+        let heights = Some((118.0, 78.0));
+        assert_eq!(eye_offset(heights, 0.0), 0.0);
+        assert_eq!(eye_offset(heights, 1.0), -40.0);
+        assert_eq!(eye_offset(heights, 0.5), -20.0);
+        assert_eq!(eye_offset(None, 1.0), 0.0);
+    }
+
+    #[test]
+    fn game_and_bevy_space_round_trip() {
+        let p = [100.0, -200.0, 300.0];
+        let back = game_point(Vec3::from(space::point(p)));
+        assert!(back.iter().zip(p).all(|(a, b)| (a - b).abs() < 1e-3));
+    }
 }
