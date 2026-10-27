@@ -2382,6 +2382,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "steam_api.dll",
+            "SteamAPI_RunCallbacks",
+            entry!(0, window::steam_api_run_callbacks()).1,
+        ),
+        (
+            "steam_api.dll",
             "SteamApps",
             entry!(0, window::steam_apps() -> u32).1,
         ),

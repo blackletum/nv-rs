@@ -205,6 +205,14 @@ pub fn steam_user(_e: &mut Engine) -> u32 {
     0
 }
 
+// Platform: replaces STEAM_API.DLL SteamAPI_RunCallbacks (import)
+/// `SteamAPI_RunCallbacks()` (`cdecl`, no arguments, no answer the game reads; called every frame,
+/// `006ff860`): does nothing in the state this layer keeps (no successful `SteamAPI_Init`).
+/// Measured (2026-10-27, `build43-scratch/measure/platform5`): the player's `steam_api.dll` in a
+/// 32-bit process without `SteamAPI_Init` returned from 1000 calls with `EAX` 0, the last error
+/// left as set, and `SteamUserStats` still null afterwards.
+pub fn steam_api_run_callbacks(_e: &mut Engine) {}
+
 // Platform: replaces STEAM_API.DLL SteamApps (import)
 /// `SteamApps()`: null, as measured ([`steam_user_stats`]).
 pub fn steam_apps(_e: &mut Engine) -> u32 {
@@ -815,5 +823,21 @@ mod tests_steam {
                 .unwrap_or_else(|| panic!("{name} is not registered"));
             assert_eq!(f(&mut e, &[]).eax, 0, "{name}");
         }
+    }
+
+    /// `SteamAPI_RunCallbacks` is registered and leaves the state as it is.
+    #[test]
+    fn run_callbacks_does_nothing() {
+        let mut e = Engine::new();
+        let (_, _, f) = super::super::imports()
+            .into_iter()
+            .find(|(dll, n, _)| *dll == "steam_api.dll" && *n == "SteamAPI_RunCallbacks")
+            .expect("SteamAPI_RunCallbacks is registered");
+        e.kernel.last_error = 0x1234;
+        for _ in 0..3 {
+            assert_eq!(f(&mut e, &[]).eax, 0);
+        }
+        assert_eq!(e.kernel.last_error, 0x1234);
+        assert_eq!(steam_user_stats(&mut e), 0);
     }
 }
