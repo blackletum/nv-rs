@@ -16,6 +16,7 @@ pub mod files;
 pub mod loader;
 pub mod mixer;
 pub mod mmio;
+pub mod nls;
 pub mod nvapi;
 pub mod process;
 pub mod sound_out;
@@ -2428,6 +2429,16 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             k,
             "SystemTimeToTzSpecificLocalTime",
             entry!(0, time::system_time_to_tz_specific_local_time(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "SetUnhandledExceptionFilter",
+            entry!(0, process::set_unhandled_exception_filter(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetStringTypeW",
+            entry!(0, nls::get_string_type_w(u32, Ptr, i32, Ptr) -> u32).1,
         ),
         // The platform5 imports: end.
         (

@@ -39,6 +39,8 @@ pub struct Process {
     command_line_a_at: u32,
     /// The environment blocks `GetEnvironmentStringsW` handed out and not freed.
     environment_blocks: BTreeSet<u32>,
+    /// The filter `SetUnhandledExceptionFilter` set last (0: none).
+    unhandled_exception_filter: u32,
 }
 
 /// The executable's full path as the game's ANSI string: the folder the process started in
@@ -146,6 +148,18 @@ pub fn free_environment_strings_w(e: &mut Engine, block: u32) -> u32 {
     );
     e.mem.free(block);
     1
+}
+
+// Platform: replaces KERNEL32.DLL SetUnhandledExceptionFilter (import)
+/// `SetUnhandledExceptionFilter(filter)`: keeps `filter` (null included) and answers the one
+/// set before, null for the first call of the process; the last error is left as it was.
+/// Measured on this machine (2026-10-27, `build43-scratch/measure/suef-nocrt` and
+/// `platform5`): in a 32-bit process no C runtime started, the first call answered null and the
+/// second the first's filter; in one whose runtime start-up had set its own filter, the first
+/// call answered that one; each later call answered the one before. The filter is only kept:
+/// nothing here raises an unhandled exception to call it.
+pub fn set_unhandled_exception_filter(e: &mut Engine, filter: u32) -> u32 {
+    std::mem::replace(&mut e.kernel.process.unhandled_exception_filter, filter)
 }
 
 // Platform: replaces KERNEL32.DLL GetCurrentProcessId (import)
@@ -274,6 +288,20 @@ mod tests {
         e.kernel.last_error = 0x1234;
         assert_eq!(free_environment_strings_w(&mut e, a), 1);
         assert_eq!(free_environment_strings_w(&mut e, b), 1);
+        assert_eq!(e.kernel.last_error, 0x1234);
+    }
+
+    #[test]
+    fn the_unhandled_exception_filter_answers_the_one_before() {
+        let mut e = engine();
+        e.kernel.last_error = 0x1234;
+        assert_eq!(set_unhandled_exception_filter(&mut e, 0x00ed_d4a5), 0);
+        assert_eq!(
+            set_unhandled_exception_filter(&mut e, 0x0040_1000),
+            0x00ed_d4a5
+        );
+        assert_eq!(set_unhandled_exception_filter(&mut e, 0), 0x0040_1000);
+        assert_eq!(set_unhandled_exception_filter(&mut e, 0), 0);
         assert_eq!(e.kernel.last_error, 0x1234);
     }
 
