@@ -70,7 +70,8 @@ const PHYSICS_OBJECT_RTTI: u32 = 0x0120_43f8;
 const NODE_RTTI: u32 = 0x011f_4428;
 /// `bhkBlendCollisionObject::SynchronizeMotionType` (Xbox PDB).
 const SYNCHRONIZE_MOTION_TYPE: u32 = 0x00c8_1a50;
-/// Called with the motion type flags of the world object (`00626cb0`, one stack argument).
+/// Called with the motion type flags of the world object (`00626cb0`, `thiscall` on the
+/// world object, one stack argument).
 const SET_MOTION_FLAGS: u32 = 0x0062_6cb0;
 /// Reads the flags word of a physics object into the stack argument and answers its address
 /// (`0043b4f0`, thiscall, one stack argument).
@@ -961,7 +962,9 @@ pub fn fn_00c9b470(e: &mut Engine, object: Ptr, key_time: f32) {
                 }
             }
             flags = (flags & 0xffff_ff88) | 8;
-            e.call(SET_MOTION_FLAGS, &args![flags]);
+            // 00c9b4c3: `00626cb0` (RET 4) is a thiscall on the world object (ECX from
+            // 00c9b4a0).
+            e.call(SET_MOTION_FLAGS, &args![world_object, flags]);
         }
         let class = (flags >> 8) & 0x1f;
         let gain = load_float(e, GET_UP_GAINS + class * 4);
@@ -2425,7 +2428,9 @@ mod tests {
         e.mem.set_u16(scene.controller.addr() + 8, 0xffff);
         e.call(0x00c9b470, &args![scene.object, 2.0f32]);
         let controller = scene.controller;
-        assert_eq!(calls_to(&e, SET_MOTION_FLAGS), vec![vec![0x308]]);
+        let flags = calls_to(&e, SET_MOTION_FLAGS);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0][1..], [0x308]);
         assert_eq!(
             controller_keys(&e, controller),
             vec![[0.0, 0.0, 0.0], [0.75, 0.2, 0.4]]

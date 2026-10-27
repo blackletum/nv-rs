@@ -444,7 +444,9 @@ pub fn bhk_world_accumulate_step(e: &mut Engine, delta: f32, single_step: u8, fo
                 e.set_global(LAST_DELTA, remaining);
                 let used = (accumulated as f64 - remaining as f64) as f32;
                 e.set_global(DELTA, used);
-                let clock = e.call(0x0040_3e20, &[]).u32();
+                // 00c668c7: `00403e20` is a thiscall on the setting at 01267b34 (ECX set
+                // at 00c668ae).
+                let clock = e.call(0x0040_3e20, &args![0x0126_7b34u32]).u32();
                 let clock_value = e.mem.f32(clock);
                 let scaled = e.call(0x0040_ebd0, &args![remaining, clock_value]).f32();
                 e.set_global(LAST_DELTA, scaled);
@@ -696,8 +698,10 @@ pub fn bhk_world_assign_collision_group(e: &mut Engine, collidable: Ptr, filter:
     };
     let encoded_group = filter_info >> 16;
     let existing = e.mem.u32(filter.addr() + 0x10);
+    // 00c66f82 / 00c66f72: `00c85ce0` (RET 4) is a thiscall on the collidable (ECX is
+    // the first argument, loaded at 00c66f10 and not changed).
     if existing != 0 {
-        e.call(0x00c8_5ce0, &args![existing]);
+        e.call(0x00c8_5ce0, &args![collidable, existing]);
         return true;
     }
     let group = if encoded_group != 0 {
@@ -716,7 +720,7 @@ pub fn bhk_world_assign_collision_group(e: &mut Engine, collidable: Ptr, filter:
     };
     e.mem.set_u32(filter.addr() + 0x10, group);
     if encoded_group == 0 {
-        e.call(0x00c8_5ce0, &args![group]);
+        e.call(0x00c8_5ce0, &args![collidable, group]);
     }
     true
 }
@@ -958,7 +962,14 @@ pub fn fn_00c67430(e: &mut Engine, this: Ptr, name: u32) -> bool {
         let world = hk_world(e, this);
         e.with_stack(4, |e, result| {
             e.mem.set_u32(result.addr(), name);
-            e.call(0x00cc_0d60, &args![result, world, stream_field]);
+            // 00c67493: the cdecl `hkpHavokSnapshot::save` takes six words (ADD ESP,0x18):
+            // the three pushed last and, pushed first, 0, 0 and a word whose low byte is set
+            // to 0 (its upper bytes are the leftover ECX; the save reads only the low byte,
+            // `fn_00cc0b50(.., flag as u8, ..)`).
+            e.call(
+                0x00cc_0d60,
+                &args![result, world, stream_field, 0u32, 0u32, 0u32],
+            );
             let saved = e.mem.u8(result.addr()) != 0;
             e.call(0x00cc_00e0, &args![stream]);
             saved
@@ -4830,7 +4841,7 @@ mod tests {
         e.mem.set_u32(world + 0x2c, 0x1234_0000);
         e.mem.set_u32(filter + 0x10, 77);
         e.register_double(0x00c8_5ce0, move |_, a| {
-            assert!(a == [77] || a == [0x1234]);
+            assert!(a == [collidable, 77] || a == [collidable, 0x1234]);
             Ret::default()
         });
         e.call_log = Some(vec![]);
@@ -4847,7 +4858,7 @@ mod tests {
             .filter(|(address, _)| *address == 0x00c8_5ce0)
             .map(|(_, args)| args.clone())
             .collect();
-        assert_eq!(groups, [vec![77]]);
+        assert_eq!(groups, [vec![collidable, 77]]);
     }
 
     #[test]
@@ -5195,7 +5206,7 @@ mod tests {
             Ret::default()
         });
         e.register_double(0x00cc_0d60, |e, a| {
-            assert_eq!(a[1..], [0x0500_0000, 0x77]);
+            assert_eq!(a[1..], [0x0500_0000, 0x77, 0, 0, 0]);
             e.mem.set_u8(a[0], 1);
             Ret::default()
         });
