@@ -284,7 +284,7 @@ pub fn bhk_mopp_bv_tree_shape_copy_members(
 }
 
 // Translated from 00cc9f60 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 00cc9f60 - the FS:[0] exception-unwinding frame and the /GS stack-cookie check (00ec408c) are not modeled; the flag word given to hkOstream carries unset upper bytes in the exe (modeled as 1).
+// Translation incomplete: 00cc9f60 - the FS:[0] exception-unwinding frame and the /GS stack-cookie check (00ec408c) are not modeled.
 /// `bhkMoppBvTreeShape::LoadCInfo` (Xbox PDB), vtable slot `0xAC`, with the stream: asks
 /// the cinfo size (slot `0xA8`) and takes `pInfo` (slot `0xB4`). For a stream version
 /// (`+4`) below 6 the cinfo size minus 4 bytes are read raw into `pInfo` through the
@@ -312,6 +312,10 @@ pub fn fn_00cc9f60(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
         e.with_stack(0x20c, |e, block| {
             let object = block.addr();
             let text = object + 0xc;
+            // The flag word: the exe pushes ECX (00cc9ffb, what the reader's slot 8 left there)
+            // and writes only its low byte (`MOV byte ptr [EAX],0x1`, 00cca010). `00cc0500`
+            // passes the word on unread to `00d274c0`, which reads only that byte (`MOV DL,byte
+            // ptr [ESP + 0xc]`); the upper bytes are never read, so only the low byte (1) counts.
             e.call(OSTREAM_CONSTRUCT, &args![object, text, 0x200u32, 1u32]);
             let mut chain = object;
             for part in [TEXT_FILE, name, TEXT_OLD_SHAPE, file, TEXT_RE_EXPORT] {
@@ -952,7 +956,9 @@ mod shape_tests {
         );
         let constructed = calls_to(&log, OSTREAM_CONSTRUCT);
         assert_eq!(constructed.len(), 1);
-        assert_eq!(constructed[0][2..], [0x200, 1]);
+        assert_eq!(constructed[0][2], 0x200);
+        // Only the flag word's low byte is written (and read) in the exe.
+        assert_eq!(constructed[0][3] & 0xff, 1);
         assert_eq!(constructed[0][1], constructed[0][0] + 0xc);
         let sent = calls_to(&log, 0x0900_004c);
         assert_eq!(sent.len(), 1);
