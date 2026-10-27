@@ -1317,9 +1317,9 @@ mod tests_yaw_pitch_roll {
         let f = f32::from_bits;
         for (x, s, c) in [
             (0.0f32, 0.0f32, 1.0f32),
-            (1.5707964, 1.0, 0.0),
-            (3.1415927, 0.0, -1.0),
-            (-1.5707964, -1.0, 0.0),
+            (std::f32::consts::FRAC_PI_2, 1.0, 0.0),
+            (std::f32::consts::PI, 0.0, -1.0),
+            (-std::f32::consts::FRAC_PI_2, -1.0, 0.0),
         ] {
             let (sin, cos) = sse2_sin_cos(x.to_bits());
             assert!(
