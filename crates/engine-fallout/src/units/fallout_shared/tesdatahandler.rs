@@ -5641,7 +5641,8 @@ fn place_reference(
             e.call(NODE_STEP_43FA80, &args![node, orientation]);
         });
         e.call(COLLISION_RESET_SIM, &args![node, 1u32]);
-        let scene = e.call(SHADOW_SCENE_NODE_GETTER, &args![]).u32();
+        // 00469f28: the cdecl `00450b80` takes one word, the pushed 0 (ADD ESP,4).
+        let scene = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
         e.call(SCENE_ADD_OBJECT, &args![scene, node]);
         e.call(NODE_UPDATE_PROPERTIES, &args![node]);
         e.with_stack(0x0c, |e, vector| {

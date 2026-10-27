@@ -3189,8 +3189,10 @@ pub fn tes_object_refr_move_ref_to_new_space(
         }
         if moved {
             if e.call(0x008c_7aa0, &args![]).bool() {
-                let handle = e.call(0x0045_37b0, &args![me]).u32();
-                e.call(0x0087_b2b0, &args![handle]);
+                // 00573d30: `004537b0` takes no word (plain RET, a global); the pushed
+                // reference is the word of `0087b2b0` (RET 4).
+                let handle = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_b2b0, &args![handle, me]);
             } else {
                 e.vcall(me, 0x1c0, &args![]);
             }
@@ -3212,8 +3214,9 @@ pub fn tes_object_refr_move_ref_to_new_space(
             }
             if resume {
                 if e.call(0x008c_7aa0, &args![]).bool() {
-                    let handle = e.call(0x0045_37b0, &args![me]).u32();
-                    e.call(0x0087_b230, &args![handle]);
+                    // 00573df8: as above, the reference is the word of `0087b230`.
+                    let handle = e.call(0x0045_37b0, &args![]).u32();
+                    e.call(0x0087_b230, &args![handle, me]);
                 } else {
                     e.vcall(me, 0x1c4, &args![]);
                 }
@@ -3237,8 +3240,9 @@ pub fn tes_object_refr_move_ref_to_new_space(
 /// `0087b270(004537b0(refr))`, else the virtual at `+0x1fc` with 0.
 fn update_in_place(e: &mut Engine, me: u32) {
     if e.call(0x008c_7aa0, &args![]).bool() {
-        let handle = e.call(0x0045_37b0, &args![me]).u32();
-        e.call(0x0087_b270, &args![handle]);
+        // 005739dc / 00573bf4: as above, the reference is the word of `0087b270`.
+        let handle = e.call(0x0045_37b0, &args![]).u32();
+        e.call(0x0087_b270, &args![handle, me]);
     } else {
         e.vcall(me, 0x1fc, &args![0u32]);
     }
@@ -8810,8 +8814,8 @@ mod tests {
         returns(&mut s.e, 0x008c_7aa0, 1);
         returns(&mut s.e, 0x0045_37b0, 0x1234);
         let log = move_ref(&mut s, old_cell, 0);
-        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
-        assert_eq!(calls_to(&log, 0x0045_37b0), vec![vec![refr]]);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234, refr]]);
+        assert_eq!(calls_to(&log, 0x0045_37b0), vec![Vec::<u32>::new()]);
         assert!(calls_to(&log, slot(&s.e, refr, 0x1fc)).is_empty());
     }
 
@@ -8851,8 +8855,8 @@ mod tests {
         s.e.mem.set_u32(refr + 0x40, old_cell);
         let log = move_ref(&mut s, cell, 0);
         // the reference moved (1c0 replacement) and was loaded (update)
-        assert_eq!(calls_to(&log, 0x0087_b2b0), vec![vec![0x1234]]);
-        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
+        assert_eq!(calls_to(&log, 0x0087_b2b0), vec![vec![0x1234, refr]]);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234, refr]]);
     }
 
     #[test]

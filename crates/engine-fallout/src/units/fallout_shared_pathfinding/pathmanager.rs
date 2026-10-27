@@ -528,8 +528,10 @@ pub fn path_manager_impl_initialize(e: &mut Engine, this: Ptr) -> bool {
 /// Destroys the path-manager task group after cancelling it.
 pub fn path_manager_impl_destroy(e: &mut Engine, this: Ptr) {
     e.call(0x006c_09d0, &args![this]);
-    let manager = e.call(0x00b0_0a00, &args![this]).u32();
-    e.call(0x00b0_0c20, &args![manager]);
+    // 006eac53: `00b00a00` takes no stack word (plain RET, no stack read); the pushed
+    // `this` is the word of `00b00c20` (RET 4).
+    let manager = e.call(0x00b0_0a00, &args![]).u32();
+    e.call(0x00b0_0c20, &args![manager, this]);
 }
 
 // Translated from 006eac70 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -672,8 +674,10 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
         {
             if e.call(0x008c_7aa0, &args![]).bool() {
                 let item = e.call(0x0055_9450, &args![path_holder]).u32();
-                let resolved = e.call(0x0045_37b0, &args![item]).u32();
-                e.call(0x0087_ac60, &args![resolved]);
+                // 006eb09a: `004537b0` takes no word (plain RET, a global); the pushed
+                // item is the word of `0087ac60` (RET 4).
+                let resolved = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_ac60, &args![resolved, item]);
             } else {
                 let listener = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
                 let item = e.call(0x0055_9450, &args![path_holder]).u32();
@@ -688,8 +692,10 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
             if e.call(0x008c_7aa0, &args![]).bool() {
                 let global = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
                 let item = e.call(0x0055_9450, &args![path_holder]).u32();
-                let resolved = e.call(0x0045_37b0, &args![item, global, 1u32, 0u32]).u32();
-                e.call(0x0087_ac00, &args![resolved]);
+                // 006eb11a: as above, the item, global, 1 and 0 are the four words of
+                // `0087ac00` (RET 0x10).
+                let resolved = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_ac00, &args![resolved, item, global, 1u32, 0u32]);
             } else {
                 let listener = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
                 let item = e.call(0x0055_9450, &args![path_holder]).u32();
@@ -700,8 +706,9 @@ pub fn fn_006eae40(e: &mut Engine, this: Ptr) {
         if e.mem.u8(changed) != 0 {
             if e.call(0x008c_7aa0, &args![]).bool() {
                 let global = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
-                let resolved = e.call(0x0045_37b0, &args![global]).u32();
-                e.call(0x0087_ad50, &args![resolved]);
+                // 006eb178: as above, the global is the word of `0087ad50` (RET 4).
+                let resolved = e.call(0x0045_37b0, &args![]).u32();
+                e.call(0x0087_ad50, &args![resolved, global]);
             } else {
                 e.call(0x0043_d410, &args![point, 0.0f32, 0u32, 0u32]);
                 let global = e.call(0x0055_9450, &args![0x011d_6e5cu32]).u32();
@@ -3634,24 +3641,19 @@ mod continuation_tests {
                 Ret::default()
             });
             e.register_double(0x0045_37b0, move |_, a| {
-                match a[0] {
-                    ITEM => assert_eq!(a, &[ITEM]),
-                    x if x == ITEM + 1 => assert_eq!(a, &[ITEM + 1, LISTENER, 1, 0]),
-                    LISTENER => assert_eq!(a, &[LISTENER]),
-                    _ => panic!("unexpected generated scene lookup"),
-                }
-                result(a[0] + 0x100)
+                assert!(a.is_empty());
+                result(0x7a00)
             });
             e.register_double(0x0087_ac60, move |_, a| {
-                assert_eq!(a, &[ITEM + 0x100]);
+                assert_eq!(a, &[0x7a00, ITEM]);
                 Ret::default()
             });
             e.register_double(0x0087_ac00, move |_, a| {
-                assert_eq!(a, &[ITEM + 0x101]);
+                assert_eq!(a, &[0x7a00, ITEM + 1, LISTENER, 1, 0]);
                 Ret::default()
             });
             e.register_double(0x0087_ad50, move |_, a| {
-                assert_eq!(a, &[LISTENER + 0x100]);
+                assert_eq!(a, &[0x7a00, LISTENER]);
                 Ret::default()
             });
             fn_006eae40(&mut e, Ptr::new(OBJECT));

@@ -44,7 +44,7 @@ fn read_c_string_byte(e: &Engine, address: u32) -> u8 {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x0049_3800, fn_00493800(Ptr) -> f64),
+        entry!(0x0049_3800, fn_00493800(Ptr, Ptr) -> f64),
         entry!(0x005f_21c0, fn_005f21c0(Ptr, u16) -> Ptr),
         entry!(0x005f_22a0, fn_005f22a0(Ptr, u32) -> Ptr),
         entry!(0x005f_22d0, fn_005f22d0(Ptr)),
@@ -332,12 +332,15 @@ pub fn fn_005f3740(e: &mut Engine, this: Ptr, index: u32, time: f32) -> bool {
 }
 
 // Translated from 00493800 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Adds the sequence's `time` at +0xd0 to the engine's elapsed time. The
-/// `TESAnimGroup::IsJumpingLoopAnim` map name is folded onto this body.
-pub fn fn_00493800(e: &mut Engine, animation: Ptr) -> f64 {
-    let seconds = e.call(SECONDS_SINCE_START, &args![]).f64();
-    let offset = f64::from(e.mem.f32(animation.addr().wrapping_add(0xd0)));
-    seconds + offset
+/// Adds the float at +0xd0 of `animation` (`this`) to `00639aa0`'s float of `sequence` (the
+/// one stack word, `RET 4`); the sum goes through a float local, so it comes back rounded to
+/// a float. The `TESAnimGroup::IsJumpingLoopAnim` map name is folded onto this body.
+pub fn fn_00493800(e: &mut Engine, animation: Ptr, sequence: Ptr) -> f64 {
+    // 0049380c: `00639aa0` is a thiscall on the stack word (ECX loaded at 00493809).
+    let seconds = e.call(SECONDS_SINCE_START, &args![sequence]).f64();
+    let offset = e.mem.u32(animation.addr().wrapping_add(0xd0));
+    // 00493814: FADD float ptr [+0xd0], FSTP float [EBP-8], FLD float [EBP-8].
+    x87_load32(x87_store32(x87_add(seconds, x87_m32(offset))))
 }
 
 // Translated from 005f2370 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2464,11 +2467,14 @@ mod tests {
         let animation = 0x1000;
         e.map(animation, 0xe0);
         e.mem.set_f32(animation + 0xd0, 1.25);
-        e.register_double(SECONDS_SINCE_START, |_, _| Ret {
-            st0: 42.5,
-            ..Ret::default()
+        e.register_double(SECONDS_SINCE_START, |_, a| {
+            assert_eq!(a, [0x2000]);
+            Ret {
+                st0: 42.5,
+                ..Ret::default()
+            }
         });
-        assert_eq!(e.call(0x0049_3800, &[animation]).f64(), 43.75);
+        assert_eq!(e.call(0x0049_3800, &[animation, 0x2000]).f64(), 43.75);
 
         e.map(GROUP_TYPE_TABLE, 0x24 * 4);
         e.map(TYPE_NAME_TABLE, 0x24 * 4);

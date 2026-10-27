@@ -159,11 +159,11 @@ const FORM_ID: u32 = 0x0084_e3a0;
 const FORM_GET_FILE: u32 = 0x0048_4e60;
 /// `TESForm::AddCompileIndex` (Xbox PDB), `cdecl(form id*, file)`.
 const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
-/// `cdecl(form id)`: the obstacle manager's entry for the form.
+/// The obstacle manager (`006c0720`, no word: plain RET, no stack read).
 const OBSTACLE_ENTRY: u32 = 0x006c_0720;
-/// `thiscall` on the entry (`navmeshobstaclemanager.cpp`).
+/// `thiscall` on the manager, RET 4: the form id (`navmeshobstaclemanager.cpp`).
 const OBSTACLE_ENTRY_ACTION_A: u32 = 0x006c_1150;
-/// `thiscall` on the entry (`navmeshobstaclemanager.cpp`).
+/// `thiscall` on the manager, RET 4: the form id (`navmeshobstaclemanager.cpp`).
 const OBSTACLE_ENTRY_ACTION_B: u32 = 0x006c_1130;
 
 // Condition functions the script bodies forward to (`cdecl(object, value,
@@ -819,8 +819,10 @@ pub fn fn_005bd240(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     if form_id != 0 {
-        let entry = e.call(OBSTACLE_ENTRY, &args![form_id]).u32();
-        e.call(OBSTACLE_ENTRY_ACTION_A, &args![entry]);
+        // 005bd2dd: `006c0720` takes no word (plain RET, no stack read); the pushed id is
+        // the word of `006c1150` (RET 4).
+        let entry = e.call(OBSTACLE_ENTRY, &args![]).u32();
+        e.call(OBSTACLE_ENTRY_ACTION_A, &args![entry, form_id]);
     }
     true
 }
@@ -833,8 +835,9 @@ pub fn fn_005bd300(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     if form_id != 0 {
-        let entry = e.call(OBSTACLE_ENTRY, &args![form_id]).u32();
-        e.call(OBSTACLE_ENTRY_ACTION_B, &args![entry]);
+        // As above: the id is the word of `006c1130` (RET 4).
+        let entry = e.call(OBSTACLE_ENTRY, &args![]).u32();
+        e.call(OBSTACLE_ENTRY_ACTION_B, &args![entry, form_id]);
     }
     true
 }
@@ -6223,14 +6226,21 @@ mod tests {
         e
     }
 
-    /// Records the form ids the obstacle manager is asked about.
+    /// Records the form ids the obstacle manager's two actions are given (the manager
+    /// getter takes no word).
     fn record_obstacle_lookups(e: &mut Engine) -> Rc<RefCell<Vec<u32>>> {
         let seen = Rc::new(RefCell::new(vec![]));
-        let log = seen.clone();
         e.register_double(OBSTACLE_ENTRY, move |_, a| {
-            log.borrow_mut().push(a[0]);
+            assert!(a.is_empty());
             0x4444u32.into_ret()
         });
+        for action in [OBSTACLE_ENTRY_ACTION_A, OBSTACLE_ENTRY_ACTION_B] {
+            let log = seen.clone();
+            e.register_double(action, move |_, a| {
+                log.borrow_mut().push(a[1]);
+                Ret::default()
+            });
+        }
         seen
     }
 
@@ -6241,7 +6251,10 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005b_d240, script(0)));
         assert_eq!(*seen.borrow(), vec![0x0100_1a2b]);
-        assert_eq!(calls(&e, OBSTACLE_ENTRY_ACTION_A), vec![vec![0x4444]]);
+        assert_eq!(
+            calls(&e, OBSTACLE_ENTRY_ACTION_A),
+            vec![vec![0x4444, 0x0100_1a2b]]
+        );
         assert!(calls(&e, OBSTACLE_ENTRY_ACTION_B).is_empty());
         // Without a script object the id is used as typed.
         let a = ScriptArgs {
@@ -6269,7 +6282,10 @@ mod tests {
         start_log(&mut e);
         assert!(run(&mut e, 0x005b_d300, script(0)));
         assert_eq!(*seen.borrow(), vec![0x1a2b]);
-        assert_eq!(calls(&e, OBSTACLE_ENTRY_ACTION_B), vec![vec![0x4444]]);
+        assert_eq!(
+            calls(&e, OBSTACLE_ENTRY_ACTION_B),
+            vec![vec![0x4444, 0x1a2b]]
+        );
         assert!(calls(&e, OBSTACLE_ENTRY_ACTION_A).is_empty());
         parse_gives(&mut e, false, &[]);
         assert!(!run(&mut e, 0x005b_d300, script(0)));

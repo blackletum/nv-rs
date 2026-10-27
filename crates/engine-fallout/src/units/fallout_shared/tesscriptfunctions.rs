@@ -2003,8 +2003,10 @@ pub fn script_output_mem_stats(e: &mut Engine, a: ScriptArgs) -> bool {
         e.call(STRCPY_S, &args![path, 0x200u32, DEFAULT_MEM_STATS]);
     }
     e.call(MEM_STATS_FILE_CONSTRUCT, &args![heap_dump, path]);
-    let output = e.call(MEM_STATS_OUTPUT_GET, &args![heap_dump, 0u32]).u32();
-    e.call(MEM_STATS_OUTPUT_SET, &args![output]);
+    // 005b5f56: `00401020` takes no word (plain RET, answers 011f6238); the pushed dump and
+    // 0 are the two words of `00aa47c0` (RET 8).
+    let output = e.call(MEM_STATS_OUTPUT_GET, &args![]).u32();
+    e.call(MEM_STATS_OUTPUT_SET, &args![output, heap_dump, 0u32]);
 
     e.call(SPRINTF_S, &args![path, 0x200u32, FORMAT_MODEL_DUMP, name]);
     e.call(
@@ -2294,8 +2296,9 @@ pub fn fn_005b6a30(e: &mut Engine, a: ScriptArgs) -> bool {
         e.call(STRNCPY_S, &args![path, DEFAULT_MEM_STATS, 0x1ffu32]);
     }
     e.call(MEM_STATS_FILE_CONSTRUCT, &args![heap_dump, path]);
-    let output = e.call(MEM_STATS_OUTPUT_GET, &args![heap_dump, 1u32]).u32();
-    e.call(MEM_STATS_OUTPUT_SET, &args![output]);
+    // As above: the dump and 1 are the two words of `00aa47c0`.
+    let output = e.call(MEM_STATS_OUTPUT_GET, &args![]).u32();
+    e.call(MEM_STATS_OUTPUT_SET, &args![output, heap_dump, 1u32]);
     e.call(MEM_STATS_FILE_DESTRUCT, &args![heap_dump]);
     e.mem.free(heap_dump);
     e.mem.free(path);
@@ -7443,8 +7446,11 @@ mod tests {
         let name = calls(&e, STRCPY_S)[0][0];
         assert!(calls(&e, SPRINTF_S).iter().all(|w| w[3] == name));
         let dump = calls(&e, MEM_STATS_FILE_CONSTRUCT)[0][0];
-        assert_eq!(calls(&e, MEM_STATS_OUTPUT_GET), vec![vec![dump, 0]]);
-        assert_eq!(calls(&e, MEM_STATS_OUTPUT_SET), vec![vec![0x11f_6238]]);
+        assert_eq!(calls(&e, MEM_STATS_OUTPUT_GET), vec![Vec::<u32>::new()]);
+        assert_eq!(
+            calls(&e, MEM_STATS_OUTPUT_SET),
+            vec![vec![0x11f_6238, dump, 0]]
+        );
         let model_file = calls(&e, BS_FILE_CONSTRUCT)[0][0];
         assert_eq!(
             calls(&e, MODEL_LOADER_OUTPUT_MODEL_MAP),
@@ -7755,8 +7761,11 @@ mod tests {
         let dump = calls(&e, MEM_STATS_FILE_CONSTRUCT)[0][0];
         let path = calls(&e, MEM_STATS_FILE_CONSTRUCT)[0][1];
         assert_eq!(e.mem.cstr(path), b"Other.mhd");
-        assert_eq!(calls(&e, MEM_STATS_OUTPUT_GET), vec![vec![dump, 1]]);
-        assert_eq!(calls(&e, MEM_STATS_OUTPUT_SET), vec![vec![0x11f_6238]]);
+        assert_eq!(calls(&e, MEM_STATS_OUTPUT_GET), vec![Vec::<u32>::new()]);
+        assert_eq!(
+            calls(&e, MEM_STATS_OUTPUT_SET),
+            vec![vec![0x11f_6238, dump, 1]]
+        );
         assert_eq!(calls(&e, MEM_STATS_FILE_DESTRUCT), vec![vec![dump]]);
         // Bad parameters: the default name is used.
         e.register(PARSE_PARAMETERS, |_, _| false.into_ret());
