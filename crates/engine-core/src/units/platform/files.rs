@@ -1178,7 +1178,7 @@ mod tests_wide_and_size {
             .kernel
             .disk
             .files
-            .contains_key(&b"c:\\some\\measured.bin".to_vec()));
+            .contains_key(b"c:\\some\\measured.bin".as_slice()));
         // CREATE_NEW on it now fails as CreateFileA does.
         let again = create_file_w(
             &mut e,
