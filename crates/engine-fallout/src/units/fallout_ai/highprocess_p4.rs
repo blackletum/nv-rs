@@ -914,15 +914,43 @@ pub fn high_process_aim_at_target(
     } else {
         0
     };
+    // The exe's frame (`SUB ESP,0x80` under `EBP`, `ESI`): 0x84 bytes. The firing location
+    // lands at +0x3c (`EBP-0x48`) with a weapon or +0x30 (`EBP-0x54`) without; the aim point
+    // comes out at +0x24 (`EBP-0x60`) with a projectile or +0x18 (`EBP-0x6c`) without and is
+    // kept at +0x6c (`EBP-0x18`); the offset to it at +0x50 (`EBP-0x34`).
+    e.with_stack(0x84, |e, frame| {
+        aim_in_frame(
+            e,
+            this,
+            attacker,
+            target,
+            scaled,
+            weapon,
+            projectile,
+            frame.addr(),
+        )
+    })
+}
+
+/// [`high_process_aim_at_target`] past its first checks, in the exe's frame.
+#[allow(clippy::too_many_arguments)]
+fn aim_in_frame(
+    e: &mut Engine,
+    this: Ptr,
+    attacker: Ptr,
+    target: Ptr,
+    scaled: u8,
+    weapon: u32,
+    projectile: u32,
+    frame: u32,
+) -> bool {
     // The attacker's firing location is only stored in locals nothing reads.
-    e.with_stack(12, |e, out| {
-        if weapon != 0 {
-            e.call(0x0052_57a0, &args![weapon, out, attacker]);
-        } else {
-            e.call(0x009a_8050, &args![out, attacker]);
-        }
-    });
-    let point = e.mem.alloc(12);
+    if weapon != 0 {
+        e.call(0x0052_57a0, &args![weapon, frame + 0x3c, attacker]);
+    } else {
+        e.call(0x009a_8050, &args![frame + 0x30, attacker]);
+    }
+    let point = frame + 0x6c;
     if projectile != 0 {
         let scale = if scaled != 0 {
             setting_float(e, 0x011c_fb78)
@@ -931,11 +959,11 @@ pub fn high_process_aim_at_target(
         };
         let speed = e.call(0x0069_ef80, &args![projectile]).f32();
         let speed = (f64::from(speed) * f64::from(scale)) as f32;
-        let result = e.with_stack(12, |e, out| {
-            e.call(
+        let result = e
+            .call(
                 0x009a_8bf0,
                 &args![
-                    out,
+                    frame + 0x24,
                     attacker,
                     target,
                     0u32,
@@ -944,29 +972,27 @@ pub fn high_process_aim_at_target(
                     scaled as u32
                 ],
             )
-            .u32()
-        });
+            .u32();
         copy_point(e, result, point);
     } else {
-        let result = e.with_stack(12, |e, out| {
-            e.call(0x009a_8600, &args![out, target, 1u32]).u32()
-        });
+        let result = e
+            .call(0x009a_8600, &args![frame + 0x18, target, 1u32])
+            .u32();
         copy_point(e, result, point);
     }
     let (x, y, z) = (e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8));
     e.call(0x008b_3cd0, &args![attacker, x, y, z]);
     e.mem.set_u8(this.addr() + 0xe1, 1);
-    let result = if weapon != 0 && !e.call(0x0064_50c0, &args![weapon]).bool() {
+    if weapon != 0 && !e.call(0x0064_50c0, &args![weapon]).bool() {
         let range = setting_float(e, 0x011c_ebf8);
         let alpha = middle_high_process_get_alpha_mult(e, Ptr::new(weapon));
         let reach = (f64::from(alpha) * f64::from(range)) as f32;
-        let squared = e.with_stack(12, |e, offset| {
-            let location = e
-                .vcall(attacker.addr(), REFERENCE_SLOT_LOCATION, &args![])
-                .u32();
-            e.call(0x0043_9ef0, &args![location, offset, point]);
-            e.call(0x004a_7290, &args![offset]).f32()
-        });
+        let offset = frame + 0x50;
+        let location = e
+            .vcall(attacker.addr(), REFERENCE_SLOT_LOCATION, &args![])
+            .u32();
+        e.call(0x0043_9ef0, &args![location, offset, point]);
+        let squared = e.call(0x004a_7290, &args![offset]).f32();
         let within = f64::from(reach) * f64::from(reach) < f64::from(squared);
         e.call(0x008b_b650, &args![attacker, within as u32, 0u32, 0u32]);
         let arc = e.global::<f32>(0x0108_8250);
@@ -974,9 +1000,7 @@ pub fn high_process_aim_at_target(
             .bool()
     } else {
         e.call(0x009a_6ae0, &args![attacker, target, 0u32]).bool()
-    };
-    e.mem.free(point);
-    result
+    }
 }
 
 /// Copies a point (three words) from `from` to `to`.
@@ -6046,53 +6070,57 @@ pub fn fn_008ff350(
         let mut handled = false;
         let flag = e.vcall(actor + 0xa4, 8, &args![0u32]).u32();
         if flag == 0 {
-            let result = e.mem.alloc(4);
-            e.mem.set_u32(result, 0);
-            if e.call(
-                ACTOR_GET_SHOULD_ATTACK_ACTOR,
-                &args![other, actor, 0u32, result, 0u32],
-            )
-            .bool()
-            {
-                let scaled = f64::from(strength) / f64::from(own_strength);
-                let roll_input = truncate_float(trigger) as u32 & 0xff;
-                let roll = e.call(0x0047_eeb0, &args![roll_input]).f64();
-                if roll > scaled {
-                    list_append(e, base + AVOID_ACTOR_LIST, other);
-                    handled = true;
+            // The attack verdict word at +0x64 (`EBP-0x8c`) of the exe's 0xf0-byte frame.
+            e.with_stack(0xf0, |e, frame| {
+                let result = frame.addr() + 0x64;
+                e.mem.set_u32(result, 0);
+                if e.call(
+                    ACTOR_GET_SHOULD_ATTACK_ACTOR,
+                    &args![other, actor, 0u32, result, 0u32],
+                )
+                .bool()
+                {
+                    let scaled = f64::from(strength) / f64::from(own_strength);
+                    let roll_input = truncate_float(trigger) as u32 & 0xff;
+                    let roll = e.call(0x0047_eeb0, &args![roll_input]).f64();
+                    if roll > scaled {
+                        list_append(e, base + AVOID_ACTOR_LIST, other);
+                        handled = true;
+                    }
                 }
-            }
-            e.mem.free(result);
+            });
         }
         if !handled {
-            let result = e.mem.alloc(4);
-            e.mem.set_u32(result, 0);
-            if e.call(
-                ACTOR_GET_SHOULD_ATTACK_ACTOR,
-                &args![actor, other, 0u32, result, 0u32],
-            )
-            .bool()
-            {
-                reaction = 100;
-            } else if sight > 0 {
-                let kind = e.mem.u32(result);
-                if kind == 0 || kind == 1 {
-                    let other_position = e.call(REFERENCE_POSITION, &args![other]).u32();
-                    let actor_position = e.call(REFERENCE_POSITION, &args![actor]).u32();
-                    let squared = e.with_stack(12, |e, difference| {
+            // The verdict word at +0x5c (`EBP-0x94`) and the difference at +0x68 (`EBP-0x88`) of
+            // the exe's 0xf0-byte frame.
+            e.with_stack(0xf0, |e, frame| {
+                let result = frame.addr() + 0x5c;
+                e.mem.set_u32(result, 0);
+                if e.call(
+                    ACTOR_GET_SHOULD_ATTACK_ACTOR,
+                    &args![actor, other, 0u32, result, 0u32],
+                )
+                .bool()
+                {
+                    reaction = 100;
+                } else if sight > 0 {
+                    let kind = e.mem.u32(result);
+                    if kind == 0 || kind == 1 {
+                        let other_position = e.call(REFERENCE_POSITION, &args![other]).u32();
+                        let actor_position = e.call(REFERENCE_POSITION, &args![actor]).u32();
+                        let difference = frame.addr() + 0x68;
                         e.call(
                             0x0043_9ef0,
                             &args![actor_position, difference, other_position],
                         );
-                        e.call(0x004a_7290, &args![difference]).f64()
-                    });
-                    let radius = f64::from(sight.wrapping_mul(sight));
-                    if squared <= radius {
-                        close = true;
+                        let squared = e.call(0x004a_7290, &args![difference]).f64();
+                        let radius = f64::from(sight.wrapping_mul(sight));
+                        if squared <= radius {
+                            close = true;
+                        }
                     }
                 }
-            }
-            e.mem.free(result);
+            });
         }
     }
     let skip_help = e.vcall(actor, 0x21c, &args![]).bool()
@@ -6253,15 +6281,16 @@ pub fn high_process_react_to_combat_situation(e: &mut Engine, this: Ptr, a: u32,
         return false;
     }
     if target != 0 {
-        let result = e.mem.alloc(4);
-        e.mem.set_u32(result, 0);
-        let attacks = e
-            .call(
+        // The verdict word at +0x20 (`EBP-0x14`) of the exe's 0x34-byte frame.
+        let attacks = e.with_stack(0x34, |e, frame| {
+            let result = frame.addr() + 0x20;
+            e.mem.set_u32(result, 0);
+            e.call(
                 ACTOR_GET_SHOULD_ATTACK_ACTOR,
                 &args![a, target, 0u32, result, 0u32],
             )
-            .bool();
-        e.mem.free(result);
+            .bool()
+        });
         if attacks {
             return false;
         }
@@ -6516,13 +6545,15 @@ pub fn high_process_process_summon_creature_defend(e: &mut Engine, this: Ptr, ac
         return;
     }
     let player = e.mem.u32(PLAYER);
-    let flag_cell = e.mem.alloc(4);
-    e.mem.set_u8(flag_cell, 0);
-    let in_summon_fight = e.call(ACTOR_TEST_00493BB0, &args![commander]).bool()
-        || (commander == player
-            && e.call(PLAYER_IS_IN_COMBAT, &args![player, flag_cell])
-                .bool());
-    e.mem.free(flag_cell);
+    // The flag byte at +0x17 (`EBP-1`) of the exe's 0x18-byte frame.
+    let in_summon_fight = e.with_stack(0x18, |e, frame| {
+        let flag_cell = frame.addr() + 0x17;
+        e.mem.set_u8(flag_cell, 0);
+        e.call(ACTOR_TEST_00493BB0, &args![commander]).bool()
+            || (commander == player
+                && e.call(PLAYER_IS_IN_COMBAT, &args![player, flag_cell])
+                    .bool())
+    });
     if in_summon_fight {
         if commander != player {
             return;
@@ -13848,5 +13879,85 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0090_2c80, &args![proc, actor, state]);
         assert!(calls_to(&e, 0x008a_6840).is_empty());
+    }
+
+    // ---- the exe's stack frames ----
+
+    /// The block the next `with_stack(size)` takes (the last freed block of that size), with
+    /// the call log switched on.
+    fn next_frame(e: &mut Engine, size: u32) -> u32 {
+        let frame = e.mem.alloc(size);
+        e.mem.free(frame);
+        e.call_log = Some(vec![]);
+        frame
+    }
+
+    #[test]
+    fn aiming_keeps_its_points_at_the_exe_frame_offsets() {
+        let mut e = Engine::new();
+        for (index, value) in [0.0f32, 0.0, 0.0].into_iter().enumerate() {
+            global(&mut e, 0x011f_426c + 4 * index as u32, value.to_bits());
+        }
+        let attacker = e.mem.alloc(0x100);
+        let target = e.mem.alloc(0x100);
+        let this = e.mem.alloc(0x500);
+        stub(&mut e, 0x008a_1710, 0);
+        let attacker_location = e.mem.alloc(12);
+        let target_location = e.mem.alloc(12);
+        stub(&mut e, 0x009a_8050, attacker_location);
+        stub(&mut e, 0x009a_8600, target_location);
+        stub(&mut e, 0x008b_3cd0, 0);
+        stub(&mut e, 0x009a_6ae0, 1);
+        let frame = next_frame(&mut e, 0x84);
+        e.call(0x008f_74c0, &args![this, attacker, target, 0u8]);
+        // Without a weapon: the firing location at +0x30, the aim point out at +0x18.
+        assert_eq!(
+            calls_to(&e, 0x009a_8050),
+            vec![vec![frame + 0x30, attacker]]
+        );
+        assert_eq!(calls_to(&e, 0x009a_8600)[0][0], frame + 0x18);
+    }
+
+    #[test]
+    fn the_combat_reaction_verdict_sits_at_frame_offset_0x20() {
+        let mut e = Engine::new();
+        let (process, a, b) = react_scene(&mut e);
+        let frame = next_frame(&mut e, 0x34);
+        e.call(0x008f_fe50, &args![process, a, b]);
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_SHOULD_ATTACK_ACTOR)[0][3],
+            frame + 0x20
+        );
+    }
+
+    #[test]
+    fn the_summon_defence_combat_flag_sits_at_frame_offset_0x17() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x40);
+        global(&mut e, 0x011d_ea3c, player);
+        stub(&mut e, 0x0049_3bb0, 0);
+        stub(&mut e, 0x0095_3c50, 0);
+        let process = summon_process(&mut e, player);
+        let frame = next_frame(&mut e, 0x18);
+        e.call(0x0090_0020, &args![process, 0xa1u32]);
+        assert_eq!(
+            calls_to(&e, PLAYER_IS_IN_COMBAT),
+            vec![vec![player, frame + 0x17]]
+        );
+    }
+
+    #[test]
+    fn the_pair_evaluation_verdicts_sit_at_the_exe_frame_offsets() {
+        let mut e = Engine::new();
+        let scene = pair_scene(&mut e);
+        let frame = next_frame(&mut e, 0xf0);
+        run_pair(&mut e, &scene);
+        // The first verdict at +0x64, the second at +0x5c.
+        let verdicts: Vec<u32> = calls_to(&e, ACTOR_GET_SHOULD_ATTACK_ACTOR)
+            .iter()
+            .map(|call| call[3])
+            .collect();
+        assert_eq!(verdicts, vec![frame + 0x64, frame + 0x5c]);
     }
 }
