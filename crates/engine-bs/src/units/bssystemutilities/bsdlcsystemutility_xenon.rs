@@ -258,9 +258,36 @@ pub fn fn_00af2c70(_e: &mut Engine, _this: u32) {}
 /// `BSDLCSystemUtility::Idle` (engine map; `thiscall`, plain `RET`): does nothing.
 pub fn dlc_utility_idle(_e: &mut Engine, _this: u32) {}
 
+/// The `steam_api.dll` import slots `SteamFriends` (`00fdf474`) and `SteamUtils`
+/// (`00fdf49c`), no arguments, and the slots the exe calls (`thiscall`): `ISteamUtils` +0x24
+/// (no words; its answer is passed on) and `ISteamFriends` +0x58 (one word).
+const STEAM_FRIENDS: u32 = 0x00fd_f474;
+const STEAM_UTILS: u32 = 0x00fd_f49c;
+const UTILS_SLOT_24: u32 = 0x24;
+const FRIENDS_SLOT_58: u32 = 0x58;
+
+// Translated from 00af28f0 (disassembled, FalloutNV.exe 1.4.0.525)
+/// No label (`thiscall`, one stack word, `RET 4`; neither `this` nor the word is read; called
+/// from `DoClick` `007ceeec`): when `SteamFriends()` and then `SteamUtils()` are not null, a
+/// second `SteamUtils()` and a second `SteamFriends()` are taken, the utils' slot +0x24 is
+/// called and its answer passed to the friends' slot +0x58.
+pub fn fn_00af28f0(e: &mut Engine, _this: u32, _word: u32) {
+    if e.call(STEAM_FRIENDS, &args![]).u32() == 0 {
+        return;
+    }
+    if e.call(STEAM_UTILS, &args![]).u32() == 0 {
+        return;
+    }
+    let utils = e.call(STEAM_UTILS, &args![]).u32();
+    let friends = e.call(STEAM_FRIENDS, &args![]).u32();
+    let answer = e.vcall(utils, UTILS_SLOT_24, &args![]).u32();
+    e.vcall(friends, FRIENDS_SLOT_58, &args![answer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_28f0, fn_00af28f0(u32, u32)),
         entry!(0x00af_26c0, dlc_utility_instance() -> u32),
         entry!(0x00af_2940, dlc_utility_scan(Ptr, u32, u32) -> u32),
         entry!(0x00af_2b10, dlc_utility_report(Ptr, u32, u32) -> u32),
@@ -522,5 +549,36 @@ mod finish_tests {
             e.call(addr, &args![this]);
         }
         assert_eq!(e.mem.u32(this), 0x1234_5678);
+    }
+
+    #[test]
+    fn the_store_page_goes_through_utils_and_friends_only_with_both() {
+        const FRIENDS: u32 = 0x0b00_0000;
+        const UTILS: u32 = 0x0b00_0100;
+        const APP_ID: u32 = 0x0b00_0200;
+        const OPEN: u32 = 0x0b00_0300;
+        let mut e = engine();
+        e.map(FRIENDS, 0x100);
+        e.map(UTILS, 0x100);
+        e.mem.set_u32(FRIENDS, FRIENDS + 0x10);
+        e.mem.set_u32(FRIENDS + 0x10 + FRIENDS_SLOT_58, OPEN);
+        e.mem.set_u32(UTILS, UTILS + 0x10);
+        e.mem.set_u32(UTILS + 0x10 + UTILS_SLOT_24, APP_ID);
+        e.register(STEAM_FRIENDS, |_, _| FRIENDS.into_ret());
+        e.register(STEAM_UTILS, |_, _| UTILS.into_ret());
+        e.register(APP_ID, |_, _| 22380u32.into_ret());
+        e.register(OPEN, |_, _| Ret::default());
+        e.call(0x00af_28f0, &args![1u32, 2u32]);
+        assert_eq!(calls(&e, APP_ID), vec![vec![UTILS]]);
+        assert_eq!(calls(&e, OPEN), vec![vec![FRIENDS, 22380]]);
+        assert_eq!(calls(&e, STEAM_FRIENDS).len(), 2);
+        // Without Steam's objects (the platform's answer): nothing more.
+        e.register(STEAM_UTILS, |_, _| 0u32.into_ret());
+        e.call(0x00af_28f0, &args![1u32, 2u32]);
+        assert_eq!(calls(&e, STEAM_UTILS).len(), 3);
+        assert_eq!(calls(&e, OPEN).len(), 1);
+        e.register(STEAM_FRIENDS, |_, _| 0u32.into_ret());
+        e.call(0x00af_28f0, &args![1u32, 2u32]);
+        assert_eq!(calls(&e, STEAM_UTILS).len(), 3);
     }
 }
