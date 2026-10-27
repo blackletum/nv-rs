@@ -1434,7 +1434,9 @@ pub fn bhk_tasklet_manager_callback_bhk_thread_state_create_thread_memory(
             .wrapping_add((used as u32).wrapping_mul(0x2c))
             .wrapping_add(0x18);
         let memory_system = e.call(0x00cb_bfc0, &[]).u32();
-        e.vcall(memory_system, 0xc, &args![element + 4, 0x010c_3c2cu32]);
+        // 00c680cb: the third word is a by-value flags struct (PUSH ECX; MOV [ESP],1), pushed
+        // first: threadInit's flags = 1.
+        e.vcall(memory_system, 0xc, &args![element + 4, 0x010c_3c2cu32, 1u32]);
         e.call(0x00cb_b930, &args![element + 4]);
         let allocator = e.mem.u32(element + 0x14);
         let block = e.vcall(allocator, 4, &args![0x5000u32]).u32();
@@ -5663,7 +5665,7 @@ mod tests {
             ret(block)
         });
         e.register_double(0x0400_3300, move |_, a| {
-            assert_eq!(a[1..], [element + 4, 0x010c_3c2c]);
+            assert_eq!(a[1..], [element + 4, 0x010c_3c2c, 1]);
             Ret::default()
         });
         e.register_double(0x00cb_bfc0, move |_, _| ret(manager));
