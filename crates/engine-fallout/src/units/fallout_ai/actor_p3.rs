@@ -8964,18 +8964,26 @@ fn actor_of_value_owner(owner: u32) -> u32 {
 
 // Translated from 008a0a90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Cdecl callback of the actor value table: calls virtual slot `0x43c` of
-/// the actor the owner pointer (`Actor + 0xa4`) belongs to.
-pub fn fn_008a0a90(e: &mut Engine, owner: u32) {
+/// the actor the owner pointer (`Actor + 0xa4`) belongs to and answers its
+/// `ST0` unchanged (the exe ends on that call). It is the derivation function
+/// (`pDerivationFunction`) that `0066efe0` registers for actor value 0x12,
+/// and `0066ed60` stores its `ST0` as the derived `float`; the slot is
+/// `Actor::GetArmorRating` (`float`; Xbox PDB slot `+0x438`, the `-4` of the
+/// bounded `Actor` slots).
+pub fn fn_008a0a90(e: &mut Engine, owner: u32) -> f64 {
     let actor = actor_of_value_owner(owner);
-    e.vcall(actor, 0x43c, &args![]);
+    e.vcall(actor, 0x43c, &args![]).f64()
 }
 
 // Translated from 008a0ad0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Cdecl callback of the actor value table: calls virtual slot `0x440` of
-/// the actor the owner pointer (`Actor + 0xa4`) belongs to.
-pub fn fn_008a0ad0(e: &mut Engine, owner: u32) {
+/// the actor the owner pointer (`Actor + 0xa4`) belongs to and answers its
+/// `ST0` unchanged (the exe ends on that call). It is the derivation function
+/// that `0066efe0` registers for actor value 0x4c (read back by `0066ed60`);
+/// the slot is `Actor::GetArmorThreshold` (`float`; Xbox PDB slot `+0x43c`).
+pub fn fn_008a0ad0(e: &mut Engine, owner: u32) -> f64 {
     let actor = actor_of_value_owner(owner);
-    e.vcall(actor, 0x440, &args![]);
+    e.vcall(actor, 0x440, &args![]).f64()
 }
 
 // Translated from 008a0b10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -9048,12 +9056,14 @@ pub fn fn_008a0c60(e: &mut Engine, this: Ptr<Actor>) -> f32 {
 // Translated from 008a0cd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Cdecl callback of the actor value table: asks the player (`004d1360`)
 /// and hands the byte to `00577250` on the actor the owner pointer
-/// (`Actor + 0xa4`) belongs to.
-pub fn fn_008a0cd0(e: &mut Engine, owner: u32) {
+/// (`Actor + 0xa4`) belongs to, answering that call's `ST0` unchanged (the exe
+/// ends on it; `00577250` answers a `float`). It is a derivation function that
+/// `0066efe0` registers, read back as a `float` by `0066ed60`.
+pub fn fn_008a0cd0(e: &mut Engine, owner: u32) -> f64 {
     let player_addr = e.global::<u32>(PLAYER_CHARACTER);
     let flag = e.call(PLAYER_FLAG_4D1360, &args![player_addr]).u8();
     let actor = actor_of_value_owner(owner);
-    e.call(ACTOR_SET_FLAG_577250, &args![actor, flag]);
+    e.call(ACTOR_SET_FLAG_577250, &args![actor, flag]).f64()
 }
 /// `8192.0` (`double`), the distance from the player beyond which nothing is
 /// detected.
@@ -14178,12 +14188,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008a0960,
             actor_restore_full_health_and_conditions(Ptr<Actor>)
         ),
-        entry!(0x008a0a90, fn_008a0a90(u32)),
-        entry!(0x008a0ad0, fn_008a0ad0(u32)),
+        entry!(0x008a0a90, fn_008a0a90(u32) -> f64),
+        entry!(0x008a0ad0, fn_008a0ad0(u32) -> f64),
         entry!(0x008a0b10, actor_get_current_speed(Ptr<Actor>) -> f32),
         entry!(0x008a0c20, fn_008a0c20(Ptr<Actor>) -> f32),
         entry!(0x008a0c60, fn_008a0c60(Ptr<Actor>) -> f32),
-        entry!(0x008a0cd0, fn_008a0cd0(u32)),
+        entry!(0x008a0cd0, fn_008a0cd0(u32) -> f64),
         entry!(
             0x008a0d10,
             actor_get_detection_level_against_actor(
@@ -19947,6 +19957,24 @@ mod tests {
             calls_to(&e, slot_target(&e, actor.cast(), 0x440)),
             vec![vec![actor.addr()]]
         );
+    }
+
+    #[test]
+    fn value_table_derivations_answer_the_actor_slot_st0() {
+        let mut e = engine();
+        let actor = actor_with(
+            &mut e,
+            &[(0x43c, float_ret(12.5)), (0x440, float_ret(3.25))],
+            None,
+        );
+        let owner = actor.addr() + 0xa4;
+        assert_eq!(fn_008a0a90(&mut e, owner), 12.5);
+        assert_eq!(fn_008a0ad0(&mut e, owner), 3.25);
+        stub_with(&mut e, ACTOR_SET_FLAG_577250, |_, _| float_ret(7.75));
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        stub(&mut e, PLAYER_FLAG_4D1360, 1);
+        assert_eq!(fn_008a0cd0(&mut e, owner), 7.75);
     }
 
     #[test]

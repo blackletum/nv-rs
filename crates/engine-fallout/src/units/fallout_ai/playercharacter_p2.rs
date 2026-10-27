@@ -857,12 +857,22 @@ pub fn fn_0094c950(e: &mut Engine, this: Ptr<PlayerCharacter>, scroll: Ptr) {
 }
 
 // Translated from 0094ca20 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Forwards to `MagicTarget::AddTarget` (Xbox PDB name of `008230f0`).
-pub fn fn_0094ca20(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32, flag: u8) {
+/// Forwards to `MagicTarget::AddTarget` (Xbox PDB name of `008230f0`) and answers its `AL`:
+/// the exe ends on that call. The function is slot 0 of `PlayerCharacter`'s `MagicTarget`
+/// vtable, `MagicTarget::AddTarget` (`bool` in the Xbox PDB).
+pub fn fn_0094ca20(
+    e: &mut Engine,
+    this: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    flag: u8,
+) -> bool {
     e.call(
         MAGIC_TARGET_ADD_TARGET,
         &args![this, first, second, third, flag],
-    );
+    )
+    .bool()
 }
 
 // Translated from 0094ca50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7992,7 +8002,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             player_character_set_selected_spell(Ptr<PlayerCharacter>, u32)
         ),
         entry!(0x0094c950, fn_0094c950(Ptr<PlayerCharacter>, Ptr)),
-        entry!(0x0094ca20, fn_0094ca20(Ptr, u32, u32, u32, u8)),
+        entry!(0x0094ca20, fn_0094ca20(Ptr, u32, u32, u32, u8) -> bool),
         entry!(0x0094ca50, fn_0094ca50(Ptr) -> u32),
         entry!(0x0094cae0, fn_0094cae0(Ptr<PlayerCharacter>, Ptr)),
         entry!(0x0094db80, fn_0094db80(Ptr, u8)),
@@ -8660,6 +8670,16 @@ mod tests {
             calls_to(&e, MAGIC_TARGET_ADD_TARGET),
             vec![vec![me, 14, 15, 16, 1]]
         );
+    }
+
+    #[test]
+    fn fn_0094ca20_answers_add_target_al() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, MAGIC_TARGET_ADD_TARGET, eax(0x0000_0301));
+        assert!(fn_0094ca20(&mut e, player.cast(), 14, 15, 16, 1));
+        double(&mut e, MAGIC_TARGET_ADD_TARGET, eax(0x0000_0300));
+        assert!(!fn_0094ca20(&mut e, player.cast(), 14, 15, 16, 1));
     }
 
     #[test]
