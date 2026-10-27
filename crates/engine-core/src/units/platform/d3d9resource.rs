@@ -2,7 +2,9 @@
 //! device of `super::d3d9device`: `CreateVertexBuffer`, `CreateIndexBuffer`,
 //! `CreateVertexShader`, `CreatePixelShader`, `CreateVertexDeclaration`, the objects they make,
 //! and the device state that binds them (stream sources, indices, the vertex declaration and
-//! FVF, the shaders and their constants), with the documented Direct3D 9 semantics.
+//! FVF, the shaders and their constants), with the documented Direct3D 9 semantics, and the draws
+//! (`DrawPrimitiveUP` as the retail runtime answered it, measured with `scripts/d3d9-capture
+//! device`).
 //!
 //! Each object lives in engine memory with its vtable pointer at `+0`, each provided slot a
 //! platform function at a code address of its kind (see the `*_CODE` constants); a slot not
@@ -145,6 +147,12 @@ struct Bindings {
     /// Constant registers as their 4 words each, by (kind, register): kinds 0..2 vertex float,
     /// int, bool; 3..5 pixel float, int, bool (a bool register keeps one word).
     constants: HashMap<(u8, u32), [u32; 4]>,
+    /// The stride `GetStreamSource` reports for a stream that holds no buffer (0 unless a
+    /// failed `DrawPrimitiveUP` left one, measured).
+    empty_strides: HashMap<u32, u32>,
+    /// Whether a `DrawPrimitiveUP` has succeeded in a scene on this device (from then on the
+    /// runtime takes them outside a scene too, measured).
+    drawn_from_memory: bool,
 }
 
 /// The buffers, shaders and declarations (`Kernel::graphics`).
@@ -562,6 +570,7 @@ pub(super) fn set_stream_source(
     if stream >= STREAMS || (buffer != 0 && !is_kind(e, buffer, VERTEX_BUFFER_CODE)) {
         return D3DERR_INVALIDCALL;
     }
+    bindings(e, this).empty_strides.remove(&stream);
     let old = if buffer != 0 {
         bindings(e, this)
             .streams
@@ -594,6 +603,15 @@ pub(super) fn get_stream_source(
     if held != 0 {
         add_ref(e, Ptr::new(held));
     }
+    let step = if held == 0 {
+        bindings(e, this)
+            .empty_strides
+            .get(&stream)
+            .copied()
+            .unwrap_or(step)
+    } else {
+        step
+    };
     e.mem.set_u32(buffer.addr(), held);
     e.mem.set_u32(offset.addr(), at);
     e.mem.set_u32(stride.addr(), step);
@@ -878,4 +896,75 @@ pub(super) fn draw_indexed_primitive(
         panic!("IDirect3DDevice9::DrawIndexedPrimitive of a point list is not provided");
     }
     D3D_OK
+}
+
+/// Leaves stream 0 as a draw from memory leaves it: `buffer` (0 for none, released if it was
+/// another), `offset` and `stride` (kept for `GetStreamSource` with no buffer too).
+fn leave_stream_zero(e: &mut Engine, this: Ptr, buffer: u32, offset: u32, stride: u32) {
+    let old = if buffer != 0 {
+        bindings(e, this)
+            .streams
+            .insert(0, (buffer, offset, stride))
+    } else {
+        bindings(e, this).streams.remove(&0)
+    };
+    if buffer == 0 {
+        bindings(e, this).empty_strides.insert(0, stride);
+    }
+    hold(e, old.map_or(0, |o| o.0), buffer);
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::DrawPrimitiveUP (vtable +0x14C)
+/// `DrawPrimitiveUP(type, primitive count, vertices, stride)`: a draw from the caller's memory.
+/// Nothing is drawn yet (the viewer draws); what the call answers and leaves on stream 0 is the
+/// retail runtime's, measured on this machine (2026-10-27, `scripts/d3d9-capture device`, a
+/// windowed HAL device with an FVF set):
+/// - in a scene with a nonzero stride it answers `D3D_OK` whatever the type (0, 7 and 9
+///   included), the count (0 included) and the vertex pointer (null included): the runtime
+///   checks none of them; stream 0 is then empty with offset and stride 0 (a vertex buffer it
+///   held is released);
+/// - in a scene with stride 0 it answers `D3DERR_INVALIDCALL`, stream 0 keeping its buffer with
+///   offset and stride 0;
+/// - outside a scene it answers `D3DERR_INVALIDCALL` until a draw from memory has succeeded in a
+///   scene on the device (on a fresh device, after an empty scene, after a `Present`), stream 0
+///   then empty with offset 0 and the given stride; after one it answers `D3D_OK` outside a scene
+///   too, as in one.
+///
+/// Not provided (stop the run): without an FVF or a vertex declaration (the runtime faulted
+/// there, measured with the declaration set to null), and stride 0 outside a scene (not
+/// measured).
+pub(super) fn draw_primitive_up(
+    e: &mut Engine,
+    this: Ptr,
+    _kind: u32,
+    _count: u32,
+    _vertices: u32,
+    stride: u32,
+) -> u32 {
+    let b = bindings(e, this).clone();
+    if b.declaration == 0 && b.fvf == 0 {
+        panic!(
+            "IDirect3DDevice9::DrawPrimitiveUP without a vertex declaration or FVF is not provided"
+        );
+    }
+    let held = b.streams.get(&0).map_or(0, |s| s.0);
+    if in_scene(e, this) {
+        if stride == 0 {
+            leave_stream_zero(e, this, held, 0, 0);
+            return D3DERR_INVALIDCALL;
+        }
+        bindings(e, this).drawn_from_memory = true;
+        leave_stream_zero(e, this, 0, 0, 0);
+        return D3D_OK;
+    }
+    if stride == 0 {
+        panic!("IDirect3DDevice9::DrawPrimitiveUP with stride 0 outside a scene is not provided");
+    }
+    if b.drawn_from_memory {
+        leave_stream_zero(e, this, 0, 0, 0);
+        D3D_OK
+    } else {
+        leave_stream_zero(e, this, 0, 0, stride);
+        D3DERR_INVALIDCALL
+    }
 }

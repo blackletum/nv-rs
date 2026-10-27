@@ -10,6 +10,8 @@
 use std::ffi::c_void;
 use std::io::Write;
 
+mod device;
+
 #[link(name = "d3d9")]
 extern "system" {
     fn Direct3DCreate9(sdk: u32) -> *mut *const usize;
@@ -275,6 +277,11 @@ fn code_pages(o: &mut impl Write) {
 fn main() {
     let out = std::io::stdout();
     let mut o = out.lock();
+    // `d3d9-capture device`: the device calls' answers (general behaviour, `device.rs`).
+    if std::env::args().nth(1).as_deref() == Some("device") {
+        unsafe { device::measure(&mut o) };
+        return;
+    }
     // `d3d9-capture codepages`: the code-page lines alone.
     if std::env::args().nth(1).as_deref() == Some("codepages") {
         code_pages(&mut o);

@@ -451,7 +451,7 @@ fn register_code(e: &mut Engine) {
         e.register(DEVICE_CODE + 4 * slot, f);
     }
     use super::d3d9resource as r;
-    let resource: [(u32, crate::AbiFn); 31] = [
+    let resource: [(u32, crate::AbiFn); 32] = [
         (
             26,
             crate::entry!(0, r::create_vertex_buffer(Ptr, u32, u32, u32, u32, Ptr, u32) -> u32).1,
@@ -521,6 +521,10 @@ fn register_code(e: &mut Engine) {
         (
             82,
             crate::entry!(0, r::draw_indexed_primitive(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            83,
+            crate::entry!(0, r::draw_primitive_up(Ptr, u32, u32, u32, u32) -> u32).1,
         ),
         (
             88,
@@ -2978,5 +2982,85 @@ mod tests {
             D3DERR_INVALIDCALL
         );
         assert_eq!(e.vcall(device, 4 * 3, &[]).u32(), D3D_OK);
+    }
+
+    /// `DrawPrimitiveUP` as the retail runtime answered it (`d3d9_resource::draw_primitive_up`):
+    /// refused outside a scene until one has succeeded in a scene, then taken anywhere; stride
+    /// 0 refused; stream 0 left as measured.
+    #[test]
+    fn draws_from_memory_answer_and_leave_stream_zero_as_measured() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let vertices = e.mem.alloc(0x90);
+        let stream = |e: &mut Engine| {
+            let words = e.mem.alloc(12);
+            assert_eq!(
+                e.vcall(device, 4 * 101, &[0, words, words + 4, words + 8])
+                    .u32(),
+                D3D_OK
+            );
+            let held = e.mem.u32(words);
+            if held != 0 {
+                e.vcall(held, 8, &[]);
+            }
+            (held, e.mem.u32(words + 4), e.mem.u32(words + 8))
+        };
+        // Without an FVF or a declaration the run stops.
+        let bare = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.vcall(device, 4 * 83, &[5, 2, vertices, 0x18]);
+        }));
+        assert!(bare.is_err());
+        e.vcall(device, 4 * 89, &[0x104]);
+        e.vcall(device, 4 * 26, &[0x90, 8, 0x104, 0, out, 0]);
+        let vb = e.mem.u32(out);
+        // Outside a scene on a fresh device: refused, stream 0 emptied with the stride kept.
+        e.vcall(device, 4 * 100, &[0, vb, 0x18, 0x18]);
+        assert_eq!(
+            e.vcall(device, 4 * 83, &[5, 2, vertices, 0x18]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(stream(&mut e), (0, 0, 0x18));
+        // An empty scene does not change that.
+        e.vcall(device, 4 * 41, &[]);
+        e.vcall(device, 4 * 42, &[]);
+        assert_eq!(
+            e.vcall(device, 4 * 83, &[5, 2, vertices, 0x18]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        // In a scene: taken whatever the type, count and pointer; stream 0 emptied.
+        e.vcall(device, 4 * 41, &[]);
+        e.vcall(device, 4 * 100, &[0, vb, 0x18, 0x18]);
+        for (kind, count, data) in [
+            (5u32, 2u32, vertices),
+            (2, 6, vertices),
+            (0, 2, vertices),
+            (9, 2, vertices),
+            (5, 0, vertices),
+            (5, 2, 0),
+        ] {
+            assert_eq!(
+                e.vcall(device, 4 * 83, &[kind, count, data, 0x18]).u32(),
+                D3D_OK
+            );
+        }
+        assert_eq!(stream(&mut e), (0, 0, 0));
+        // Stride 0: refused, the buffer kept with offset and stride 0.
+        e.vcall(device, 4 * 100, &[0, vb, 0x18, 0x18]);
+        assert_eq!(
+            e.vcall(device, 4 * 83, &[5, 2, vertices, 0]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(stream(&mut e), (vb, 0, 0));
+        e.vcall(device, 4 * 42, &[]);
+        // After a draw from memory in a scene, taken outside one too.
+        assert_eq!(
+            e.vcall(device, 4 * 83, &[5, 2, vertices, 0x18]).u32(),
+            D3D_OK
+        );
+        assert_eq!(stream(&mut e), (0, 0, 0));
+        // The stream's buffer was released by the draws: only the creator's reference is left.
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 0);
     }
 }
