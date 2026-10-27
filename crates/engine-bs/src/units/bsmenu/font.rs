@@ -4795,6 +4795,102 @@ pub fn dynamic_initializer_for_font_manager_s_font_1_filename(e: &mut Engine) {
     );
 }
 
+// Translated from 00fb3890 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3890 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e01a, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_2_Filename_` (engine map): the setting at
+/// `011f3420` named `"sFontFile_2:Fonts"` (`010952e4`) with the value
+/// `"Data\Fonts\Monofonto_Large.fnt"` (`010952c4`), added to the settings collection;
+/// its destructor `00fda440` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_2_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c,
+        0x0109_52e4,
+        0x0109_52c4,
+        0x00fd_a440,
+    );
+}
+
+// Translated from 00fb3930 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3930 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e04a, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_3_Filename_` (engine map): the setting at
+/// `011f342c` named `"sFontFile_3:Fonts"` (`01095320`) with the value
+/// `"Data\Fonts\Glow_Monofonto_Medium.fnt"` (`010952f8`), added to the settings collection;
+/// its destructor `00fda4c0` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_3_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 2,
+        0x0109_5320,
+        0x0109_52f8,
+        0x00fd_a4c0,
+    );
+}
+
+// Translated from 00fb39d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb39d0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e07a, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_4_Filename_` (engine map): the setting at
+/// `011f3438` named `"sFontFile_4:Fonts"` (`01095364`) with the value
+/// `"Data\Fonts\Monofonto_VeryLarge02_Dialogs2.fnt"` (`01095334`), added to the settings collection;
+/// its destructor `00fda540` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_4_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 3,
+        0x0109_5364,
+        0x0109_5334,
+        0x00fd_a540,
+    );
+}
+
+// Translated from 00fb3a70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3a70 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e0aa, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_5_Filename_` (engine map): the setting at
+/// `011f3444` named `"sFontFile_5:Fonts"` (`010953a4`) with the value
+/// `"Data\Fonts\Fixedsys_Comp_uniform_width.fnt"` (`01095378`), added to the settings collection;
+/// its destructor `00fda5c0` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_5_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 4,
+        0x0109_53a4,
+        0x0109_5378,
+        0x00fd_a5c0,
+    );
+}
+
+// Translated from 00fb3b10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3b10 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e0da, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_6_Filename_` (engine map): the setting at
+/// `011f3450` named `"sFontFile_6:Fonts"` (`010953e4`) with the value
+/// `"Data\Fonts\Glow_Monofonto_VL_dialogs.fnt"` (`010953b8`), added to the settings collection;
+/// its destructor `00fda640` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_6_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 5,
+        0x0109_53e4,
+        0x0109_53b8,
+        0x00fd_a640,
+    );
+}
+
+// Translated from 00fb3bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3bb0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e10a, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_7_Filename_` (engine map): the setting at
+/// `011f345c` named `"sFontFile_7:Fonts"` (`01095420`) with the value
+/// `"Data\Fonts\Baked-in_Monofonto_Large.fnt"` (`010953f8`), added to the settings collection;
+/// its destructor `00fda6c0` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_7_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 6,
+        0x0109_5420,
+        0x0109_53f8,
+        0x00fd_a6c0,
+    );
+}
+
 // Translated from 00fb3c50 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00fb3c50 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e13a, state variable) is not translated
 /// `_dynamic_initializer_for_FontManager::sFont_8_Filename_` (engine map): the setting at
@@ -4893,6 +4989,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00fb37f0,
             dynamic_initializer_for_font_manager_s_font_1_filename()
+        ),
+        entry!(
+            0x00fb3890,
+            dynamic_initializer_for_font_manager_s_font_2_filename()
+        ),
+        entry!(
+            0x00fb3930,
+            dynamic_initializer_for_font_manager_s_font_3_filename()
+        ),
+        entry!(
+            0x00fb39d0,
+            dynamic_initializer_for_font_manager_s_font_4_filename()
+        ),
+        entry!(
+            0x00fb3a70,
+            dynamic_initializer_for_font_manager_s_font_5_filename()
+        ),
+        entry!(
+            0x00fb3b10,
+            dynamic_initializer_for_font_manager_s_font_6_filename()
+        ),
+        entry!(
+            0x00fb3bb0,
+            dynamic_initializer_for_font_manager_s_font_7_filename()
         ),
         entry!(
             0x00fb3c50,
@@ -7269,6 +7389,72 @@ mod b004_tests {
     }
 
     #[test]
+    fn font_2_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3890,
+            0x011f_3420,
+            0x0109_52e4,
+            0x0109_52c4,
+            0x00fd_a440,
+        );
+    }
+
+    #[test]
+    fn font_3_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3930,
+            0x011f_342c,
+            0x0109_5320,
+            0x0109_52f8,
+            0x00fd_a4c0,
+        );
+    }
+
+    #[test]
+    fn font_4_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb39d0,
+            0x011f_3438,
+            0x0109_5364,
+            0x0109_5334,
+            0x00fd_a540,
+        );
+    }
+
+    #[test]
+    fn font_5_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3a70,
+            0x011f_3444,
+            0x0109_53a4,
+            0x0109_5378,
+            0x00fd_a5c0,
+        );
+    }
+
+    #[test]
+    fn font_6_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3b10,
+            0x011f_3450,
+            0x0109_53e4,
+            0x0109_53b8,
+            0x00fd_a640,
+        );
+    }
+
+    #[test]
+    fn font_7_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3bb0,
+            0x011f_345c,
+            0x0109_5420,
+            0x0109_53f8,
+            0x00fd_a6c0,
+        );
+    }
+
+    #[test]
     fn font_8_filename_initializer_builds_and_registers_the_setting() {
         run_initializer(
             0x00fb3c50,
@@ -7277,6 +7463,118 @@ mod b004_tests {
             0x0109_5434,
             0x00fd_a740,
         );
+    }
+
+    /// All eight `sFontFile_N:Fonts` initializers (`00fb37f0` + 0xA0 * n) are registered,
+    /// so the start-up table runs each one and `FontManager::FontManager` finds every
+    /// font's file name (fonts 2 to 7 were missing: font 7's data stayed null).
+    #[test]
+    fn all_eight_font_filename_initializers_are_registered() {
+        let table = funcs();
+        for n in 0..8u32 {
+            let addr = 0x00fb_37f0 + 0xa0 * n;
+            assert!(
+                table.iter().any(|(a, _)| *a == addr),
+                "initializer {addr:08x} missing"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod n083_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn append_slot_grows_a_full_array() {
+        let mut e = Engine::new();
+        let a = e.new_object::<BSSimpleArray>();
+        e.put_vtable(0x0300_0000, &[0, 0x0300_1004]);
+        e.mem.set_u32(a.addr(), 0x0300_0000);
+        e.register(0x0300_1004, |_, _| Ret {
+            eax: 0x0500_0000,
+            ..Ret::default()
+        });
+        e.register(ITEM_ARRAY_CHANGE_BUFFER_00A1C340, |_, _| Ret::default());
+        // Empty: four items allocated.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0);
+        assert_eq!(calls_to(&e, 0x0300_1004), [vec![a.addr(), 4]]);
+        assert_eq!(e.get(a, BSSimpleArray::pBuffer), 0x0500_0000);
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 4);
+        assert_eq!(e.get(a, BSSimpleArray::iSize), 1);
+        // Room left: only the size grows.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 1);
+        assert!(calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340).is_empty());
+        // Full at 0x400: doubles.
+        e.set(a, BSSimpleArray::iSize, 0x400);
+        e.set(a, BSSimpleArray::iReservedSize, 0x400);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0x400);
+        assert_eq!(
+            calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340),
+            [vec![a.addr(), 0x800, 0x400]]
+        );
+        assert_eq!(e.get(a, BSSimpleArray::iReservedSize), 0x800);
+        // Full above 0x400: grows by 0x400.
+        e.set(a, BSSimpleArray::iSize, 0x800);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a1_c130, &args![a]).u32(), 0x800);
+        assert_eq!(
+            calls_to(&e, ITEM_ARRAY_CHANGE_BUFFER_00A1C340),
+            [vec![a.addr(), 0xc00, 0x800]]
+        );
+        assert_eq!(e.get(a, BSSimpleArray::iSize), 0x801);
+    }
+
+    #[test]
+    fn item_construction_clears_the_four_floats() {
+        let mut e = Engine::new();
+        let items = e.mem.alloc(0x60);
+        for off in (0..0x60).step_by(4) {
+            e.mem.set_u32(items + off, 0xffff_ffff);
+        }
+        e.call(0x00a1_c1f0, &args![0u32, items, 2u32]);
+        for item in [items, items + 0x20] {
+            for off in (0..0x10).step_by(4) {
+                assert_eq!(e.mem.u32(item + off), 0xffff_ffff);
+            }
+            for off in (0x10..0x20).step_by(4) {
+                assert_eq!(e.mem.u32(item + off), 0);
+            }
+        }
+        assert_eq!(e.mem.u32(items + 0x50), 0xffff_ffff);
+    }
+
+    #[test]
+    fn add_node_head_links_the_node_in_front() {
+        let mut e = Engine::new();
+        let list = e.new_object::<NiTPointerList>();
+        let first = e.new_object::<NiTListItem>();
+        let second = e.new_object::<NiTListItem>();
+        e.set(first, NiTListItem::m_pkPrev, 0x55);
+        e.call(0x00a1_c270, &args![list, first]);
+        assert_eq!(e.get(list, NiTPointerList::m_pkHead), first.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_pkTail), first.addr());
+        assert_eq!(e.get(first, NiTListItem::m_pkPrev), 0);
+        assert_eq!(e.get(first, NiTListItem::m_pkNext), 0);
+        e.call(0x00a1_c270, &args![list, second]);
+        assert_eq!(e.get(list, NiTPointerList::m_pkHead), second.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_pkTail), first.addr());
+        assert_eq!(e.get(second, NiTListItem::m_pkNext), first.addr());
+        assert_eq!(e.get(first, NiTListItem::m_pkPrev), second.addr());
+        assert_eq!(e.get(list, NiTPointerList::m_uiCount), 2);
     }
 }
 

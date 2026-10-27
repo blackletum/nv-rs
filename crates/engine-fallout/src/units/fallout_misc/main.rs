@@ -9240,3 +9240,12 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod renderer_text_tests {
+    #[test]
+    fn fn_0086d580_answers_the_error_text_buffer() {
+        let mut e = crate::Engine::new();
+        assert_eq!(e.call(0x0086_d580, &[]).u32(), 0x011c_6fc8);
+    }
+}
