@@ -1933,10 +1933,10 @@ pub fn fn_0096a510(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 0096a540 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Clears the byte at +8 and passes `item` to `006b8310` on the sub-object at
-/// +0xc (it frees `item` through `00401030`).
+/// Clears the item's byte at +8 (`0096a547`: `MOV EAX,[EBP+8]`; `MOV byte ptr [EAX+8],0`) and
+/// passes `item` to `006b8310` on the sub-object at +0xc (it frees `item` through `00401030`).
 pub fn fn_0096a540(e: &mut Engine, this: Ptr, item: u32) {
-    e.mem.set_u8(this.addr() + 8, 0);
+    e.mem.set_u8(item.wrapping_add(8), 0);
     e.call(SUB_OBJECT_RELEASE, &args![this.addr() + 0xc, item]);
 }
 
@@ -4058,17 +4058,17 @@ mod tests {
     }
 
     #[test]
-    fn the_sub_object_release_clears_the_byte_and_passes_the_item() {
+    fn the_sub_object_release_clears_the_item_byte_and_passes_the_item() {
         let mut e = engine();
         let block = e.mem.alloc(0x20);
-        e.mem.set_u8(block + 8, 1);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(block + 8, 0x30b9_dad0);
+        e.mem.set_u8(item + 8, 1);
         e.call_log = Some(vec![]);
-        e.call(0x0096a540, &args![block, 0x1234u32]);
-        assert_eq!(e.mem.u8(block + 8), 0);
-        assert_eq!(
-            calls(&e, SUB_OBJECT_RELEASE),
-            vec![vec![block + 0xc, 0x1234]]
-        );
+        e.call(0x0096a540, &args![block, item]);
+        assert_eq!(e.mem.u8(item + 8), 0);
+        assert_eq!(e.mem.u32(block + 8), 0x30b9_dad0, "the map's own word is left");
+        assert_eq!(calls(&e, SUB_OBJECT_RELEASE), vec![vec![block + 0xc, item]]);
     }
 
     #[test]
