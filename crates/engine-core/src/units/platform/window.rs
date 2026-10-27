@@ -205,6 +205,12 @@ pub fn steam_user(_e: &mut Engine) -> u32 {
     0
 }
 
+// Platform: replaces STEAM_API.DLL SteamApps (import)
+/// `SteamApps()`: null, as measured ([`steam_user_stats`]).
+pub fn steam_apps(_e: &mut Engine) -> u32 {
+    0
+}
+
 // Platform: replaces KERNEL32.DLL IsDebuggerPresent (import)
 /// `IsDebuggerPresent()`: no debugger.
 pub fn is_debugger_present(_e: &mut Engine) -> u32 {
@@ -784,5 +790,30 @@ mod tests {
         let text = e.mem.alloc(16);
         e.mem.set_cstr(text, b"no");
         message_box_a(&mut e, 0, Ptr::new(text), Ptr::new(text), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_steam {
+    use super::*;
+
+    /// The Steam imports answer the no-client state, registered under their names.
+    #[test]
+    fn the_steam_accessors_answer_null_and_steam_is_not_running() {
+        let mut e = Engine::new();
+        for name in [
+            "SteamAPI_IsSteamRunning",
+            "SteamUserStats",
+            "SteamFriends",
+            "SteamUtils",
+            "SteamUser",
+            "SteamApps",
+        ] {
+            let (_, _, f) = super::super::imports()
+                .into_iter()
+                .find(|(dll, n, _)| *dll == "steam_api.dll" && *n == name)
+                .unwrap_or_else(|| panic!("{name} is not registered"));
+            assert_eq!(f(&mut e, &[]).eax, 0, "{name}");
+        }
     }
 }

@@ -2381,6 +2381,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, window::steam_user() -> u32).1,
         ),
         (
+            "steam_api.dll",
+            "SteamApps",
+            entry!(0, window::steam_apps() -> u32).1,
+        ),
+        (
             k,
             "GetModuleFileNameA",
             entry!(0, process::get_module_file_name_a(u32, Ptr, u32) -> u32).1,
