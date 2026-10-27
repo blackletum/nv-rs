@@ -2168,6 +2168,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (
             "d3dx9_38.dll",
+            "D3DXMatrixRotationYawPitchRoll",
+            entry!(0, d3dx::matrix_rotation_yaw_pitch_roll(Ptr, u32, u32, u32) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
             "D3DXMatrixTranspose",
             entry!(0, d3dx::matrix_transpose(Ptr, Ptr) -> u32).1,
         ),

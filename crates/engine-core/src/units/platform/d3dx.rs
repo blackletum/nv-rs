@@ -18,6 +18,10 @@
 //!   (slot `00fdf3ec`): written ahead, from the same measurement. `D3DXVec3TransformCoord` is
 //!   not: its division is not a plain divide (results 1-2 ulp below `x / w`, also for `w` = 2: a
 //!   reciprocal estimate and refinement, CPU-specific), not modelled yet.
+//! - `D3DXMatrixRotationYawPitchRoll` (slot `00fdf40c`, thunk `00ee6e04`, called from `00bb2fc0`):
+//!   the DLL's SSE2 quaternion (its own packed sine and cosine) and x87 matrix, followed
+//!   instruction by instruction from a private analysis of the player's DLL (no bytes copied);
+//!   52,000 measured calls match.
 
 use crate::{Engine, Ptr};
 
@@ -51,6 +55,10 @@ mod single {
 
     pub fn add(x: u32, y: u32) -> u32 {
         op(x, y, |a, b| a + b)
+    }
+
+    pub fn sub(x: u32, y: u32) -> u32 {
+        op(x, y, |a, b| a - b)
     }
 }
 
@@ -193,6 +201,148 @@ pub fn matrix_transpose(e: &mut Engine, out: Ptr, m: Ptr) -> u32 {
             *w
         };
         e.mem.set_u32(out.addr().wrapping_add(4 * n as u32), quiet);
+    }
+    out.addr()
+}
+
+/// The packed constants of the DLL's SSE2 sine and cosine (the same word in all four lanes):
+/// 2/pi, the three-part pi/2 (1.5703125, 4.837513e-4, 7.5495336e-8, 2.563344e-12), 2^23, the
+/// sine's coefficients (-1.9515282e-4, 8.33216e-3, -0.16666655, 1) and the cosine's (2.4433157e-5,
+/// -1.3887316e-3, 0.041666646, -0.5, 1).
+const TWO_OVER_PI: u32 = 0x3f22_f983;
+const PI_OVER_2: [u32; 4] = [0x3fc9_0000, 0x39fd_a000, 0x33a2_2000, 0x2c34_611a];
+const TWO_TO_23: u32 = 0x4b00_0000;
+const SIN_COEFFICIENTS: [u32; 4] = [0xb94c_a1f0, 0x3c08_839d, 0xbe2a_aaa3, 0x3f80_0000];
+const COS_COEFFICIENTS: [u32; 5] = [
+    0x37cc_f5ce,
+    0xbab6_061a,
+    0x3d2a_aaa5,
+    0xbf00_0000,
+    0x3f80_0000,
+];
+
+/// One lane of the DLL's SSE2 sine and cosine of a float (`sin`, `cos` as words), the order of
+/// its packed instructions followed one by one: `|x| * 2/pi + 2^23` keeps the quadrant `n` in
+/// its low mantissa bits, `k = that - 2^23`, the reduced `r = |x| - k*c1 - k*c2 - k*c3 - k*c4`,
+/// `z = r*r`; the sine polynomial `((((s1*z + s2)*z + s3)*z + s4) * r` and the cosine
+/// `(((c1*z + c2)*z + c3)*z + c4)*z + c5`; an odd quadrant swaps them; the sine's sign is bit 1
+/// of `n - (n & 1)` with the input's sign, the cosine's bit 1 of `n + (n & 1)`. Each operation is
+/// the SSE one (first operand's NaN first, the default NaN for an invalid one).
+pub fn sse2_sin_cos(x: u32) -> (u32, u32) {
+    let abs = x & 0x7fff_ffff;
+    let sign = x & 0x8000_0000;
+    let biased = single::add(single::mul(abs, TWO_OVER_PI), TWO_TO_23);
+    let k = single::sub(biased, TWO_TO_23);
+    let mut r = abs;
+    for c in PI_OVER_2 {
+        r = single::sub(r, single::mul(c, k));
+    }
+    let z = single::mul(r, r);
+    let n = biased & 0x007f_ffff;
+    let odd = n & 1;
+    let sin_sign = ((n.wrapping_sub(odd) & 2) << 30) ^ sign;
+    let cos_sign = (n.wrapping_add(odd) & 2) << 30;
+    let swap = odd != 0;
+    let mut s = SIN_COEFFICIENTS[0];
+    let mut c = COS_COEFFICIENTS[0];
+    for i in 1..4 {
+        s = single::add(single::mul(s, z), SIN_COEFFICIENTS[i]);
+        c = single::add(single::mul(c, z), COS_COEFFICIENTS[i]);
+    }
+    s = single::mul(s, r);
+    c = single::add(single::mul(c, z), COS_COEFFICIENTS[4]);
+    if swap {
+        (c ^ sin_sign, s ^ cos_sign)
+    } else {
+        (s ^ sin_sign, c ^ cos_sign)
+    }
+}
+
+/// `D3DXQuaternionRotationYawPitchRoll`'s SSE2 version in the DLL (the one its start-up picks
+/// on a processor with SSE2 and without 3DNow!): the half angles (`0.5 * angle`), their sines
+/// and cosines ([`sse2_sin_cos`]), then `x = sy*sr*cp + cy*cr*sp`, `y = -(cy*sr*sp) + sy*cr*cp`,
+/// `z = -(sy*cr*sp) + cy*sr*cp`, `w = sy*sr*sp + cy*cr*cp`, each product left to right as the
+/// packed multiplies pair the lanes and the negation a sign flip.
+pub fn quaternion_rotation_yaw_pitch_roll(yaw: u32, pitch: u32, roll: u32) -> [u32; 4] {
+    let half = |a: u32| single::mul(0x3f00_0000, a);
+    let (sr, cr) = sse2_sin_cos(half(roll));
+    let (sp, cp) = sse2_sin_cos(half(pitch));
+    let (sy, cy) = sse2_sin_cos(half(yaw));
+    let m = single::mul;
+    let first = [
+        m(m(cy, cr), sp),
+        m(m(sy, cr), cp),
+        m(m(cy, sr), cp),
+        m(m(cy, cr), cp),
+    ];
+    let second = [
+        m(m(sy, sr), cp),
+        m(m(cy, sr), sp) ^ 0x8000_0000,
+        m(m(sy, cr), sp) ^ 0x8000_0000,
+        m(m(sy, sr), sp),
+    ];
+    std::array::from_fn(|i| single::add(second[i], first[i]))
+}
+
+/// `D3DXMatrixRotationQuaternion`'s x87 version in the DLL (its only one), instruction by
+/// instruction at the running thread's precision ([`crate::x87`]): the doubled components and
+/// the nine products stored as floats, then `1 - yy - zz`, `xy + wz`, `xz - wy`, `xy - wz`,
+/// `1 - xx - zz`, `yz + wx`, `xz + wy`, `yz - wx`, `1 - xx - yy` and the zero and one words.
+pub fn matrix_rotation_quaternion(q: &[u32; 4]) -> [u32; 16] {
+    use crate::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_store32, x87_sub};
+    let [x, y, z, w] = q.map(x87_load32);
+    let doubled = |v: f64| x87_store32(x87_add(v, v));
+    let (x2, y2, z2) = (doubled(x), doubled(y), doubled(z));
+    let wx = x87_store32(x87_mul(w, x87_m32(x2)));
+    let wy = x87_store32(x87_mul(w, x87_m32(y2)));
+    let z2_value = x87_load32(z2);
+    let wz = x87_store32(x87_mul(w, z2_value));
+    let xx = x87_store32(x87_mul(x, x87_m32(x2)));
+    let xy = x87_store32(x87_mul(x, x87_m32(y2)));
+    let xz = x87_store32(x87_mul(x, z2_value));
+    let yy = x87_store32(x87_mul(y, x87_m32(y2)));
+    let yz = x87_store32(x87_mul(y, z2_value));
+    let zz = x87_store32(x87_mul(z2_value, x87_m32(q[2])));
+    let one = 1.0f64;
+    let load = x87_load32;
+    let mut out = [0u32; 16];
+    out[0] = x87_store32(x87_sub(x87_sub(one, load(yy)), load(zz)));
+    out[1] = x87_store32(x87_add(load(xy), x87_m32(wz)));
+    out[2] = x87_store32(x87_sub(load(xz), x87_m32(wy)));
+    out[4] = x87_store32(x87_sub(load(xy), x87_m32(wz)));
+    let one_less_xx = x87_sub(one, load(xx));
+    out[5] = x87_store32(x87_sub(one_less_xx, load(zz)));
+    out[6] = x87_store32(x87_add(load(yz), x87_m32(wx)));
+    out[8] = x87_store32(x87_add(load(xz), x87_m32(wy)));
+    out[9] = x87_store32(x87_sub(load(yz), x87_m32(wx)));
+    out[10] = x87_store32(x87_sub(one_less_xx, load(yy)));
+    out[15] = 0x3f80_0000;
+    out
+}
+
+// Platform: replaces d3dx9_38.dll D3DXMatrixRotationYawPitchRoll (import)
+/// `D3DXMatrixRotationYawPitchRoll(out, yaw, pitch, roll)` (stdcall, the angles as floats): as
+/// the DLL's start-up leaves it on a processor with SSE2 and without 3DNow! (read from the
+/// player's d3dx9_38.dll in a private analysis): the angles copied through the x87 (a
+/// signalling NaN comes out quiet), [`quaternion_rotation_yaw_pitch_roll`]'s SSE2 version, then
+/// [`matrix_rotation_quaternion`]. Matches the 2000 measured calls (both control words,
+/// `measure/d3dx-functions-2026-10-22.tsv`) bit for bit; answers `out`. A processor with
+/// 3DNow! (the DLL takes another version there) is not modelled.
+pub fn matrix_rotation_yaw_pitch_roll(
+    e: &mut Engine,
+    out: Ptr,
+    yaw: u32,
+    pitch: u32,
+    roll: u32,
+) -> u32 {
+    let q = quaternion_rotation_yaw_pitch_roll(
+        crate::x87::x87_quiet_bits(yaw),
+        crate::x87::x87_quiet_bits(pitch),
+        crate::x87::x87_quiet_bits(roll),
+    );
+    let m = matrix_rotation_quaternion(&q);
+    for (i, w) in m.iter().enumerate() {
+        e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), *w);
     }
     out.addr()
 }
@@ -1116,5 +1266,71 @@ mod tests {
             .flatten()
             .any(|d| d.file_name().to_string_lossy().starts_with("missing-")));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests_yaw_pitch_roll {
+    use super::*;
+
+    /// Calls of the player's d3dx9_38.dll (TEST DATA from `scripts/d3dx-measure functions`,
+    /// 2026-10-22 and 2026-10-27; all 52,000 measured calls match): control word, yaw, pitch,
+    /// roll, the 16 words answered.
+    const MEASURED: &[(u16, [u32; 3], &str)] = &[
+        (0x027f, [0x3502_59ac, 0xbf80_0000, 0xaa41_20f1], "3f800000 a9e00000 b50259a9 00000000 b4db5f32 3f0a5140 bf576aa5 00000000 348cdb6b 3f576aa5 3f0a5140 00000000 00000000 00000000 00000000 3f800000"),
+        (0x007f, [0xb19a_5166, 0xbf80_0000, 0x2e3d_00a7], "3f800000 2dcc3cc0 31991352 00000000 318060a4 3f0a5140 bf576aa5 00000000 b126c1b7 3f576aa5 3f0a5140 00000000 00000000 00000000 00000000 3f800000"),
+        // At 24-bit precision the diagonal's two subtractions round each (53-bit would give
+        // 3eed1081 first).
+        (0x007f, [0xbf80_0000, 0xb8a0_cc29, 0x3f0a_a4ca], "3eed1080 3f03f704 3f389596 00000000 be8e92d6 3f5b5d97 bede1b83 00000000 bf576aa4 38a0d000 3f0a5140 00000000 00000000 00000000 00000000 3f800000"),
+        (0x027f, [0x7fc1_2345, 0x4080_0000, 0x03d3_e5e5], "7fc12345 7fc12345 7fc12345 00000000 7fc12345 7fc12345 7fc12345 00000000 7fc12345 7fc12345 7fc12345 00000000 00000000 00000000 00000000 3f800000"),
+        // A signalling NaN comes out quiet; an infinity gives the positive default NaN.
+        (0x027f, [0x7f80_0001, 0x3eaa_aaab, 0x3400_0000], "7fc00001 7fc00001 7fc00001 00000000 7fc00001 7fc00001 7fc00001 00000000 7fc00001 7fc00001 7fc00001 00000000 00000000 00000000 00000000 3f800000"),
+        (0x027f, [0x7f80_0000, 0x3eaa_aaab, 0x8080_0000], "7fc00000 7fc00000 7fc00000 00000000 7fc00000 7fc00000 7fc00000 00000000 7fc00000 7fc00000 7fc00000 00000000 00000000 00000000 00000000 3f800000"),
+        // Angles too big for the reduction: NaNs of both signs.
+        (0x007f, [0x5f80_0000, 0xff80_0000, 0xdc65_9399], "ffc00000 7fc00000 7fc00000 00000000 7fc00000 ffc00000 7fc00000 00000000 7fc00000 7fc00000 ffc00000 00000000 00000000 00000000 00000000 3f800000"),
+        (0x007f, [0, 0, 0], "3f800000 00000000 00000000 00000000 00000000 3f800000 00000000 00000000 00000000 00000000 3f800000 00000000 00000000 00000000 00000000 3f800000"),
+    ];
+
+    #[test]
+    fn rotation_yaw_pitch_roll_matches_the_dll() {
+        for (cw, [yaw, pitch, roll], want) in MEASURED {
+            let mut e = Engine::new();
+            crate::units::crt::set_x87_control_word(&mut e, *cw);
+            let out = e.mem.alloc(64);
+            assert_eq!(
+                matrix_rotation_yaw_pitch_roll(&mut e, Ptr::new(out), *yaw, *pitch, *roll),
+                out
+            );
+            let got: Vec<String> = (0..16)
+                .map(|i| format!("{:08x}", e.mem.u32(out + 4 * i)))
+                .collect();
+            assert_eq!(
+                got.join(" "),
+                *want,
+                "{yaw:08x} {pitch:08x} {roll:08x} at {cw:04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn sine_and_cosine_follow_the_quadrants() {
+        let f = f32::from_bits;
+        for (x, s, c) in [
+            (0.0f32, 0.0f32, 1.0f32),
+            (1.5707964, 1.0, 0.0),
+            (3.1415927, 0.0, -1.0),
+            (-1.5707964, -1.0, 0.0),
+        ] {
+            let (sin, cos) = sse2_sin_cos(x.to_bits());
+            assert!(
+                (f(sin) - s).abs() < 1e-6 && (f(cos) - c).abs() < 1e-6,
+                "{x}"
+            );
+        }
+        // The import is registered under its name.
+        assert!(crate::units::platform::imports()
+            .iter()
+            .any(|(dll, name, _)| *dll == "d3dx9_38.dll"
+                && *name == "D3DXMatrixRotationYawPitchRoll"));
     }
 }

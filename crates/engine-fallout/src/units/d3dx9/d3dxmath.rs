@@ -120,9 +120,23 @@ pub fn fn_00ee6dfe(e: &mut Engine, word_0: Ptr, word_1: Ptr, word_2: Ptr) -> Ptr
         .ptr()
 }
 
+/// The import slot `00ee6e04` jumps through.
+const IMPORT_SLOT_00EE6E04: u32 = 0x00fd_f40c;
+
+// Translated from 00ee6e04 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Import thunk `JMP dword ptr [0x00fdf40c]` (the exe's import table names the slot
+/// `d3dx9_38.dll` `D3DXMatrixRotationYawPitchRoll`). stdcall: the 4 stack words (out, then the
+/// yaw, pitch and roll floats) go unchanged to the import and its result comes back. Argument
+/// count from the caller at 00bb3034 (three float stores and a push).
+pub fn fn_00ee6e04(e: &mut Engine, word_0: Ptr, word_1: u32, word_2: u32, word_3: u32) -> Ptr {
+    e.call(IMPORT_SLOT_00EE6E04, &args![word_0, word_1, word_2, word_3])
+        .ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ee_6e04, fn_00ee6e04(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00ee_6dfe, fn_00ee6dfe(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6dd4, fn_00ee6dd4(Ptr, Ptr) -> Ptr),
         entry!(0x00ee_6dda, fn_00ee6dda(Ptr, u32, Ptr) -> Ptr),
@@ -156,6 +170,15 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, words);
         assert_eq!(result, 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00ee6e04() {
+        import(
+            0x00ee_6e04,
+            IMPORT_SLOT_00EE6E04,
+            &[0x1001, 0x3f80_0000, 0xbf80_0000, 0x7fc0_0000],
+        );
     }
 
     #[test]
