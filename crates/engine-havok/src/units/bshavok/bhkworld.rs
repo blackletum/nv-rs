@@ -1436,7 +1436,11 @@ pub fn bhk_tasklet_manager_callback_bhk_thread_state_create_thread_memory(
         let memory_system = e.call(0x00cb_bfc0, &[]).u32();
         // 00c680cb: the third word is a by-value flags struct (PUSH ECX; MOV [ESP],1), pushed
         // first: threadInit's flags = 1.
-        e.vcall(memory_system, 0xc, &args![element + 4, 0x010c_3c2cu32, 1u32]);
+        e.vcall(
+            memory_system,
+            0xc,
+            &args![element + 4, 0x010c_3c2cu32, 1u32],
+        );
         e.call(0x00cb_b930, &args![element + 4]);
         let allocator = e.mem.u32(element + 0x14);
         let block = e.vcall(allocator, 4, &args![0x5000u32]).u32();
