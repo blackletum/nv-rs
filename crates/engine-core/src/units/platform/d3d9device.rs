@@ -16,6 +16,8 @@
 //! depth-stencil slots, the viewport and `CreateTexture`; a surface's reference counting,
 //! `GetDevice`, `GetType`, `GetContainer`, `GetDesc` and `LockRect`/`UnlockRect`; a texture's
 //! reference counting, priority, LOD, levels, their descriptions, surfaces and locks.
+//! Measured with the retail runtime (`scripts/d3d9-capture device fixed`): `SetMaterial`, `SetLight`,
+//! `LightEnable`, `SetSoftwareVertexProcessing`, `UpdateTexture` and `StretchRect`.
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
 use crate::{Engine, Ptr};
@@ -304,6 +306,12 @@ struct Device {
     scissor: [u32; 4],
     clip_planes: HashMap<u32, [u32; 4]>,
     in_scene: bool,
+    /// The fixed-function material (`D3DMATERIAL9`, 17 words), the lights by index
+    /// (`D3DLIGHT9`, 26 words), the enabled ones, and the software vertex processing switch.
+    material: Option<[u32; 17]>,
+    lights: HashMap<u32, [u32; 26]>,
+    enabled_lights: std::collections::BTreeSet<u32>,
+    software_vertex_processing: bool,
 }
 
 /// A surface of this layer.
@@ -349,7 +357,7 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 fn register_code(e: &mut Engine) {
-    let device: [(u32, crate::AbiFn); 36] = [
+    let device: [(u32, crate::AbiFn); 42] = [
         (
             0,
             crate::entry!(0, device_query_interface(Ptr, Ptr, Ptr) -> u32).1,
@@ -446,6 +454,21 @@ fn register_code(e: &mut Engine) {
             crate::entry!(0, set_sampler_state(Ptr, u32, u32, u32) -> u32).1,
         ),
         (48, crate::entry!(0, get_viewport(Ptr, Ptr) -> u32).1),
+        (49, crate::entry!(0, set_material(Ptr, Ptr) -> u32).1),
+        (51, crate::entry!(0, set_light(Ptr, u32, Ptr) -> u32).1),
+        (53, crate::entry!(0, light_enable(Ptr, u32, u32) -> u32).1),
+        (
+            77,
+            crate::entry!(0, set_software_vertex_processing(Ptr, u32) -> u32).1,
+        ),
+        (
+            31,
+            crate::entry!(0, update_texture(Ptr, u32, u32) -> u32).1,
+        ),
+        (
+            34,
+            crate::entry!(0, stretch_rect(Ptr, u32, u32, u32, u32, u32) -> u32).1,
+        ),
     ];
     for (slot, f) in device {
         e.register(DEVICE_CODE + 4 * slot, f);
@@ -851,6 +874,10 @@ pub fn create_device(
         scissor: [0, 0, width, height],
         clip_planes: HashMap::new(),
         in_scene: false,
+        material: None,
+        lights: HashMap::new(),
+        enabled_lights: std::collections::BTreeSet::new(),
+        software_vertex_processing: false,
     };
     e.kernel
         .graphics
@@ -2368,6 +2395,168 @@ pub fn device_present_parameters(e: &Engine, device: u32) -> Option<Vec<u8>> {
         .map(|d| d.present.clone())
 }
 
+// The fixed-function and copy calls below answer as the retail runtime did on this machine
+// (2026-10-27, `scripts/d3d9-capture device fixed`, windowed HAL devices with hardware and with
+// mixed vertex processing; cases that faulted the runtime were run one per process). Nothing is
+// drawn yet: the states are kept, the copies only answered.
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetMaterial (vtable +0xC4)
+/// `SetMaterial(material)`: keeps the 17 words of the `D3DMATERIAL9` and answers `D3D_OK` (the
+/// runtime checks nothing in it). A null material faulted the runtime: not provided.
+fn set_material(e: &mut Engine, this: Ptr, material: Ptr) -> u32 {
+    if material.is_null() {
+        panic!("IDirect3DDevice9::SetMaterial(NULL) is not provided (the runtime faulted)");
+    }
+    let words: [u32; 17] = std::array::from_fn(|i| e.mem.u32(material.addr() + 4 * i as u32));
+    device(e, this).material = Some(words);
+    D3D_OK
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetLight (vtable +0xCC)
+/// `SetLight(index, light)`: keeps the 26 words of the `D3DLIGHT9` for the index and answers
+/// `D3D_OK` whatever they hold: the runtime took types 0 and 4, zero attenuation, negative or
+/// zero ranges, a zero direction, theta above phi, phi above pi and NaN colours alike. A null
+/// light faulted the runtime: not provided.
+fn set_light(e: &mut Engine, this: Ptr, index: u32, light: Ptr) -> u32 {
+    if light.is_null() {
+        panic!("IDirect3DDevice9::SetLight({index}, NULL) is not provided (the runtime faulted)");
+    }
+    let words: [u32; 26] = std::array::from_fn(|i| e.mem.u32(light.addr() + 4 * i as u32));
+    device(e, this).lights.insert(index, words);
+    D3D_OK
+}
+
+/// The light `LightEnable` makes for an index never set (read back with `GetLight`): a
+/// directional light (type 3) with diffuse (1, 1, 1, 0) and direction (0, 0, 1), everything
+/// else 0.
+fn default_light() -> [u32; 26] {
+    let mut l = [0u32; 26];
+    l[0] = 3;
+    l[1] = 1f32.to_bits();
+    l[2] = 1f32.to_bits();
+    l[3] = 1f32.to_bits();
+    l[18] = 1f32.to_bits();
+    l
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::LightEnable (vtable +0xD4)
+/// `LightEnable(index, enable)`: enables (any nonzero value) or disables the light and answers
+/// `D3D_OK`; an index never set first gets [`default_light`]. The runtime set no limit (ten more
+/// lights than any caps count were taken).
+fn light_enable(e: &mut Engine, this: Ptr, index: u32, enable: u32) -> u32 {
+    let d = device(e, this);
+    d.lights.entry(index).or_insert_with(default_light);
+    if enable != 0 {
+        d.enabled_lights.insert(index);
+    } else {
+        d.enabled_lights.remove(&index);
+    }
+    D3D_OK
+}
+
+/// `D3DCREATE_MIXED_VERTEXPROCESSING`.
+const D3DCREATE_MIXED_VERTEXPROCESSING: u32 = 0x80;
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::SetSoftwareVertexProcessing (vtable +0x134)
+/// `SetSoftwareVertexProcessing(software)`: on a device with mixed vertex processing any value
+/// is taken (nonzero switches to software) and `D3D_OK` answered; on one with hardware vertex
+/// processing FALSE answers `D3D_OK` and anything else `D3DERR_INVALIDCALL` (measured with 1
+/// and 2).
+fn set_software_vertex_processing(e: &mut Engine, this: Ptr, software: u32) -> u32 {
+    let d = device(e, this);
+    if d.creation[3] & D3DCREATE_MIXED_VERTEXPROCESSING != 0 {
+        d.software_vertex_processing = software != 0;
+        return D3D_OK;
+    }
+    if software == 0 {
+        D3D_OK
+    } else {
+        D3DERR_INVALIDCALL
+    }
+}
+
+/// `D3DPOOL_SYSTEMMEM`.
+const D3DPOOL_SYSTEMMEM: u32 = 2;
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::UpdateTexture (vtable +0x7C)
+/// `UpdateTexture(source, destination)` for textures of this layer: a system-memory source and a
+/// default-pool destination answer `D3D_OK` (the runtime took mismatched sizes, formats and
+/// level counts there, in a scene and outside one); any other pair of pools answers
+/// `D3DERR_INVALIDCALL`. Nothing is drawn, so no level is copied (a default-pool texture is not
+/// read back here). A null source faulted the runtime: not provided; so is a destination that
+/// is not a texture of this layer.
+fn update_texture(e: &mut Engine, _this: Ptr, source: u32, destination: u32) -> u32 {
+    let pools = |e: &Engine, t: u32| {
+        e.kernel
+            .graphics
+            .device_objects
+            .textures
+            .get(&t)
+            .map(|t| t.pool)
+    };
+    let (Some(from), Some(to)) = (pools(e, source), pools(e, destination)) else {
+        panic!("IDirect3DDevice9::UpdateTexture({source:#x}, {destination:#x}) on objects that are not textures of this layer is not provided");
+    };
+    if from == D3DPOOL_SYSTEMMEM && to == D3DPOOL_DEFAULT {
+        D3D_OK
+    } else {
+        D3DERR_INVALIDCALL
+    }
+}
+
+// Platform: replaces D3D9.DLL IDirect3DDevice9::StretchRect (vtable +0x88)
+/// `StretchRect(source, source rect, destination, destination rect, filter)` for surfaces of
+/// this layer: the destination must be a render target (a render-target surface or a level of a
+/// render-target texture) and the source a default-pool surface (a render target, a level of a
+/// render-target or default-pool texture) other than the destination; then `D3D_OK` (stretching,
+/// rectangles, a format conversion and each filter were taken, in a scene and outside one),
+/// else `D3DERR_INVALIDCALL` (a system-memory source, a destination that is no render target,
+/// the same surface, a null destination). Nothing is drawn, so nothing is copied. A source that
+/// is not a surface of this layer is not provided.
+fn stretch_rect(
+    e: &mut Engine,
+    _this: Ptr,
+    source: u32,
+    _source_rect: u32,
+    destination: u32,
+    _destination_rect: u32,
+    _filter: u32,
+) -> u32 {
+    let desc = |e: &Engine, s: u32| {
+        e.kernel
+            .graphics
+            .device_objects
+            .surfaces
+            .get(&s)
+            .map(|s| (s.desc, s.container))
+    };
+    let Some((from, from_texture)) = desc(e, source) else {
+        panic!("IDirect3DDevice9::StretchRect from {source:#x}, which is not a surface of this layer, is not provided");
+    };
+    let Some((to, _)) = desc(e, destination) else {
+        return D3DERR_INVALIDCALL;
+    };
+    // A depth-stencil surface on either side was not measured.
+    if (from[2] | to[2]) & D3DUSAGE_DEPTHSTENCIL != 0 {
+        panic!("IDirect3DDevice9::StretchRect with a depth-stencil surface is not provided");
+    }
+    let source_kind_measured =
+        from[2] & D3DUSAGE_RENDERTARGET != 0 || from_texture != 0 || from[3] == D3DPOOL_SYSTEMMEM;
+    if !source_kind_measured {
+        panic!("IDirect3DDevice9::StretchRect from a kind of surface not measured is not provided");
+    }
+    // `D3DSURFACE_DESC`: Usage +2, Pool +3.
+    let ok = source != destination
+        && to[2] & D3DUSAGE_RENDERTARGET != 0
+        && to[3] == D3DPOOL_DEFAULT
+        && from[3] == D3DPOOL_DEFAULT;
+    if ok {
+        D3D_OK
+    } else {
+        D3DERR_INVALIDCALL
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3062,5 +3251,103 @@ mod tests {
         assert_eq!(stream(&mut e), (0, 0, 0));
         // The stream's buffer was released by the draws: only the creator's reference is left.
         assert_eq!(e.vcall(vb, 8, &[]).u32(), 0);
+    }
+
+    /// The fixed-function states and the copies as the retail runtime answered them
+    /// (`set_material` .. `stretch_rect`).
+    #[test]
+    fn lights_materials_and_copies_answer_as_measured() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        let material = e.mem.alloc(68);
+        assert_eq!(e.vcall(device, 4 * 49, &[material]).u32(), D3D_OK);
+        let light = e.mem.alloc(104);
+        e.mem.set_u32(light, 4); // a type the runtime took anyway
+        assert_eq!(e.vcall(device, 4 * 51, &[3, light]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 53, &[3, 2]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 53, &[7, 1]).u32(), D3D_OK);
+        let d = device_state(&e, device);
+        assert_eq!(d.lights[&7], default_light());
+        assert_eq!(d.lights[&3][0], 4);
+        assert!(d.enabled_lights.contains(&3) && d.enabled_lights.contains(&7));
+        assert_eq!(e.vcall(device, 4 * 53, &[7, 0]).u32(), D3D_OK);
+        assert!(!device_state(&e, device).enabled_lights.contains(&7));
+        for null in [4 * 49, 4 * 51] {
+            let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let args: &[u32] = if null == 4 * 49 { &[0] } else { &[0, 0] };
+                e.vcall(device, null, args);
+            }));
+            assert!(stopped.is_err(), "a null pointer faulted the runtime");
+        }
+        // Software vertex processing: refused on a hardware device unless FALSE.
+        assert_eq!(e.vcall(device, 4 * 77, &[1]).u32(), D3DERR_INVALIDCALL);
+        assert_eq!(e.vcall(device, 4 * 77, &[0]).u32(), D3D_OK);
+        let mixed = {
+            e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x80, present, out]);
+            e.mem.u32(out)
+        };
+        assert_eq!(e.vcall(mixed, 4 * 77, &[2]).u32(), D3D_OK);
+        assert!(device_state(&e, mixed).software_vertex_processing);
+        // TEST DATA: A8R8G8B8 (0x15) textures and render targets accepted.
+        let table = test_table()
+            + "\nDomain\td1\t15\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1"
+            + "\nCheckDeviceFormat\t0 1 16 1 3\t0\t\td1"
+            + "\nCheckDeviceFormat\t0 1 16 1 1\t0\t\td1"
+            + "\nDomain\td2\t0\nCheckDeviceMultiSampleType\t0 1 15 1\t0/1\t\td2";
+        d3d9::load_adapter_table(&mut e, &table);
+        let texture = |e: &mut Engine, levels: u32, usage: u32, pool: u32| {
+            let hr = e
+                .vcall(device, 4 * 23, &[64, 64, levels, usage, 0x15, pool, out, 0])
+                .u32();
+            assert_eq!(hr, D3D_OK);
+            e.mem.u32(out)
+        };
+        let system = texture(&mut e, 0, 0, 2);
+        let default = texture(&mut e, 1, 0, 0);
+        let managed = texture(&mut e, 0, 0, 1);
+        assert_eq!(e.vcall(device, 4 * 31, &[system, default]).u32(), D3D_OK);
+        assert_eq!(
+            e.vcall(device, 4 * 31, &[default, default]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(
+            e.vcall(device, 4 * 31, &[system, managed]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        let level = |e: &mut Engine, t: u32| {
+            assert_eq!(e.vcall(t, 4 * 18, &[0, out]).u32(), D3D_OK);
+            let s = e.mem.u32(out);
+            e.vcall(s, 8, &[]);
+            s
+        };
+        let target = |e: &mut Engine| {
+            assert_eq!(
+                e.vcall(device, 4 * 28, &[64, 64, 0x15, 0, 0, 0, out, 0])
+                    .u32(),
+                D3D_OK
+            );
+            e.mem.u32(out)
+        };
+        let (a, b) = (target(&mut e), target(&mut e));
+        let render_texture = texture(&mut e, 1, 1, 0);
+        let rt_level = level(&mut e, render_texture);
+        let default_level = level(&mut e, default);
+        let system_level = level(&mut e, system);
+        let stretch = |e: &mut Engine, from: u32, to: u32| {
+            e.vcall(device, 4 * 34, &[from, 0, to, 0, 2]).u32()
+        };
+        assert_eq!(stretch(&mut e, a, b), D3D_OK);
+        assert_eq!(stretch(&mut e, a, rt_level), D3D_OK);
+        assert_eq!(stretch(&mut e, default_level, a), D3D_OK);
+        assert_eq!(stretch(&mut e, a, default_level), D3DERR_INVALIDCALL);
+        assert_eq!(stretch(&mut e, system_level, a), D3DERR_INVALIDCALL);
+        assert_eq!(stretch(&mut e, a, a), D3DERR_INVALIDCALL);
+        assert_eq!(stretch(&mut e, a, 0), D3DERR_INVALIDCALL);
+    }
+
+    fn device_state(e: &Engine, device: u32) -> &Device {
+        &e.kernel.graphics.device_objects.devices[&device]
     }
 }
