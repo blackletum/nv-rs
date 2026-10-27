@@ -190,26 +190,6 @@ pub fn fn_00ec787c(e: &mut Engine, frame: u32) {
     e.call(ARRAY_UNWIND, &args![array, size, count, destructor]);
 }
 
-/// `__ArrayUnwind` (`00ec5f70`, four words: array, element size, count, destructor).
-const ARRAY_UNWIND: u32 = 0x00ec_5f70;
-
-// Translated from 00ec787c (decompiled, FalloutNV.exe 1.4.0.525)
-/// The `__finally` block of the `eh vector constructor iterator` (`00ec782f`): it runs on the
-/// iterator's frame, so the uniform form takes that frame's `EBP` as its one word. When the
-/// completion flag (`EBP-0x20`) is 0 (the construction did not finish) the constructed elements
-/// are destroyed: `__ArrayUnwind` with the array (`EBP+8`), the element size (`EBP+0xc`), the
-/// count constructed (`EBP-0x1c`) and the destructor (`EBP+0x18`).
-pub fn fn_00ec787c(e: &mut Engine, frame: u32) {
-    if e.mem.u32(frame.wrapping_sub(0x20)) != 0 {
-        return;
-    }
-    let destructor = e.mem.u32(frame.wrapping_add(0x18));
-    let count = e.mem.u32(frame.wrapping_sub(0x1c));
-    let size = e.mem.u32(frame.wrapping_add(0xc));
-    let array = e.mem.u32(frame.wrapping_add(8));
-    e.call(ARRAY_UNWIND, &args![array, size, count, destructor]);
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -334,39 +314,6 @@ mod tests {
         assert_eq!(e.mem.u32(this.addr()), EXCEPTION_VTABLE);
         assert_eq!(e.mem.u32(this.addr() + 4), 0);
         assert_eq!(e.mem.u32(this.addr() + 8), 0);
-    }
-}
-
-#[cfg(test)]
-mod n089_tests {
-    use super::*;
-
-    #[test]
-    fn n089_00ec787c_unwinds_an_unfinished_array() {
-        let mut e = Engine::new();
-        e.register(ARRAY_UNWIND, |_, _| Ret::default());
-        let frame = e.mem.alloc(0x40) + 0x20;
-        e.mem.set_u32(frame + 8, 0xa000);
-        e.mem.set_u32(frame + 0xc, 0x10);
-        e.mem.set_u32(frame - 0x1c, 3);
-        e.mem.set_u32(frame + 0x18, 0x00d0_0000);
-        e.call_log = Some(vec![]);
-        e.call(0x00ec_787c, &args![frame]);
-        let unwinds = |e: &Engine| -> Vec<Vec<u32>> {
-            e.call_log
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|c| c.0 == ARRAY_UNWIND)
-                .map(|c| c.1.clone())
-                .collect()
-        };
-        assert_eq!(unwinds(&e), vec![vec![0xa000, 0x10, 3, 0x00d0_0000]]);
-        // Finished: nothing to unwind.
-        e.mem.set_u32(frame - 0x20, 1);
-        e.call_log = Some(vec![]);
-        e.call(0x00ec_787c, &args![frame]);
-        assert!(unwinds(&e).is_empty());
     }
 }
 
