@@ -2,9 +2,11 @@
 #![allow(clippy::module_inception)]
 
 pub mod closehandle;
+pub mod getfilesizeex;
 pub mod xcontent;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(closehandle::funcs());
+    out.extend(getfilesizeex::funcs());
     out.extend(xcontent::funcs());
 }
