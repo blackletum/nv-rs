@@ -1468,13 +1468,20 @@ pub fn fn_009b0d70(e: &mut Engine, this: Ptr, target: Ptr, magnitude: f32) {
     let setting = e.call(0x0040_3e20, &args![0x011d_1188u32]).u32();
     if e.mem.f32(setting) < magnitude {
         let process = e.call(0x008d_8520, &args![target]).u32();
-        let position = e.vcall(this.addr(), 0x1f4, &args![0.0f32]).u32();
+        // 009b0dc2: the explosion's +0x1f4 takes no stack word (plain RET in every
+        // reference class); the 0.0 pushed before it is the last word of the process'
+        // +0x418 (RET 0x14).
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
         let words = [
             e.mem.u32(position),
             e.mem.u32(position + 4),
             e.mem.u32(position + 8),
         ];
-        e.vcall(process, 0x418, &args![target, words[0], words[1], words[2]]);
+        e.vcall(
+            process,
+            0x418,
+            &args![target, words[0], words[1], words[2], 0.0f32],
+        );
     }
 }
 
@@ -6677,7 +6684,7 @@ mod tests {
                 0x6000u32.into_ret()
             });
             e.register(0x6000_01f4, |_, a| {
-                assert_eq!(a, &[0x1000, 0]);
+                assert_eq!(a, &[0x1000]);
                 0x7000u32.into_ret()
             });
             fn_009b0d70(&mut e, Ptr::new(0x1000), Ptr::new(target), magnitude);
@@ -6687,7 +6694,7 @@ mod tests {
                 forwarded
             );
             if forwarded {
-                assert_eq!(log.last().unwrap().1, vec![0x3000, 0x2000, 7, 8, 9]);
+                assert_eq!(log.last().unwrap().1, vec![0x3000, 0x2000, 7, 8, 9, 0]);
             }
         }
     }

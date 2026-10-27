@@ -1707,8 +1707,11 @@ pub fn player_character_set_hardcore(
         e.call(CLEAR_BYTE_AT_0XE38, &args![this]);
         if !e.call(GLOBAL_FLAG_7D6E60, &args![]).bool() {
             for value in [0x49u32, 0x4b, 0x4a] {
-                let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value, 0u32]).f32();
-                e.vcall(this.addr(), 0x3a4, &args![value, -current]);
+                // 00969f00 and the next two: the actor-value owner's +0xc takes one word
+                // (RET 4); the 0 pushed first is the last word of the player's +0x3a4
+                // (RET 0xc).
+                let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value]).f32();
+                e.vcall(this.addr(), 0x3a4, &args![value, -current, 0u32]);
             }
         }
     }
@@ -3760,18 +3763,18 @@ mod tests {
         assert_eq!(
             calls(&e, current),
             vec![
-                vec![sub_object, 0x49, 0],
-                vec![sub_object, 0x4b, 0],
-                vec![sub_object, 0x4a, 0]
+                vec![sub_object, 0x49],
+                vec![sub_object, 0x4b],
+                vec![sub_object, 0x4a]
             ]
         );
         let minus_five = (-5.0f32).to_bits();
         assert_eq!(
             calls(&e, modify),
             vec![
-                vec![player.addr(), 0x49, minus_five],
-                vec![player.addr(), 0x4b, minus_five],
-                vec![player.addr(), 0x4a, minus_five]
+                vec![player.addr(), 0x49, minus_five, 0],
+                vec![player.addr(), 0x4b, minus_five, 0],
+                vec![player.addr(), 0x4a, minus_five, 0]
             ]
         );
         assert_eq!(e.get(player, PlayerCharacter::eHardcoreSetting), 0);

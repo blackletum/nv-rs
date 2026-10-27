@@ -717,10 +717,10 @@ const FIELD_AT_8: u32 = 0x0044_ddc0;
 /// `cdecl` (`3, 1, form, count, 0xffff, 2, 0`, ADD ESP,0x1c; `005f5950`, 1520 bytes, no
 /// name in the engine map).
 const FUNCTION_005F5950: u32 = 0x005f_5950;
-/// Virtual slot `0x1f4` of a reference (`float`): gives the address of three
+/// Virtual slot `0x1f4` of a reference (no stack word): gives the address of three
 /// floats (a vector).
 const REFR_GET_VECTOR_SLOT: u32 = 0x1f4;
-/// Virtual slot `0x418` of an actor's process (`reference, x, y, z`).
+/// Virtual slot `0x418` of an actor's process (`reference, x, y, z, speed`; RET 0x14).
 const PROCESS_SLOT_418: u32 = 0x418;
 /// `ExtraDataList::RemoveOwnership` (Xbox PDB), `thiscall`.
 const EXTRA_DATA_LIST_REMOVE_OWNERSHIP: u32 = 0x0041_aed0;
@@ -3362,15 +3362,18 @@ pub fn script_push_actor_away_function(e: &mut Engine, a: ScriptArgs) -> bool {
                 &args![3u32, 1u32, form, count, 0xffffu32, 2u32, 0u32],
             );
         }
+        // 005d6caa: the reference's +0x1f4 takes no stack word (plain RET in every
+        // reference class); the speed pushed before it is the last word of the
+        // process' +0x418 (RET 0x14).
         let vector = e
-            .vcall(a.this_obj.addr(), REFR_GET_VECTOR_SLOT, &args![speed])
+            .vcall(a.this_obj.addr(), REFR_GET_VECTOR_SLOT, &args![])
             .u32();
         let (x, y, z) = (
             e.mem.u32(vector),
             e.mem.u32(vector + 4),
             e.mem.u32(vector + 8),
         );
-        e.vcall(process, PROCESS_SLOT_418, &args![actor, x, y, z]);
+        e.vcall(process, PROCESS_SLOT_418, &args![actor, x, y, z, speed]);
     }
     true
 }
@@ -7443,10 +7446,17 @@ mod tests {
         assert!(e.call(0x005d_6b60, &args![a]).bool());
         assert_parsed(&e, this_obj);
         assert_eq!(calls(&e, GET_KNOCKBACK_SPEED), vec![vec![actor + 0xa4, 3]]);
-        assert_eq!(calls(&e, V_VECTOR), vec![vec![this_obj, bits(6.5)]]);
+        assert_eq!(calls(&e, V_VECTOR), vec![vec![this_obj]]);
         assert_eq!(
             calls(&e, V_PROCESS_PUSH),
-            vec![vec![process, actor, bits(1.0), bits(2.0), bits(3.0)]]
+            vec![vec![
+                process,
+                actor,
+                bits(1.0),
+                bits(2.0),
+                bits(3.0),
+                bits(6.5)
+            ]]
         );
         // Not the player: nothing else.
         assert!(calls(&e, FUNCTION_005F5950).is_empty());

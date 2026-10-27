@@ -1200,8 +1200,10 @@ pub fn fn_009308f0(e: &mut Engine, this: Ptr<MobileObject>, _unused_1: u32) {
             let third = e.call(0x008d_8520, &args![this]).u32();
             let source = e.vcall(first, 0x4d4, &args![]).u32();
             let lookup = e.call(0x0050_94b0, &args![source]).u32();
-            let selected = e.vcall(second, 0x4c8, &args![lookup]).u32();
-            if e.vcall(third, 0x2b4, &args![selected]).bool() {
+            // 00930bea: the process' +0x4c8 takes no stack word (plain RET); the pushed
+            // lookup is the last word of the process' +0x2b4 (RET 8).
+            let selected = e.vcall(second, 0x4c8, &args![]).u32();
+            if e.vcall(third, 0x2b4, &args![selected, lookup]).bool() {
                 let amount = quiet_f32(e.global::<f32>(0x0101_e2bc));
                 e.vcall(this.addr(), 0x2e0, &args![amount]);
                 e.call(0x0093_1fb0, &args![this, 1u32]);
@@ -5059,10 +5061,10 @@ mod tests {
             .any(|call| call.0 == 0x8400 && call.1 == [0x6500]));
         assert!(log
             .iter()
-            .any(|call| call.0 == 0x8410 && call.1 == [0x6600, 0x6900]));
+            .any(|call| call.0 == 0x8410 && call.1 == [0x6600]));
         assert!(log
             .iter()
-            .any(|call| call.0 == 0x8420 && call.1 == [0x6700, 0x6a00]));
+            .any(|call| call.0 == 0x8420 && call.1 == [0x6700, 0x6a00, 0x6900]));
         assert!(log
             .iter()
             .any(|call| call.0 == 0x8430 && call.1 == [0x1000, 0.1f32.to_bits()]));

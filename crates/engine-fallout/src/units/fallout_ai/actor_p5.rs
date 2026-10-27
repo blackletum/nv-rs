@@ -3064,11 +3064,11 @@ pub fn actor_script_dismember(
     }
     if part != 0 {
         value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
-        let current = e
-            .vcall(this.addr() + 0xa4, 0xc, &args![value as u32, third])
-            .f64();
+        // 008b5244: the actor-value owner's +0xc takes one word (RET 4); the third
+        // argument pushed first is the last word of the actor's +0x3ac (RET 0xc).
+        let current = e.vcall(this.addr() + 0xa4, 0xc, &args![value as u32]).f64();
         let doubled = (current + current) as f32;
-        e.vcall(this.addr(), 0x3ac, &args![value as u32, doubled]);
+        e.vcall(this.addr(), 0x3ac, &args![value as u32, doubled, third]);
     }
     actor_dismember(
         e,
@@ -9411,11 +9411,11 @@ mod tests {
             e.call(0x008b_51b0, &args![actor, 0x77u32, 3u32, 0x66u32]);
         });
         // The slot gets twice the answer.
-        assert_eq!(seen.borrow()[0], vec![a + 0xa4, 0x1c, 0x66]);
+        assert_eq!(seen.borrow()[0], vec![a + 0xa4, 0x1c]);
         assert!(w
             .s
             .slot_calls()
-            .contains(&(a, 0x3ac, vec![0x1c, 5.0f32.to_bits()])));
+            .contains(&(a, 0x3ac, vec![0x1c, 5.0f32.to_bits(), 0x66])));
         // Dismember: no hit, the value, the part 3, chance 0 and limit 1000.
         assert_eq!(args_of(&log, 0x0057_3090), vec![vec![a, 3]]);
         assert_eq!(

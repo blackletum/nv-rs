@@ -10909,8 +10909,10 @@ pub fn fn_008a3c50(e: &mut Engine, this: Ptr<Actor>, _unused_1: u32) {
             })
         };
         if set_value {
-            let value = e.vcall(this.addr() + 0xa4, 0x08, &args![4u32, 0u32]).u32();
-            e.vcall(face, FACE_ANIMATION_SLOT_11C, &args![value]);
+            // 008a3e4f / 008a3e7d: the actor-value owner's +0x8 takes one word (RET 4);
+            // the 0 pushed first is the last word of the face data's +0x11c (RET 8).
+            let value = e.vcall(this.addr() + 0xa4, 0x08, &args![4u32]).u32();
+            e.vcall(face, FACE_ANIMATION_SLOT_11C, &args![value, 0u32]);
         }
     }
 }
@@ -21322,7 +21324,7 @@ mod tests {
         fn_008a3c50(&mut e, actor, 0);
         assert_eq!(
             calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
-            vec![vec![face.addr(), 55]]
+            vec![vec![face.addr(), 55, 0]]
         );
     }
 
