@@ -1676,8 +1676,10 @@ pub fn actor_destroy_actor_mover(e: &mut Engine, this: Ptr<Actor>) {
     if e.call(0x005d_43c0, &args![this]).u32() != 0 {
         let extra = e.call(0x005d_43c0, &args![this]).u32();
         let changes = e.call(0x0041_8520, &args![extra]).u32();
-        let manager = e.call(0x0047_d0b0, &args![changes]).u32();
-        e.call(0x006e_bd10, &args![manager]);
+        // 008b31a5: `0047d0b0` takes no stack word (plain RET); the pushed changes are
+        // the word of `006ebd10` (RET 4).
+        let manager = e.call(0x0047_d0b0, &args![]).u32();
+        e.call(0x006e_bd10, &args![manager, changes]);
     }
     let mover = e.get(this, Actor::pActorMover);
     if !mover.is_null() {
@@ -2416,11 +2418,16 @@ pub fn fn_008b3fe0(
         return clone;
     }
     let path_owner = e.call(0x005d_8a70, &args![part]).u32();
-    let path = e
-        .vcall(path_owner, 0x14, &args![0u32, 1u32, 0u32, 0u32, 0u32])
-        .u32();
+    // 008b41b6: the model's +0x14 (`00408da0`, plain RET) takes no stack word; the five
+    // words pushed before it are the last five of `00447080` (RET 0x18).
+    let path = e.vcall(path_owner, 0x14, &args![]).u32();
     let loader = e.global::<u32>(MODEL_LOADER);
-    let model = e.call(0x0044_7080, &args![loader, path]).u32();
+    let model = e
+        .call(
+            0x0044_7080,
+            &args![loader, path, 0u32, 1u32, 0u32, 0u32, 0u32],
+        )
+        .u32();
     if model != 0 {
         clone = e.with_stack(0x100, |e, block| {
             let first_transform = block.addr();
@@ -7534,15 +7541,19 @@ mod tests {
         });
         w.e.register(0x005d_43c0, |_, a| int(a[0] + 0x44));
         w.e.register(0x0041_8520, |_, a| int(a[0] + 1));
-        w.e.register(0x0047_d0b0, |_, a| int(a[0] + 2));
+        w.e.register(0x0047_d0b0, |_, a| {
+            assert!(a.is_empty());
+            int(0x0e10_0000)
+        });
         let cleared = Rc::new(Cell::new(0));
         let seen = cleared.clone();
         w.e.register_double(0x006e_bd10, move |_, a| {
-            seen.set(a[0]);
+            assert_eq!(a[0], 0x0e10_0000);
+            seen.set(a[1]);
             Ret::default()
         });
         w.e.call(0x008b_3180, &args![this]);
-        assert_eq!(cleared.get(), this.addr() + 0x44 + 1 + 2);
+        assert_eq!(cleared.get(), this.addr() + 0x44 + 1);
         assert_eq!(destroyed.get(), mover.addr());
         assert!(w.e.get(this, Actor::pActorMover).is_null());
         // Without a mover nothing is destroyed.

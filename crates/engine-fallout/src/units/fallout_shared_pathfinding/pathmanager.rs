@@ -255,7 +255,11 @@ pub fn fn_006ea350(e: &mut Engine, this: Ptr) -> i32 {
             e.call(0x006e_61a0, &args![ray_cast]);
             let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
             let path = e.mem.u32(path_slot);
-            e.call(0x006e_6320, &args![ray_cast, request, index, path]);
+            // 006ea410: the request is read again (`00877a30`, RET 4, takes the pushed
+            // index); `006e6320` (RET 8) takes the request and the path.
+            let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
+            let request = e.mem.u32(request_slot);
+            e.call(0x006e_6320, &args![ray_cast, request, path]);
             built += e.call(0x004f_d3e0, &args![ray_cast]).i32();
             e.call(0x006e_62b0, &args![ray_cast]);
             if built > 10 {
@@ -1474,10 +1478,15 @@ pub fn fn_006ec7e0(
     mode: u8,
 ) -> bool {
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let candidate = e
-        .call(0x0044_9f80, &args![this, manager, request, context, mode])
-        .u32();
-    let result = e.call(0x0044_d240, &args![candidate]).bool();
+    // 006ec80a: `00449f80` takes no stack word (plain RET); the four pushed words are
+    // those of `0044d240` (RET 0x10).
+    let candidate = e.call(0x0044_9f80, &args![this]).u32();
+    let result = e
+        .call(
+            0x0044_d240,
+            &args![candidate, manager, request, context, mode],
+        )
+        .bool();
     e.call(0x0040_fba0, &args![this.addr() + 0x20]);
     result
 }
@@ -2298,9 +2307,9 @@ mod remaining_tests {
         let built = Rc::new(Cell::new(false));
         let built_by_double = built.clone();
         e.register_double(0x006e_6320, move |_, args| {
+            assert_eq!(args.len(), 3);
             assert_eq!(args[1], request);
-            assert_eq!(args[2], 0);
-            assert_eq!(args[3], path);
+            assert_eq!(args[2], path);
             built_by_double.set(true);
             Ret::default()
         });
@@ -4149,14 +4158,11 @@ mod continuation_tests {
             Ret::default()
         });
         e.register_double(0x0044_9f80, move |_, a| {
-            assert_eq!(
-                a,
-                &[this.addr(), manager, request, context, u32::from(mode)]
-            );
+            assert_eq!(a, &[this.addr()]);
             result(0x54000)
         });
         e.register_double(0x0044_d240, move |_, a| {
-            assert_eq!(a, &[0x54000]);
+            assert_eq!(a, &[0x54000, manager, request, context, u32::from(mode)]);
             result(1)
         });
         e.register_double(0x0040_fba0, move |_, a| {

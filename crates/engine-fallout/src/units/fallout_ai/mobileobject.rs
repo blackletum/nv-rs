@@ -3703,10 +3703,10 @@ pub fn fn_00935d90(e: &mut Engine, value: u32, suppress_setting: u8) {
             e.mem.set_u8(shared + 0x7c, 1);
             if e.call(0x0057_4900, &args![actor]).bool() {
                 let reference = e.call(0x005e_3fa0, &args![actor]).ptr::<u8>();
-                let object = e
-                    .vcall(reference.addr(), 0x1d0, &args![0x011f_36acu32])
-                    .u32();
-                let controller = e.call(0x00a5_c570, &args![object]).u32();
+                // 00935e31: the reference's +0x1d0 takes no stack word; the pushed
+                // 011f36ac is the word of `00a5c570` (RET 4).
+                let object = e.vcall(reference.addr(), 0x1d0, &args![]).u32();
+                let controller = e.call(0x00a5_c570, &args![object, 0x011f_36acu32]).u32();
                 if controller != 0 {
                     let current = fn_00935ef0(e);
                     let acquired = e.call(0x0047_a520, &args![controller, current]).u32();
@@ -4125,8 +4125,10 @@ pub fn fn_00936b20(e: &mut Engine, this: Ptr<MobileObject>, _unused_1: u32) {
             0x0043_d410,
             &args![temporary, quiet_f32(seconds), 1u32, 0u32],
         );
-        let object = e.vcall(activator.addr(), 0x1d0, &args![temporary]).u32();
-        e.call(0x00a5_9c60, &args![object]);
+        // 00936d83: the activator's +0x1d0 takes no stack word; the pushed temporary is
+        // the word of `00a59c60` (RET 4).
+        let object = e.vcall(activator.addr(), 0x1d0, &args![]).u32();
+        e.call(0x00a5_9c60, &args![object, temporary]);
     });
 }
 
@@ -8074,7 +8076,7 @@ mod tests {
             0u32.into_ret()
         });
         e.register_double(0x00a5_9c60, |_, words| {
-            assert_eq!(words, &[0x3500]);
+            assert_eq!((words.len(), words[0]), (2, 0x3500));
             0u32.into_ret()
         });
         e.call_log = Some(vec![]);
@@ -8085,8 +8087,7 @@ mod tests {
         assert_eq!(activator_calls.len(), 3);
         assert_eq!(activator_calls[0].1, vec![0x3400]);
         assert_eq!(activator_calls[1].1, vec![0x3400]);
-        assert_eq!(activator_calls[2].1[0], 0x3400);
-        assert_eq!(activator_calls[2].1.len(), 2);
+        assert_eq!(activator_calls[2].1, vec![0x3400]);
         assert!(log.iter().any(|c| c.0 == 0x8060 && c.1 == vec![0x3e00]));
         assert!(log
             .iter()

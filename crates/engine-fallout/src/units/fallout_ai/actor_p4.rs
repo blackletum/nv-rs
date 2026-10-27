@@ -753,20 +753,17 @@ pub fn actor_set_havok_weapon_ov2(e: &mut Engine, this: Ptr<Actor>, mode: u8) ->
         0
     };
     let mut weapon_object = found;
+    // 008a608d / 008a60d3: `WeaponObject::UpdateConstraints` (`00c89050`, RET 0x10)
+    // does not read the ECX (the weapon object) the caller sets; its four words are
+    // the pushed ones.
     if weapon_object != 0 {
-        e.call(
-            0x00c8_9050,
-            &args![weapon_object, mode, link_value, root, keep],
-        );
+        e.call(0x00c8_9050, &args![mode, link_value, root, keep]);
     } else {
         weapon_object = e
             .call(0x00c8_9540, &args![link_value, root, node, keep])
             .u32();
         if weapon_object != 0 && mode == 0 {
-            e.call(
-                0x00c8_9050,
-                &args![weapon_object, mode, link_value, root, keep],
-            );
+            e.call(0x00c8_9050, &args![mode, link_value, root, keep]);
         }
     }
     e.mem.free(link);
@@ -6775,10 +6772,7 @@ mod tests {
             called(&log, 0x00c8_9540),
             vec![vec![0x4444, 0x1111, node, 1]]
         );
-        assert_eq!(
-            called(&log, 0x00c8_9050),
-            vec![vec![0x6666, 0, 0x4444, 0x1111, 1]]
-        );
+        assert_eq!(called(&log, 0x00c8_9050), vec![vec![0, 0x4444, 0x1111, 1]]);
     }
 
     #[test]
@@ -6809,10 +6803,7 @@ mod tests {
         e.call(0x008a_5f20, &args![actor, 1u8]);
         let log = calls(&mut e);
         assert!(called(&log, 0x00c8_9540).is_empty());
-        assert_eq!(
-            called(&log, 0x00c8_9050),
-            vec![vec![0x5556, 1, 0x4444, 0x1111, 1]]
-        );
+        assert_eq!(called(&log, 0x00c8_9050), vec![vec![1, 0x4444, 0x1111, 1]]);
         assert_eq!(called(&log, 0x00c8_91c0), vec![vec![0x5556]]);
     }
 

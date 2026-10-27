@@ -5555,10 +5555,10 @@ const ACTOR_SLOT_24C: u32 = 0x24c;
 /// `TES::IsCellLoaded` (Xbox PDB): thiscall on the TES, taking the cell and
 /// a flag.
 const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
-/// `TES::GetCellPriority` (Xbox PDB): the cell and two flags.
+/// `TES::GetCellPriority` (Xbox PDB): the cell and a flag (RET 8).
 const TES_GET_CELL_PRIORITY: u32 = 0x0045_8be0;
 /// `ModelLoader::QueueReference` (Xbox PDB): thiscall on the loader, taking
-/// the reference and the priority.
+/// the reference, the priority and a flag (RET 0xc).
 const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
 /// Test on a cell (`00450ff0`).
 const CELL_TEST_450FF0: u32 = 0x0045_0ff0;
@@ -5680,11 +5680,14 @@ pub fn actor_resurrect(
         if cell != 0 {
             let tes = e.global::<u32>(TES_SINGLETON);
             if e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() && queue_load != 0 {
-                let priority = e
-                    .call(TES_GET_CELL_PRIORITY, &args![tes, cell, 0u32, 0u32])
-                    .u32();
+                // 0089fa9f: `00458be0` takes two words (RET 8); the third pushed 0 is
+                // the last word of `00444850` (RET 0xc).
+                let priority = e.call(TES_GET_CELL_PRIORITY, &args![tes, cell, 0u32]).u32();
                 let loader = e.global::<u32>(MODEL_LOADER);
-                e.call(MODEL_LOADER_QUEUE_REFERENCE, &args![loader, this, priority]);
+                e.call(
+                    MODEL_LOADER_QUEUE_REFERENCE,
+                    &args![loader, this, priority, 0u32],
+                );
                 if e.call(CELL_TEST_450FF0, &args![cell]).bool() {
                     e.vcall(this.addr(), ACTOR_SLOT_240, &args![]);
                 } else {
@@ -17653,11 +17656,11 @@ mod tests {
         );
         assert_eq!(
             calls_to(&e, TES_GET_CELL_PRIORITY),
-            vec![vec![0x7300, 0x7500, 0, 0]]
+            vec![vec![0x7300, 0x7500, 0]]
         );
         assert_eq!(
             calls_to(&e, MODEL_LOADER_QUEUE_REFERENCE),
-            vec![vec![0x7400, actor.addr(), 0x33]]
+            vec![vec![0x7400, actor.addr(), 0x33, 0]]
         );
         // The cell test picks slot 0x24c (false) here.
         let low = slot_target(&e, actor.cast(), ACTOR_SLOT_24C);

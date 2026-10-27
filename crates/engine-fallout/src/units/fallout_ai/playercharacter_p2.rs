@@ -3642,11 +3642,13 @@ pub fn fn_009520f0(e: &mut Engine, this: Ptr<PlayerCharacter>, group: u16, argum
         );
         return;
     }
-    let weapon = e.call(0x008a_1710, &args![player, animation]).u32();
+    // 00952216: `008a1710` takes no stack word (plain RET); the pushed animation
+    // is the last word of `00897910` (RET 0x10).
+    let weapon = e.call(0x008a_1710, &args![player]).u32();
     let chosen = e
         .call(
             0x0089_7910,
-            &args![player, group_type, 0u32, u32::from(weapon == 0)],
+            &args![player, group_type, 0u32, u32::from(weapon == 0), animation],
         )
         .u16();
     let chosen_type = e.call(0x005f_2440, &args![u32::from(chosen)]).u32();
@@ -3984,8 +3986,10 @@ pub fn player_character_add_quest_stage_item(
         let own = e.global::<u32>(PLAYER_POINTER);
         let own_quest = e.call(0x005c_bb50, &args![own]).u32();
         if quest == own_quest && e.call(0x004f_d380, &args![item]).u32() != 0 {
-            let parent = e.call(0x004f_d380, &args![item, 1u32]).u32();
-            e.call(0x0060_c9c0, &args![parent]);
+            // 009529b7: `004fd380` takes no stack word (plain RET); the pushed 1 is
+            // the word of `0060c9c0` (RET 4).
+            let parent = e.call(0x004f_d380, &args![item]).u32();
+            e.call(0x0060_c9c0, &args![parent, 1u32]);
         }
     }
     true
@@ -7782,10 +7786,12 @@ pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
     )
     .bool()
     {
-        let pipboy = e.call(0x0070_5990, &args![1u32, 1u32, 1u32]).u32();
-        e.call(0x007f_a310, &args![pipboy]);
-        let pipboy = e.call(0x0070_5990, &args![0u32, 1u32, 1u32]).u32();
-        e.call(0x007f_a310, &args![pipboy]);
+        // 0095c97e / 0095c990: `00705990` takes no word (plain RET, no stack read); the
+        // three pushed words are those of `007fa310` (RET 0xc).
+        let pipboy = e.call(0x0070_5990, &args![]).u32();
+        e.call(0x007f_a310, &args![pipboy, 1u32, 1u32, 1u32]);
+        let pipboy = e.call(0x0070_5990, &args![]).u32();
+        e.call(0x007f_a310, &args![pipboy, 0u32, 1u32, 1u32]);
     }
     e.vcall(player, 0x3f4, &args![]);
 }
@@ -11658,7 +11664,7 @@ mod tests {
         fn_009520f0(&mut e, player, 9, 0x55);
         assert_eq!(
             calls_to(&e, 0x0089_7910),
-            vec![vec![player.addr(), 3, 0, 1]]
+            vec![vec![player.addr(), 3, 0, 1, 0x0600_4100]]
         );
         assert_eq!(
             calls_to(&e, 0x0049_4740),
@@ -11951,7 +11957,7 @@ mod tests {
         assert!(player_character_add_quest_stage_item(&mut e, player, 0xb0b));
         assert_eq!(calls_to(&e, 0x0070_6f30), vec![vec![9]]);
         assert_eq!(calls_to(&e, 0x005c_bb50), vec![vec![0x0600_5000]]);
-        assert_eq!(calls_to(&e, 0x0060_c9c0), vec![vec![0x0600_5100]]);
+        assert_eq!(calls_to(&e, 0x0060_c9c0), vec![vec![0x0600_5100, 1]]);
         // A different quest, or no parent world, stops after the sound.
         double(&mut e, 0x005c_bb50, eax(0x78));
         start_log(&mut e);
@@ -13523,11 +13529,11 @@ mod tests {
         assert_eq!(calls_to(&e, 0x008b_b650), vec![vec![p, 1, 0, 0]]);
         // The spell target check: the pipboy light flashes twice.
         assert_eq!(calls_to(&e, 0x0082_2b90), vec![vec![p + 0x94, 0x518, 1]]);
+        assert_eq!(calls_to(&e, 0x0070_5990), vec![Vec::<u32>::new(); 2]);
         assert_eq!(
-            calls_to(&e, 0x0070_5990),
-            vec![vec![1, 1, 1], vec![0, 1, 1]]
+            calls_to(&e, 0x007f_a310),
+            vec![vec![0x600, 1, 1, 1], vec![0x600, 0, 1, 1]]
         );
-        assert_eq!(calls_to(&e, 0x007f_a310).len(), 2);
         assert_eq!(end.borrow().len(), 1);
     }
 

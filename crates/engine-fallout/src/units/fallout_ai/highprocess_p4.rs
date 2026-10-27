@@ -5702,8 +5702,8 @@ const SOUND_HANDLE_DELETE: u32 = 0x0048_3710;
 const SOUND_HANDLES: u32 = 0x314;
 /// `TESDataHandler::GetSound_ov2(name)` (`004616c0`, `this` is the data
 /// handler), the name of the torch sound (`01088398`, "ITMTorchHeldLP"),
-/// the sound's play function `0084e3a0(1, 2, 1)` and the owner's
-/// `00933150(out handle, sound data)`.
+/// the sound's word at +0xc (`0084e3a0`, no stack word) and the owner's
+/// `00933150(out handle, sound word, 1, 2, 1)` (RET 0x14).
 const DATA_HANDLER_GET_SOUND: u32 = 0x0046_16c0;
 const TORCH_SOUND_NAME: u32 = 0x0108_8398;
 const SOUND_PREPARE: u32 = 0x0084_e3a0;
@@ -5795,10 +5795,15 @@ pub fn high_process_start_torch_sound(e: &mut Engine, this: Ptr, owner: u32) {
     if owner == 0 || sound == 0 {
         return;
     }
-    let prepared = e.call(SOUND_PREPARE, &args![sound, 1u32, 2u32, 1u32]).u32();
+    // 008ff2f7: `0084e3a0` takes no stack word (plain RET); the pushed 1, 2, 1 are
+    // the last three words of `00933150` (RET 0x14).
+    let prepared = e.call(SOUND_PREPARE, &args![sound]).u32();
     e.with_stack(12, |e, temporary| {
         let made = e
-            .call(OWNER_START_SOUND, &args![owner, temporary, prepared])
+            .call(
+                OWNER_START_SOUND,
+                &args![owner, temporary, prepared, 1u32, 2u32, 1u32],
+            )
             .u32();
         e.call(SOUND_HANDLE_ASSIGN, &args![handle, made]);
         e.call(SOUND_HANDLE_DELETE, &args![temporary]);
@@ -7728,13 +7733,15 @@ pub fn fn_009026c0(e: &mut Engine, this: Ptr, actor: u32, state: u32, inside: u8
     if found != 0 {
         if inside != 0 {
             e.vcall(base, 0x294, &args![actor]);
-            let position = e.vcall(found, 0x1f4, &args![0u32]).u32();
+            // 009029c1: the reference's +0x1f4 takes no stack word (plain RET); the
+            // pushed 0 is the last word of `008bb520` (RET 0x10), after the position.
+            let position = e.vcall(found, 0x1f4, &args![]).u32();
             let (x, y, z) = (
                 e.mem.u32(position),
                 e.mem.u32(position + 4),
                 e.mem.u32(position + 8),
             );
-            e.call(0x008b_b520, &args![actor, x, y, z]);
+            e.call(0x008b_b520, &args![actor, x, y, z, 0u32]);
         }
         e.call(0x009f_2970, &args![state, found]);
         high_process_process_guard_warn(e, this, actor, state);
@@ -11121,10 +11128,10 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x008f_f290, &args![process, 0x7000u32]);
         assert_eq!(calls_to(&e, 0x0046_16c0), vec![vec![0x4000, 0x0108_8398]]);
-        assert_eq!(calls_to(&e, 0x0084_e3a0), vec![vec![0x5678, 1, 2, 1]]);
+        assert_eq!(calls_to(&e, 0x0084_e3a0), vec![vec![0x5678]]);
         let started = calls_to(&e, 0x0093_3150);
         let temporary = started[0][1];
-        assert_eq!(started, vec![vec![0x7000, temporary, 0x9999]]);
+        assert_eq!(started, vec![vec![0x7000, temporary, 0x9999, 1, 2, 1]]);
         assert_eq!(
             calls_to(&e, 0x0041_8900),
             vec![vec![process + 0x320, temporary]]
@@ -13522,7 +13529,8 @@ mod tests {
                 actor,
                 1.0f32.to_bits(),
                 2.0f32.to_bits(),
-                3.0f32.to_bits()
+                3.0f32.to_bits(),
+                0
             ]]
         );
         assert_eq!(calls_to(&e, 0x008b_06d0).len(), 1);

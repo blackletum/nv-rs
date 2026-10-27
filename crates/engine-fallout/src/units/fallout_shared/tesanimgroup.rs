@@ -86,7 +86,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_4c40, fn_005f4c40(Ptr, Ptr)),
         entry!(0x005f_4c70, fn_005f4c70(Ptr) -> f64),
         entry!(0x005f_4c90, fn_005f4c90(Ptr, Ptr) -> Ptr),
-        entry!(0x005f_4cc0, fn_005f4cc0(Ptr, u16) -> bool),
+        entry!(0x005f_4cc0, fn_005f4cc0(u16) -> bool),
         entry!(0x005f_4d00, fn_005f4d00(Ptr, Ptr)),
     ]
 }
@@ -530,8 +530,9 @@ pub fn fn_005f4c90(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
 }
 
 // Translated from 005f4cc0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Tests whether the group type is 0, 1 or 0xaa. The `this` register is unused.
-pub fn fn_005f4cc0(e: &mut Engine, _this: Ptr, group: u16) -> bool {
+/// Tests whether the group type is 0, 1 or 0xaa. A static `cdecl` of one word (its caller
+/// 0089739d pushes only the group and pops one word; ECX is not read).
+pub fn fn_005f4cc0(e: &mut Engine, group: u16) -> bool {
     matches!(fn_005f2440(e, group), 0 | 1 | 0xaa)
 }
 
@@ -2122,7 +2123,7 @@ mod tests {
             (0x1aa, true),
             (0x102, false),
         ] {
-            assert_eq!(e.call(0x005f_4cc0, &[0, group]).bool(), expected);
+            assert_eq!(e.call(0x005f_4cc0, &[group]).bool(), expected);
         }
     }
 

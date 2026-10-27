@@ -2698,8 +2698,11 @@ pub fn player_character_play_impact_based_hit_shader(
         return;
     }
     let node = e.vcall(reference.addr(), 0x1d0, &args![]).u32();
+    // 00962331 / 00962337: the cdecl `005d2860` reads the two pushed words without popping
+    // them; they are the last two words of the cdecl `005299a0` (`(form, strength,
+    // target)`, one ADD ESP,0xc after both).
     let modifier = e.call(FUNCTION_005D2860, &args![distance, node]).u32();
-    e.call(FUNCTION_005299A0, &args![modifier]);
+    e.call(FUNCTION_005299A0, &args![modifier, distance, node]);
 }
 
 // Translated from 00962350 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -11294,7 +11297,10 @@ mod tests {
             calls_to(&log, FUNCTION_005D2860),
             [[2.0f32.to_bits(), 0x6300_0000]]
         );
-        assert_eq!(calls_to(&log, FUNCTION_005299A0), [[0x6400_0000]]);
+        assert_eq!(
+            calls_to(&log, FUNCTION_005299A0),
+            [[0x6400_0000, 2.0f32.to_bits(), 0x6300_0000]]
+        );
     }
 
     #[test]

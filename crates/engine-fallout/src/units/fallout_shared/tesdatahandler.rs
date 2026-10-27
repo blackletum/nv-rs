@@ -2060,15 +2060,18 @@ fn add_reference_to_cell(e: &mut Engine, this: Ptr<TESDataHandler>, form: Ptr) {
 /// `GetCellFromWorldCoord(x, y, worldSpace)` for the reference's position
 /// (virtual `0x1f4` of the reference returns the address of its position;
 /// x is the first float, y the second) in the world space of `TES`
-/// (`004fd3e0(1)`).
+/// (`004fd3e0`, no stack word); the fourth word is 1.
 fn cell_at_reference_position(e: &mut Engine, this: Ptr<TESDataHandler>, reference: Ptr) -> u32 {
     let tes: u32 = e.global(TES_SINGLETON);
-    let world_space = e.call(0x004f_d3e0, &args![tes, 1u32]).u32();
+    // 00460b02 / 00460b5c: `004fd3e0` takes no stack word (plain RET); the pushed 1
+    // is the last word of `00461bc0` (RET 0x10).
+    let world_space = e.call(0x004f_d3e0, &args![tes]).u32();
     let position = e.vcall(reference.addr(), 0x1f4, &args![]).u32();
     let y = e.mem.f32(position + 4);
     let position = e.vcall(reference.addr(), 0x1f4, &args![]).u32();
     let x = e.mem.f32(position);
-    e.call(0x0046_1bc0, &args![this, x, y, world_space]).u32()
+    e.call(0x0046_1bc0, &args![this, x, y, world_space, 1u32])
+        .u32()
 }
 
 /// The last case of `AddFormToDataHandler`: the form is cast to `TESObject`
@@ -10205,7 +10208,7 @@ mod tests {
         let shared = world.preferred_cell.clone();
         e.register_double(0x005f_36f0, move |_, _| ret(*shared.borrow()));
         e.register(0x004f_d3e0, |_, a| {
-            assert_eq!(a[1], 1);
+            assert_eq!(a.len(), 1);
             ret(0x77)
         });
         let shared = world.found_cell.clone();
@@ -10280,7 +10283,8 @@ mod tests {
                     this.addr(),
                     1.5f32.to_bits(),
                     (-2.5f32).to_bits(),
-                    0x77
+                    0x77,
+                    1
                 ]]
             );
             assert_eq!(

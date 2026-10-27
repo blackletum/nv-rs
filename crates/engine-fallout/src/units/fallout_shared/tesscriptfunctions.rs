@@ -634,10 +634,10 @@ pub(crate) const FN_0045C670: u32 = 0x0045_c670;
 /// `BSFaceGenNiNode::GetAnimationData` (engine map name; the body reads the
 /// pointer at `this + 0xac`).
 pub(crate) const FN_006629F0: u32 = 0x0066_29f0;
-/// `thiscall` (a vector and a `float`, all ignored): returns `this + 0x8c`,
-/// the address of a vector.
+/// `thiscall`, no stack word: returns `this + 0x8c`, the address of a vector.
 pub(crate) const FN_0045BB80: u32 = 0x0045_bb80;
-/// `cdecl` (`x, y, z`): takes the three words of that vector.
+/// `cdecl` (seven words, ADD ESP,0x1c): the three words of that vector, the three
+/// words of the start vector and a `float`.
 pub(crate) const FN_0057D0A0: u32 = 0x0057_d0a0;
 
 // Cell tests and the `TES` singleton (`GLOBAL_0011DEA10`).
@@ -2538,18 +2538,19 @@ pub fn script_toggle_grass_function(e: &mut Engine) -> bool {
                 e.global::<u32>(START_VECTOR + 4),
                 e.global::<u32>(START_VECTOR + 8),
             ];
-            let vector = e
-                .call(
-                    FN_0045BB80,
-                    &args![animation, start[0], start[1], start[2], 0.0f32],
-                )
-                .u32();
+            // 005b7156: `0045bb80` takes no stack word (plain RET); the 0.0 and the
+            // start vector copied before it are the last four words of the cdecl
+            // `0057d0a0` (ADD ESP,0x1c).
+            let vector = e.call(FN_0045BB80, &args![animation]).u32();
             let words = [
                 e.mem.u32(vector),
                 e.mem.u32(vector + 4),
                 e.mem.u32(vector + 8),
             ];
-            e.call(FN_0057D0A0, &args![words[0], words[1], words[2]]);
+            e.call(
+                FN_0057D0A0,
+                &args![words[0], words[1], words[2], start[0], start[1], start[2], 0.0f32],
+            );
         }
     }
     let state = if flag {
@@ -8176,20 +8177,19 @@ mod tests {
         assert_eq!(calls(&e, FN_00450F90), vec![vec![object, 0]]);
         assert_eq!(e.global::<u8>(GRASS_DISPLAY_FLAG), 1);
         assert!(calls(&e, FN_00B62A20).is_empty());
-        // The start vector and a 0.0 go to `0045bb80`; its result to `0057d0a0`.
+        // `0045bb80`'s vector, then the start vector and a 0.0, go to `0057d0a0`.
+        assert_eq!(calls(&e, FN_0045BB80), vec![vec![animation]]);
         assert_eq!(
-            calls(&e, FN_0045BB80),
+            calls(&e, FN_0057D0A0),
             vec![vec![
-                animation,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
                 7.0f32.to_bits(),
                 8.0f32.to_bits(),
                 9.0f32.to_bits(),
                 0
             ]]
-        );
-        assert_eq!(
-            calls(&e, FN_0057D0A0),
-            vec![vec![1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]]
         );
         // Without animation data nothing is placed.
         e.mem.set_u8(object, 1);
