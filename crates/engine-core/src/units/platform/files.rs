@@ -1062,6 +1062,152 @@ pub fn read_file(
     1
 }
 
+// Platform: replaces KERNEL32.DLL CreateFileW (import)
+/// `CreateFileW(path, access, share, security, disposition, attributes, template)`: as
+/// [`create_file_a`] on the same path. Measured on this machine (2026-10-27,
+/// `build43-scratch/measure/platform5`): for an existing file, a missing one and one in a
+/// missing directory, each of the four accesses (read, write, both, none) and the
+/// dispositions 0..=6, `CreateFileW` and `CreateFileA` gave the same answer, the same last
+/// error and the same file afterwards (84 cases). A path with a character outside ASCII is not
+/// provided (the files are kept by their ANSI names; stops the run).
+#[allow(clippy::too_many_arguments)]
+pub fn create_file_w(
+    e: &mut Engine,
+    path: Ptr,
+    access: u32,
+    share: u32,
+    security: u32,
+    disposition: u32,
+    attributes: u32,
+    template: u32,
+) -> u32 {
+    let mut name = Vec::new();
+    let mut at = path.addr();
+    loop {
+        let unit = e.mem.u16(at);
+        if unit == 0 {
+            break;
+        }
+        assert!(
+            unit < 0x80,
+            "CreateFileW: the non-ASCII character {unit:#x} in a path is not provided"
+        );
+        name.push(unit as u8);
+        at = at.wrapping_add(2);
+    }
+    let narrow = e.mem.alloc(name.len() as u32 + 1);
+    e.mem.set_cstr(narrow, &name);
+    let handle = create_file_a(
+        e,
+        Ptr::new(narrow),
+        access,
+        share,
+        security,
+        disposition,
+        attributes,
+        template,
+    );
+    e.mem.free(narrow);
+    handle
+}
+
+// Platform: replaces KERNEL32.DLL GetFileSizeEx (import)
+/// `GetFileSizeEx(handle, size)`: for a file handle (whatever its access) stores the file's
+/// size as a 64-bit number and answers TRUE, the last error left as it was; for a handle that is
+/// not open (closed, 0, -1, any other number) answers FALSE with `ERROR_INVALID_HANDLE` and
+/// leaves `size` as it was. Measured on this machine (2026-10-27,
+/// `build43-scratch/measure/platform5`). A handle of another kernel object (an event, a thread)
+/// is not provided (not measured; stops the run).
+pub fn get_file_size_ex(e: &mut Engine, handle: u32, size: Ptr) -> u32 {
+    let path = match e.kernel.objects.get(&handle) {
+        Some(KernelObject::File(file)) => file.path.clone(),
+        Some(other) => panic!("GetFileSizeEx({handle:#x}) on {other:?}: not provided"),
+        None => {
+            e.kernel.last_error = ERROR_INVALID_HANDLE;
+            return 0;
+        }
+    };
+    let bytes = file_size(e, &path);
+    e.mem.set_u32(size.addr(), bytes as u32);
+    e.mem.set_u32(size.addr() + 4, (bytes >> 32) as u32);
+    1
+}
+
+#[cfg(test)]
+mod tests_wide_and_size {
+    use super::*;
+
+    fn wide(e: &mut Engine, text: &str) -> u32 {
+        let units: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let at = e.mem.alloc(2 * units.len() as u32);
+        for (i, u) in units.iter().enumerate() {
+            e.mem.set_u16(at + 2 * i as u32, *u);
+        }
+        at
+    }
+
+    #[test]
+    fn create_file_w_opens_as_create_file_a_and_the_size_follows_the_writes() {
+        let mut e = Engine::new();
+        let name = wide(&mut e, "C:\\Some\\Measured.bin");
+        let h = create_file_w(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE | GENERIC_READ,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0x80,
+            0,
+        );
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_SUCCESS);
+        let data = e.mem.alloc(0x10);
+        assert_eq!(
+            write_file(&mut e, h, Ptr::new(data), 0x0b, Ptr::new(0), 0),
+            1
+        );
+        let size = e.mem.alloc(8);
+        e.mem.set_u32(size, 0x5555_5555);
+        e.mem.set_u32(size + 4, 0x5555_5555);
+        e.kernel.last_error = 0x1234;
+        assert_eq!(get_file_size_ex(&mut e, h, Ptr::new(size)), 1);
+        assert_eq!((e.mem.u32(size), e.mem.u32(size + 4)), (0x0b, 0));
+        assert_eq!(e.kernel.last_error, 0x1234);
+        assert!(e
+            .kernel
+            .disk
+            .files
+            .contains_key(&b"c:\\some\\measured.bin".to_vec()));
+        // CREATE_NEW on it now fails as CreateFileA does.
+        let again = create_file_w(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            0,
+            0,
+            CREATE_NEW,
+            0x80,
+            0,
+        );
+        assert_eq!(again, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_EXISTS);
+    }
+
+    #[test]
+    fn get_file_size_ex_on_a_handle_that_is_not_open_fails_and_keeps_the_size() {
+        let mut e = Engine::new();
+        let size = e.mem.alloc(8);
+        e.mem.set_u32(size, 0x5555_5555);
+        for handle in [0u32, 0xffff_ffff, 0x1230] {
+            e.kernel.last_error = 0;
+            assert_eq!(get_file_size_ex(&mut e, handle, Ptr::new(size)), 0);
+            assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
+            assert_eq!(e.mem.u32(size), 0x5555_5555);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

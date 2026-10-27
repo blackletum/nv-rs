@@ -169,6 +169,42 @@ pub fn steam_api_register_callback(_e: &mut Engine, _callback: Ptr, _id: u32) {}
 /// `SteamAPI_UnregisterCallback(callback)` (`cdecl`, one word; `006ffc00`): nothing was kept.
 pub fn steam_api_unregister_callback(_e: &mut Engine, _callback: Ptr) {}
 
+// Platform: replaces STEAM_API.DLL SteamAPI_IsSteamRunning (import)
+/// `SteamAPI_IsSteamRunning()` (`cdecl`, no arguments, a `bool` in `AL`): false, the answer of
+/// the state this layer keeps, no Steam client (as [`steam_api_init`] answers). Not measured in
+/// that state: a Steam client ran on the measuring machine, and the player's `steam_api.dll`
+/// answered 1 there (2026-10-27, `build43-scratch/measure/platform5`).
+pub fn steam_api_is_steam_running(_e: &mut Engine) -> u32 {
+    0
+}
+
+// Platform: replaces STEAM_API.DLL SteamUserStats (import)
+/// `SteamUserStats()` (`cdecl`, no arguments): null. Measured (2026-10-27,
+/// `build43-scratch/measure/platform5`): the player's `steam_api.dll` in a 32-bit process
+/// answers null for `SteamUserStats`, `SteamFriends`, `SteamUtils`, `SteamUser` and `SteamApps`
+/// while `SteamAPI_Init` has not succeeded, the state this layer keeps.
+pub fn steam_user_stats(_e: &mut Engine) -> u32 {
+    0
+}
+
+// Platform: replaces STEAM_API.DLL SteamFriends (import)
+/// `SteamFriends()`: null, as measured ([`steam_user_stats`]).
+pub fn steam_friends(_e: &mut Engine) -> u32 {
+    0
+}
+
+// Platform: replaces STEAM_API.DLL SteamUtils (import)
+/// `SteamUtils()`: null, as measured ([`steam_user_stats`]).
+pub fn steam_utils(_e: &mut Engine) -> u32 {
+    0
+}
+
+// Platform: replaces STEAM_API.DLL SteamUser (import)
+/// `SteamUser()`: null, as measured ([`steam_user_stats`]).
+pub fn steam_user(_e: &mut Engine) -> u32 {
+    0
+}
+
 // Platform: replaces KERNEL32.DLL IsDebuggerPresent (import)
 /// `IsDebuggerPresent()`: no debugger.
 pub fn is_debugger_present(_e: &mut Engine) -> u32 {

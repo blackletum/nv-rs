@@ -152,6 +152,237 @@ pub fn wide_char_to_multi_byte(
     text.len() as u32
 }
 
+/// The days of `month` in `year` (proleptic Gregorian).
+fn month_days(year: u32, month: u32) -> u32 {
+    match month {
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// The `FILETIME` of `SYSTEMTIME` words as `SystemTimeToTzSpecificLocalTime` accepts them (the
+/// day of the week is not read); `None` for a time it refuses (measured: year 1601..=30827,
+/// month 1..=12, a day of that month, hour < 24, minute < 60, second < 60, milliseconds < 1000).
+pub fn system_time_ticks(w: &[u16; 8]) -> Option<u64> {
+    let [year, month, _, day, hour, minute, second, ms] = w.map(u32::from);
+    if !(1601..=30827).contains(&year)
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > month_days(year, month)
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+        || ms >= 1000
+    {
+        return None;
+    }
+    let days = zone::days_from_civil(i64::from(year), month, day);
+    let ms_total =
+        (days * 86_400 + i64::from(hour * 3600 + minute * 60 + second)) * 1000 + i64::from(ms);
+    Some((zone::UNIX_EPOCH_TICKS as i64 + ms_total * 10_000) as u64)
+}
+
+// Platform: replaces KERNEL32.DLL SystemTimeToTzSpecificLocalTime (import)
+/// `SystemTimeToTzSpecificLocalTime(zone, utc, local)` with no zone given (NULL: the player's
+/// own): the local time of `utc` by the zone's rules for that year (Windows keeps rules per year,
+/// which can differ from the current ones: `super::d3d9::time_zone_for_year`, captured), with
+/// the bias in effect at that moment; the day of the week is worked out. A time Windows refuses
+/// ([`system_time_ticks`]), or one whose local time would fall before 1601-01-01, answers FALSE
+/// with `ERROR_INVALID_PARAMETER` (87) and leaves `local` as it was; on success the last error
+/// is left as it was.
+///
+/// Measured on this machine (2026-10-27, `build43-scratch/measure/platform5`; zone US
+/// Eastern): the field checks above, a wrong day of the week ignored, 1601-01-01 00:00 UTC
+/// refused and 05:00 accepted (bias 300), 30827-12-31 23:59:59.999 accepted; the daylight
+/// changes it applied, scanned hour by hour in 15 years from 1601 to 30827, were those of
+/// `GetTimeZoneInformationForYear` for each year (first Sunday of April to last Sunday of
+/// October through 2006, second Sunday of March to first Sunday of November from 2007), not the
+/// current rules for every year. Not provided (stop the run): a zone passed in; a local time
+/// after 30827 (not measured: this zone is west of UTC); a time whose year by UTC and by local
+/// standard time differ while those years' rules differ (which year's rules Windows takes then
+/// is not measured).
+pub fn system_time_to_tz_specific_local_time(
+    e: &mut Engine,
+    zone_info: Ptr,
+    utc: Ptr,
+    local: Ptr,
+) -> u32 {
+    assert!(
+        zone_info.is_null(),
+        "SystemTimeToTzSpecificLocalTime with a zone passed in is not provided"
+    );
+    let words: [u16; 8] = std::array::from_fn(|i| e.mem.u16(utc.addr() + 2 * i as u32));
+    let Some(ticks) = system_time_ticks(&words) else {
+        e.kernel.last_error = 87;
+        return 0;
+    };
+    let utc_year = u32::from(words[0]);
+    let rules_utc = ZoneInfo::from_bytes(&super::d3d9::time_zone_for_year(e, utc_year));
+    let seconds = zone::filetime_seconds(ticks);
+    // `zone::in_daylight` works the changes out in the year of the local standard time.
+    let standard = seconds - 60 * i64::from(rules_utc.bias + rules_utc.standard_bias);
+    let (standard_year, _, _) = zone::civil_from_days(standard.div_euclid(86_400));
+    // Outside 1601..=30827 Windows keeps no rules; such a local time is refused or not provided
+    // below whichever rules are taken.
+    let rules = if standard_year as u32 == utc_year || !(1601..=30827).contains(&standard_year) {
+        rules_utc
+    } else {
+        let other = ZoneInfo::from_bytes(&super::d3d9::time_zone_for_year(e, standard_year as u32));
+        assert!(
+            other == rules_utc,
+            "SystemTimeToTzSpecificLocalTime: {utc_year} by UTC is {standard_year} locally and the two years' rules differ: not provided"
+        );
+        other
+    };
+    let bias = zone::bias_at(&rules, seconds);
+    let local_ticks = ticks as i64 - i64::from(bias) * 600_000_000;
+    if local_ticks < 0 {
+        e.kernel.last_error = 87;
+        return 0;
+    }
+    let out =
+        zone::system_time(local_ticks as u64).expect("a local time within the FILETIME range");
+    assert!(
+        out[0] <= 30827,
+        "SystemTimeToTzSpecificLocalTime: a local time after 30827 is not provided"
+    );
+    for (i, w) in out.iter().enumerate() {
+        e.mem.set_u16(local.addr() + 2 * i as u32, *w);
+    }
+    1
+}
+
+#[cfg(test)]
+mod tests_local_time {
+    use super::*;
+
+    /// US Eastern's per-year rules as the measurement found them: first Sunday of April to last
+    /// Sunday of October through 2006, second Sunday of March to first Sunday of November after.
+    fn eastern_years(e: &mut Engine) {
+        let line = |first: u32, last: u32, std: [u16; 8], dst: [u16; 8]| {
+            let mut b = vec![0u8; 172];
+            b[0..4].copy_from_slice(&300i32.to_le_bytes());
+            for (i, w) in std.iter().enumerate() {
+                b[0x44 + 2 * i..0x46 + 2 * i].copy_from_slice(&w.to_le_bytes());
+            }
+            for (i, w) in dst.iter().enumerate() {
+                b[0x98 + 2 * i..0x9a + 2 * i].copy_from_slice(&w.to_le_bytes());
+            }
+            b[0xa8..0xac].copy_from_slice(&(-60i32).to_le_bytes());
+            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            format!("GetTimeZoneInformationForYear\t{first:x} {last:x}\t1\t{hex}\n")
+        };
+        let table = line(
+            1601,
+            2006,
+            [0, 10, 0, 5, 2, 0, 0, 0],
+            [0, 4, 0, 1, 2, 0, 0, 0],
+        ) + &line(
+            2007,
+            30827,
+            [0, 11, 0, 1, 2, 0, 0, 0],
+            [0, 3, 0, 2, 2, 0, 0, 0],
+        );
+        super::super::d3d9::load_adapter_table(e, &table);
+    }
+
+    fn convert(e: &mut Engine, words: [u16; 8]) -> (u32, [u16; 8]) {
+        let utc = e.mem.alloc(16);
+        let local = e.mem.alloc(16);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u16(utc + 2 * i as u32, *w);
+            e.mem.set_u16(local + 2 * i as u32, 0xaaaa);
+        }
+        let r =
+            system_time_to_tz_specific_local_time(e, Ptr::new(0), Ptr::new(utc), Ptr::new(local));
+        (r, std::array::from_fn(|i| e.mem.u16(local + 2 * i as u32)))
+    }
+
+    /// The measured answers (`platform5-2026-10-27.tsv`).
+    #[test]
+    fn local_times_match_the_measured_answers() {
+        let mut e = Engine::new();
+        eastern_years(&mut e);
+        let ok: &[([u16; 8], [u16; 8])] = &[
+            ([2026, 7, 3, 1, 12, 0, 0, 0], [2026, 7, 3, 1, 8, 0, 0, 0]),
+            (
+                [2026, 1, 9, 15, 3, 4, 5, 678],
+                [2026, 1, 3, 14, 22, 4, 5, 678],
+            ),
+            (
+                [2026, 3, 0, 8, 6, 59, 59, 999],
+                [2026, 3, 0, 8, 1, 59, 59, 999],
+            ),
+            ([2026, 3, 0, 8, 7, 0, 0, 0], [2026, 3, 0, 8, 3, 0, 0, 0]),
+            (
+                [2026, 11, 0, 1, 5, 59, 59, 999],
+                [2026, 11, 0, 1, 1, 59, 59, 999],
+            ),
+            ([2026, 11, 0, 1, 6, 0, 0, 0], [2026, 11, 0, 1, 1, 0, 0, 0]),
+            ([1601, 1, 1, 1, 5, 0, 0, 0], [1601, 1, 1, 1, 0, 0, 0, 0]),
+            (
+                [30827, 12, 0, 31, 23, 59, 59, 999],
+                [30827, 12, 5, 31, 18, 59, 59, 999],
+            ),
+            ([2024, 2, 0, 29, 12, 0, 0, 0], [2024, 2, 4, 29, 7, 0, 0, 0]),
+            ([2000, 2, 0, 29, 12, 0, 0, 0], [2000, 2, 2, 29, 7, 0, 0, 0]),
+        ];
+        for (utc, local) in ok {
+            e.kernel.last_error = 0x1234;
+            assert_eq!(convert(&mut e, *utc), (1, *local), "{utc:?}");
+            assert_eq!(e.kernel.last_error, 0x1234);
+        }
+        let refused: &[[u16; 8]] = &[
+            [1601, 1, 1, 1, 0, 0, 0, 0],
+            [1600, 12, 0, 31, 23, 0, 0, 0],
+            [30828, 1, 0, 1, 0, 0, 0, 0],
+            [0, 1, 0, 1, 0, 0, 0, 0],
+            [2026, 0, 0, 1, 0, 0, 0, 0],
+            [2026, 13, 0, 1, 0, 0, 0, 0],
+            [2026, 1, 0, 0, 0, 0, 0, 0],
+            [2026, 1, 0, 32, 0, 0, 0, 0],
+            [2026, 2, 0, 29, 0, 0, 0, 0],
+            [2100, 2, 0, 29, 12, 0, 0, 0],
+            [2026, 4, 0, 31, 0, 0, 0, 0],
+            [2026, 1, 0, 1, 24, 0, 0, 0],
+            [2026, 1, 0, 1, 0, 60, 0, 0],
+            [2026, 1, 0, 1, 0, 0, 60, 0],
+            [2026, 1, 0, 1, 0, 0, 0, 1000],
+            [0xcccc; 8],
+            [0; 8],
+        ];
+        for utc in refused {
+            e.kernel.last_error = 0;
+            assert_eq!(convert(&mut e, *utc), (0, [0xaaaa; 8]), "{utc:?}");
+            assert_eq!(e.kernel.last_error, 87);
+        }
+    }
+
+    /// The daylight changes the measurement's hour-by-hour scan found, by year (UTC hour of
+    /// each change).
+    #[test]
+    fn daylight_changes_follow_each_year_s_rules() {
+        let mut e = Engine::new();
+        eastern_years(&mut e);
+        let changes: &[(u16, (u16, u16), (u16, u16))] = &[
+            (1700, (4, 4), (10, 31)),
+            (1986, (4, 6), (10, 26)),
+            (2006, (4, 2), (10, 29)),
+            (2007, (3, 11), (11, 4)),
+            (2100, (3, 14), (11, 7)),
+        ];
+        for &(year, (m1, d1), (m2, d2)) in changes {
+            assert_eq!(convert(&mut e, [year, m1, 0, d1, 6, 0, 0, 0]).1[4], 1);
+            assert_eq!(convert(&mut e, [year, m1, 0, d1, 7, 0, 0, 0]).1[4], 3);
+            assert_eq!(convert(&mut e, [year, m2, 0, d2, 5, 0, 0, 0]).1[4], 1);
+            assert_eq!(convert(&mut e, [year, m2, 0, d2, 6, 0, 0, 0]).1[4], 1);
+            assert_eq!(convert(&mut e, [year, m2, 0, d2, 7, 0, 0, 0]).1[4], 2);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

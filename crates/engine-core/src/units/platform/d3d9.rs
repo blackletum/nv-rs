@@ -107,6 +107,9 @@ pub struct Adapter {
     folders: HashMap<u32, (u32, Vec<u8>)>,
     /// `GetTimeZoneInformation`'s answer when captured and the `TIME_ZONE_INFORMATION` bytes.
     time_zone: Option<(u32, Vec<u8>)>,
+    /// `GetTimeZoneInformationForYear(year, NULL, ..)`: (first year, last year, the 172
+    /// `TIME_ZONE_INFORMATION` bytes) for runs of years with the same answer.
+    zone_years: Vec<(u32, u32, Vec<u8>)>,
     /// `EnumDisplayDevicesA(NULL, index, .., 0)`'s answer and `DISPLAY_DEVICEA` bytes by index.
     display_devices: HashMap<u32, (u32, Vec<u8>)>,
     /// The `NvApi*` lines (`scripts/nvapi-capture`).
@@ -173,6 +176,10 @@ impl Adapter {
                     a.cpuid.insert(words(f[1])[0], [r[0], r[1], r[2], r[3]]);
                 }
                 "GetTimeZoneInformation" => a.time_zone = Some((hex(2), bytes(f[3]))),
+                "GetTimeZoneInformationForYear" => {
+                    let w = words(f[1]);
+                    a.zone_years.push((w[0], w[1], bytes(f[3])));
+                }
                 "GetACP" => a.ansi_code_page = Some(hex(2)),
                 "GetOEMCP" => a.oem_code_page = Some(hex(2)),
                 "IsValidCodePage" => {
@@ -410,6 +417,20 @@ pub fn time_zone(e: &mut Engine) -> Vec<u8> {
         Some((_, bytes)) if bytes.len() == 172 => bytes.clone(),
         _ => panic!("the adapter table has no time zone (GetTimeZoneInformation): {CAPTURE_HINT}"),
     }
+}
+
+/// The player's time zone rules for `year` (`GetTimeZoneInformationForYear(year, NULL, ..)`,
+/// the 172 `TIME_ZONE_INFORMATION` bytes: the rules Windows keeps for each year, which can
+/// differ from the current ones `GetTimeZoneInformation` answers).
+pub fn time_zone_for_year(e: &mut Engine, year: u32) -> Vec<u8> {
+    let found = adapter(e)
+        .zone_years
+        .iter()
+        .find(|(first, last, bytes)| (*first..=*last).contains(&year) && bytes.len() == 172)
+        .map(|(_, _, bytes)| bytes.clone());
+    found.unwrap_or_else(|| {
+        panic!("the adapter table has no time zone rules for {year} (GetTimeZoneInformationForYear): {CAPTURE_HINT}")
+    })
 }
 
 /// The player's folder for a CSIDL (`SHGetFolderPathA`'s result and path), if the table has it.

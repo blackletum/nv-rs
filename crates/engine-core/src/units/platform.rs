@@ -17,6 +17,7 @@ pub mod loader;
 pub mod mixer;
 pub mod mmio;
 pub mod nvapi;
+pub mod process;
 pub mod sound_out;
 pub mod time;
 pub mod vorbisfile;
@@ -1163,6 +1164,8 @@ pub struct Kernel {
     pub com_threads: std::collections::BTreeMap<u32, u32>,
     /// The critical sections by address: the mutex object standing for each.
     pub critical_sections: std::collections::BTreeMap<u32, u32>,
+    /// The process side: the ANSI command line and the environment blocks ([`process`]).
+    pub process: process::Process,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
     last_error: u32,
 }
@@ -2350,6 +2353,83 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "SteamAPI_UnregisterCallback",
             entry!(0, window::steam_api_unregister_callback(Ptr)).1,
         ),
+        // The platform5 imports (slot a04): begin.
+        (
+            "steam_api.dll",
+            "SteamAPI_IsSteamRunning",
+            entry!(0, window::steam_api_is_steam_running() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUserStats",
+            entry!(0, window::steam_user_stats() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamFriends",
+            entry!(0, window::steam_friends() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUtils",
+            entry!(0, window::steam_utils() -> u32).1,
+        ),
+        (
+            "steam_api.dll",
+            "SteamUser",
+            entry!(0, window::steam_user() -> u32).1,
+        ),
+        (
+            k,
+            "GetModuleFileNameA",
+            entry!(0, process::get_module_file_name_a(u32, Ptr, u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCommandLineA",
+            entry!(0, process::get_command_line_a() -> u32).1,
+        ),
+        (
+            k,
+            "GetEnvironmentStringsW",
+            entry!(0, process::get_environment_strings_w() -> u32).1,
+        ),
+        (
+            k,
+            "FreeEnvironmentStringsW",
+            entry!(0, process::free_environment_strings_w(u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetCurrentProcessId",
+            entry!(0, process::get_current_process_id() -> u32).1,
+        ),
+        (
+            k,
+            "HeapFree",
+            entry!(0, process::heap_free(u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "HeapReAlloc",
+            entry!(0, process::heap_re_alloc(u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "CreateFileW",
+            entry!(0, files::create_file_w(Ptr, u32, u32, u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "GetFileSizeEx",
+            entry!(0, files::get_file_size_ex(u32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "SystemTimeToTzSpecificLocalTime",
+            entry!(0, time::system_time_to_tz_specific_local_time(Ptr, Ptr, Ptr) -> u32).1,
+        ),
+        // The platform5 imports: end.
         (
             "ADVAPI32.dll",
             "RegOpenKeyExA",

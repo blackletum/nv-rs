@@ -45,6 +45,7 @@ extern "system" {
     fn GetModuleHandleA(name: *const u8) -> *mut c_void;
     fn GetWindowsDirectoryA(buffer: *mut u8, size: u32) -> u32;
     fn GetTimeZoneInformation(info: *mut u8) -> u32;
+    fn GetTimeZoneInformationForYear(year: u16, dynamic: *mut c_void, info: *mut u8) -> i32;
     fn GetACP() -> u32;
     fn GetOEMCP() -> u32;
     fn IsValidCodePage(code_page: u32) -> i32;
@@ -79,6 +80,30 @@ unsafe fn time_zone(o: &mut impl Write) {
     let mut info = vec![0u8; 172];
     let id = GetTimeZoneInformation(info.as_mut_ptr());
     writeln!(o, "GetTimeZoneInformation\t\t{id:x}\t{}", hex(&info)).unwrap();
+    // The rules Windows keeps for each year (`SystemTimeToTzSpecificLocalTime` follows them; they
+    // can differ from the current ones): runs of years with the same answer merged, each line the
+    // first and last year, the answer and the bytes.
+    let mut run: Option<(u16, u16, i32, Vec<u8>)> = None;
+    for year in 1601..=30827u16 {
+        let mut bytes = vec![0u8; 172];
+        let ok = GetTimeZoneInformationForYear(year, std::ptr::null_mut(), bytes.as_mut_ptr());
+        match &mut run {
+            Some(r) if r.2 == ok && r.3 == bytes => r.1 = year,
+            _ => {
+                if let Some(r) = run.take() {
+                    zone_year_line(o, &r);
+                }
+                run = Some((year, year, ok, bytes));
+            }
+        }
+    }
+    if let Some(r) = run {
+        zone_year_line(o, &r);
+    }
+}
+
+fn zone_year_line(o: &mut impl Write, r: &(u16, u16, i32, Vec<u8>)) {
+    writeln!(o, "GetTimeZoneInformationForYear\t{:x} {:x}\t{:x}\t{}", r.0, r.1, r.2 as u32, hex(&r.3)).unwrap();
 }
 
 /// The display devices as `EnumDisplayDevicesA(NULL, index, info, 0)` lists them (the game's
