@@ -4070,7 +4070,11 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0096a540, &args![block, item]);
         assert_eq!(e.mem.u8(item + 8), 0);
-        assert_eq!(e.mem.u32(block + 8), 0x30b9_dad0, "the map's own word is left");
+        assert_eq!(
+            e.mem.u32(block + 8),
+            0x30b9_dad0,
+            "the map's own word is left"
+        );
         assert_eq!(calls(&e, SUB_OBJECT_RELEASE), vec![vec![block + 0xc, item]]);
     }
 
