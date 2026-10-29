@@ -3559,16 +3559,18 @@ pub fn fn_008761e0(e: &mut Engine, this: Ptr, _unused_0: u32, interface_arg: u32
                     e.call(0x00a5_9c60, &args![owner, point]);
                 }
             }
+            // Still inside the Pip-Boy test (00876295 jumps past it to 00876376): the menu
+            // screen's position becomes the scene node's offset only while the Pip-Boy is up.
+            let member = e.call(MEMBER_8C, &args![menu_screen]).u32();
+            let result = e.call(0x004a_0bd0, &args![member, out_a]).u32();
+            let words = [
+                e.mem.u32(result),
+                e.mem.u32(result + 4),
+                e.mem.u32(result + 8),
+            ];
+            let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+            fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
         }
-        let member = e.call(MEMBER_8C, &args![menu_screen]).u32();
-        let result = e.call(0x004a_0bd0, &args![member, out_a]).u32();
-        let words = [
-            e.mem.u32(result),
-            e.mem.u32(result + 4),
-            e.mem.u32(result + 8),
-        ];
-        let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
-        fn_008750e0(e, Ptr::new(indexed), words[0], words[1], words[2]);
         if e.call(IS_IN_PIPBOY_MENU, &args![]).u8() != 0 {
             let positions = controls;
             e.mem.set_u32(positions + 8, 0);
@@ -8933,9 +8935,11 @@ mod tests_second {
         let colors = calls_to(&log, SET_COLOR);
         assert_eq!(colors.len(), 1);
         assert_eq!(colors[0][0], 0x6000);
-        // The position of the menu screen reaches the indexed global.
-        assert_eq!(r.e.mem.u32(indexed + 0x1e4), 0xaa);
-        assert_eq!(r.e.mem.u32(indexed + 0x1ec), 0xcc);
+        // Without the Pip-Boy the menu screen's position does not reach the scene node's
+        // offset (00876295 jumps over 00876371): the race menu's face lights read 0 there.
+        assert_eq!(r.e.mem.u32(indexed + 0x1e4), 0);
+        assert_eq!(r.e.mem.u32(indexed + 0x1ec), 0);
+        assert!(calls_to(&log, 0x004a_0bd0).is_empty());
         // The pipboy-only parts did not run.
         assert!(calls_to(&log, 0x007f_8720).is_empty());
         assert!(calls_to(&log, 0x0044_0460).is_empty());
