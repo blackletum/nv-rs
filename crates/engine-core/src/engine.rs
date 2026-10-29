@@ -241,7 +241,7 @@ impl Engine {
         // keeps that value for the whole run (nonzero: no report).
         mem.map(CRT_MATHERR_SKIP, 4);
         mem.write(CRT_MATHERR_SKIP, &CRT_MATHERR_SKIP_IMAGE.to_le_bytes());
-        Engine {
+        let mut engine = Engine {
             mem,
             funcs,
             call_cache: vec![(0, None); CALL_CACHE_LEN].into_boxed_slice(),
@@ -265,7 +265,10 @@ impl Engine {
             platform_calls: AddrSet::default(),
             call_trace: crate::call_trace::for_new_engine(),
             stack_frames: Vec::new(),
-        }
+        };
+        // `NV_WATCH` (a diagnostic, not exe behaviour): reports the writers of a range of memory.
+        crate::watch_check::install(&mut engine);
+        engine
     }
 
     /// [`Engine::new`] with the data sections of the player's FalloutNV.exe

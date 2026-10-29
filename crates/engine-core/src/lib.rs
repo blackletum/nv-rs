@@ -72,6 +72,7 @@ pub mod static_init;
 pub mod thread_host;
 pub mod types;
 pub mod units;
+pub mod watch_check;
 pub mod x87;
 
 pub use abi::{AbiFn, Ret};
