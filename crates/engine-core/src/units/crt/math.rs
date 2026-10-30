@@ -971,45 +971,45 @@ use crate::x87::{
 
 /// The x87 register stack of one routine, `ST0` last.
 #[derive(Default)]
-struct Fpu {
-    st: Vec<X87Ext>,
+pub(super) struct Fpu {
+    pub(super) st: Vec<X87Ext>,
 }
 
 impl Fpu {
     /// The stack with `ST0` = `value`.
-    fn with(value: X87Ext) -> Self {
+    pub(super) fn with(value: X87Ext) -> Self {
         Fpu { st: vec![value] }
     }
 
     /// `FLD`.
-    fn push(&mut self, value: X87Ext) {
+    pub(super) fn push(&mut self, value: X87Ext) {
         self.st.push(value);
     }
 
     /// `FSTP ST0`: the value popped.
-    fn pop(&mut self) -> X87Ext {
+    pub(super) fn pop(&mut self) -> X87Ext {
         self.st.pop().expect("x87 stack underflow")
     }
 
     /// `ST(i)`.
-    fn st(&self, i: usize) -> X87Ext {
+    pub(super) fn st(&self, i: usize) -> X87Ext {
         self.st[self.st.len() - 1 - i]
     }
 
     /// `ST(i)` replaced.
-    fn set(&mut self, i: usize, value: X87Ext) {
+    pub(super) fn set(&mut self, i: usize, value: X87Ext) {
         let at = self.st.len() - 1 - i;
         self.st[at] = value;
     }
 
     /// `FXCH ST(i)`.
-    fn fxch(&mut self, i: usize) {
+    pub(super) fn fxch(&mut self, i: usize) {
         let top = self.st.len() - 1;
         self.st.swap(top, top - i);
     }
 
     /// `FSTP ST(i)`: `ST(i)` = `ST0`, then pop.
-    fn fstp(&mut self, i: usize) {
+    pub(super) fn fstp(&mut self, i: usize) {
         let top = self.pop();
         if i > 0 {
             self.set(i - 1, top);
@@ -1039,7 +1039,7 @@ fn jp_taken(ah: u8, mask: u8) -> bool {
 /// `__fload_withFB` (`00ed27c5`) builds by hand for an exponent of all ones (sign and exponent
 /// `0x7fff`, the significand shifted up by 11 with the integer bit, which is the lowest exponent
 /// bit), and what `FLD qword` loads for every other value.
-fn ext_of_double(bits: u64) -> X87Ext {
+pub(super) fn ext_of_double(bits: u64) -> X87Ext {
     if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000 {
         return X87Ext::load64(f64::from_bits(bits));
     }
@@ -1052,7 +1052,7 @@ fn ext_of_double(bits: u64) -> X87Ext {
 }
 
 /// `FLD tbyte` of the extended constant at `at`.
-fn load_extended(e: &Engine, at: u32) -> X87Ext {
+pub(super) fn load_extended(e: &Engine, at: u32) -> X87Ext {
     let mut bytes = [0u8; 10];
     bytes.copy_from_slice(&e.mem.bytes(at, 10));
     X87Ext(bytes)
@@ -4567,10 +4567,9 @@ const TAIL_UNDERFLOW_FACTOR: u32 = 0x010f_3408;
 const TAIL_OVERFLOW_SCALE: u32 = 0x010f_33f0;
 const TAIL_OVERFLOW_BOUND: u32 = 0x010f_33e0;
 const TAIL_OVERFLOW_FACTOR: u32 = 0x010f_3400;
-/// The Pentium `FDIV` test's answer (`0126fd94`, `_fpmath`'s) and the division `exp`'s handler
-/// calls when it is 1 (`00ed6ae1`, register operands; not translated).
+/// The Pentium `FDIV` test's answer (`0126fd94`, `_fpmath`'s): at 1 `exp`'s handler divides
+/// through `00ed6ae1` and `fmod`'s takes the remainder through `00ed6cfc` (`fdiv.rs`).
 const FDIV_FLAWED: u32 = 0x0126_fd94;
-const ADJUSTED_FDIVR: u32 = 0x00ed_6ae1;
 /// `exp`'s entries' SSE2 bodies.
 const EXP_SSE2: u32 = 0x00ed_bd68;
 const EXP_SSE2_REGISTER: u32 = 0x00ed_bd50;
@@ -4579,9 +4578,10 @@ const EXP_SSE2_REGISTER: u32 = 0x00ed_bd50;
 /// (`EBP-0xa4`), the descriptor (`EBP-0x94`), the error kind byte (`EBP-0x90`: 0 none, 0xfe
 /// check the result's range, 0xff check for an overflow, any other the error type), the
 /// flags (`EBP-0x2c8`: bit 0 the arguments are already in the `_exception`, bit 1 two
-/// arguments), `CL`/`CH` (the operands' signs, 4 when negative) and `DL`, the register stack,
-/// and the `_exception` block (`EBP-0x8e`: type, name, argument 1, argument 2, result) with the
-/// saved word's slot after it, in memory for `__87except`.
+/// arguments), `CL`/`CH` (the operands' signs, 4 when negative) and `DL`, the condition codes of
+/// the status word a handler keeps at `EBP-0xa0` (its high byte, `EBP-0x9f`, as `AH` holds them),
+/// the register stack, and the `_exception` block (`EBP-0x8e`: type, name, argument 1, argument
+/// 2, result) with the saved word's slot after it, in memory for `__87except`.
 struct Dispatch {
     saved: u16,
     descriptor: u32,
@@ -4590,6 +4590,7 @@ struct Dispatch {
     cl: u8,
     ch: u8,
     dl: u8,
+    status_ah: u8,
     fpu: Fpu,
     exception: u32,
 }
@@ -4606,6 +4607,7 @@ impl Dispatch {
             cl: 0,
             ch: 0,
             dl: 0,
+            status_ah: 0,
             fpu: Fpu::default(),
             exception: block,
         }
@@ -4669,175 +4671,389 @@ fn trandisp(e: &mut Engine, d: &mut Dispatch, two: bool) {
     run_handler(e, d, target);
 }
 
-/// The handlers `exp`'s, `atan2`'s and `fmod`'s descriptors point at, by their addresses.
+/// The handlers `exp`'s, `atan2`'s and `fmod`'s descriptors point at, by their addresses (the
+/// dispatcher jumps to them, `JMP dword ptr [EBX]`; their `RET` returns to its caller).
 fn run_handler(e: &mut Engine, d: &mut Dispatch, target: u32) {
     match target {
         // exp
         0x00ed_9301 => exp_finite(e, d),
-        0x00ed_265d => {
-            // FSTP ST0; FLD1.
-            d.fpu.pop();
-            d.fpu.push(X87Ext::load64(1.0));
-        }
-        0x00ed_2662 => {
-            // FSTP tbyte; FLD tbyte; TEST byte ptr [EBP-0x97], 0x40: the quiet bit.
-            if d.fpu.st(0).significand() & (1 << 62) != 0 {
-                d.kind = 7;
-            } else {
-                d.kind = 1;
-                let sum = x87_fadd(d.fpu.st(0), double_operand(e, DISPATCH_NAN_ADDEND));
-                d.fpu.set(0, sum);
-            }
-        }
-        0x00ed_9441 => {
-            // OR CL, CL; JNZ 00ed93f4 (to 00ed2656: FSTP ST0; FLDZ).
-            d.fpu.pop();
-            if d.cl != 0 {
-                d.fpu.push(X87Ext::load64(0.0));
-            } else {
-                d.fpu.push(load_extended(e, POW_POLE));
-            }
-        }
+        0x00ed_265d => pop_load_one(&mut d.fpu),
+        0x00ed_2662 => nan_plus_one(e, d),
+        0x00ed_9441 => exp_infinite(e, d),
         // atan2
-        0x00ed_7cbc => {
-            // MOV byte ptr [EBP-0x90], 0xfe; FABS both; FPATAN; pi - it for a negative x; FCHS
-            // for a negative y.
-            d.kind = 0xfe;
-            let x = x87_fabs(d.fpu.pop());
-            let y = x87_fabs(d.fpu.pop());
-            let mut r = x87_fpatan(y, x);
-            if d.cl != 0 {
-                r = x87_fsub(x87_fld_constant(X87Constant::Pi), r);
-            }
-            if d.ch != 0 {
-                r = x87_fchs(r);
-            }
-            d.fpu.push(r);
-        }
-        0x00ed_7d38 => {
-            // FSTP ST0; MOV CL, CH; 00ed7d0c (FSTP ST0; FLD tbyte [011c1d0a]); 00ed2713.
-            d.fpu.pop();
-            d.cl = d.ch;
-            d.fpu.pop();
-            let mut r = load_extended(e, HALF_PI_EXTENDED);
-            if d.cl != 0 {
-                r = x87_fchs(r);
-            }
-            d.fpu.push(r);
-        }
-        0x00ed_7d15 => {
-            // FSTP ST0 twice; FLDPI for a negative x, else FLDZ; FCHS for a negative y.
-            d.fpu.pop();
-            d.fpu.pop();
-            let mut r = if d.cl != 0 {
-                x87_fld_constant(X87Constant::Pi)
-            } else {
-                X87Ext::load64(0.0)
-            };
-            if d.ch != 0 {
-                r = x87_fchs(r);
-            }
-            d.fpu.push(r);
-        }
-        0x00ed_268d | 0x00ed_268f => {
-            // 00ed268d: FXCH first; then the NaN on top is tested and FADDP adds the two.
-            if target == 0x00ed_268d {
-                d.fpu.fxch(1);
-            }
-            d.kind = if d.fpu.st(0).significand() & (1 << 62) != 0 {
-                7
-            } else {
-                1
-            };
-            let top = d.fpu.pop();
-            let sum = x87_fadd(d.fpu.st(0), top);
-            d.fpu.set(0, sum);
-        }
-        0x00ed_26b7 => {
-            // Both NaN: 7 only when both are quiet (the second tested after FXCH).
-            d.kind = 1;
-            if d.fpu.st(0).significand() & (1 << 62) != 0 {
-                d.fpu.fxch(1);
-                if d.fpu.st(0).significand() & (1 << 62) != 0 {
-                    d.kind = 7;
-                }
-            }
-            let top = d.fpu.pop();
-            let sum = x87_fadd(d.fpu.st(0), top);
-            d.fpu.set(0, sum);
-        }
-        0x00ed_26f6 => {
-            // FSTP ST0 twice; FLD tbyte [011c1d00]; the error type 1 unless one is set.
-            d.fpu.pop();
-            d.fpu.pop();
-            d.fpu.push(load_extended(e, INDEFINITE));
-            if (d.kind as i8) <= 0 {
-                d.kind = 1;
-            }
-        }
+        0x00ed_7cbc => atan2_finite(d),
+        0x00ed_7d38 => atan2_half_pi(e, d),
+        0x00ed_7d15 => atan2_zero_y(d),
+        0x00ed_268d => nan_sum_swapped(d),
+        0x00ed_268f => nan_sum(d),
+        0x00ed_26b7 => nan_sum_both(d),
+        0x00ed_26f6 => pop_two_indefinite(e, d),
         // fmod
         0x00ec_9144 => fmod_finite(e, d),
-        0x00ed_2654 => {
-            // FSTP ST0 twice; FLDZ.
-            d.fpu.pop();
-            d.fpu.pop();
-            d.fpu.push(X87Ext::load64(0.0));
-        }
+        0x00ed_2654 => pop_two_load_zero(&mut d.fpu),
         _ => panic!("{target:08x}: a dispatch handler not translated"),
     }
 }
 
-/// `exp`'s handler for a finite nonzero argument (`00ed9301`): `x * log2(e)` (`FLDL2E`,
-/// `FMULP`), split by `00ed944e` into `n` and `2^|f| - 1`; plus 1, inverted for a negative
-/// fraction (`FDIVRP`, or `00ed6ae1` with the Pentium flaw flag set), scaled by `n` unless it
-/// is zero (`FTST`'s C3 in `DL`), the sign flag `CH` cleared, `n` dropped (`00ed2648`). A product
-/// at or beyond the bound `011c274e` gives +infinity (error kind 0xfe left for the tail) or, for
-/// a negative one, 0 with the kind 4 (underflow).
+/// `FTST`'s condition codes as `AH` holds them (`ST0` against +0).
+fn ftst_ah(x: X87Ext) -> u8 {
+    fcom_ah(x, X87Ext::load64(0.0))
+}
+
+// Translated from 00ed2648 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' tail (no Ghidra name; `exp`'s `00ed9301` jumps to it): `FXCH; FSTP ST0`, `ST1`
+/// dropped.
+fn drop_st1(fpu: &mut Fpu) {
+    fpu.fxch(1);
+    fpu.pop();
+}
+
+// Translated from 00ed2654 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `fmod`'s for a zero `y` with a normal `x`): `FSTP ST0`, then
+/// `00ed2656`.
+fn pop_two_load_zero(fpu: &mut Fpu) {
+    fpu.pop();
+    pop_load_zero(fpu);
+}
+
+// Translated from 00ed2656 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' tail (no Ghidra name): `FSTP ST0; FLDZ`, +0 in place of `ST0`.
+fn pop_load_zero(fpu: &mut Fpu) {
+    fpu.pop();
+    fpu.push(X87Ext::load64(0.0));
+}
+
+// Translated from 00ed265b (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name): `FSTP ST0`, then `00ed265d`.
+fn pop_two_load_one(fpu: &mut Fpu) {
+    fpu.pop();
+    pop_load_one(fpu);
+}
+
+// Translated from 00ed265d (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `exp`'s for a zero argument): `FSTP ST0; FLD1`, 1 in place of
+/// `ST0`.
+fn pop_load_one(fpu: &mut Fpu) {
+    fpu.pop();
+    fpu.push(X87Ext::load64(1.0));
+}
+
+// Translated from 00ed2662 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `exp`'s for a NaN): `FSTP tbyte [EBP-0x9e]; FLD tbyte
+/// [EBP-0x9e]` (the value as it was), then `TEST byte ptr [EBP-0x97], 0x40`, the quiet bit
+/// (significand bit 62): a quiet NaN sets the error kind 7 and is left; a signalling one sets
+/// it to 1 and gets the double at `011c1d14` added (`FADD qword`, which quiets it).
+fn nan_plus_one(e: &mut Engine, d: &mut Dispatch) {
+    if d.fpu.st(0).significand() & (1 << 62) != 0 {
+        d.kind = 7;
+    } else {
+        d.kind = 1;
+        let sum = x87_fadd(d.fpu.st(0), double_operand(e, DISPATCH_NAN_ADDEND));
+        d.fpu.set(0, sum);
+    }
+}
+
+// Translated from 00ed268d (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `atan2`'s for a NaN `y`): `FXCH`, then `00ed268f`.
+fn nan_sum_swapped(d: &mut Dispatch) {
+    d.fpu.fxch(1);
+    nan_sum(d);
+}
+
+// Translated from 00ed268f (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `atan2`'s for a NaN `x`): `ST0` through the frame as
+/// `00ed2662` does, the error kind 7 for a quiet NaN and 1 for a signalling one, then `FADDP`
+/// (`ST1 = ST1 + ST0`, popped: the NaN the x87 picks).
+fn nan_sum(d: &mut Dispatch) {
+    d.kind = if d.fpu.st(0).significand() & (1 << 62) != 0 {
+        7
+    } else {
+        1
+    };
+    let top = d.fpu.pop();
+    let sum = x87_fadd(d.fpu.st(0), top);
+    d.fpu.set(0, sum);
+}
+
+// Translated from 00ed26b7 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `atan2`'s for two NaNs): `ST0` tested as `00ed2662` does; a quiet
+/// one has `FXCH` and the other tested too, the error kind 7 only when both are quiet, else 1;
+/// then `FADDP`.
+fn nan_sum_both(d: &mut Dispatch) {
+    d.kind = 1;
+    if d.fpu.st(0).significand() & (1 << 62) != 0 {
+        d.fpu.fxch(1);
+        if d.fpu.st(0).significand() & (1 << 62) != 0 {
+            d.kind = 7;
+        }
+    }
+    let top = d.fpu.pop();
+    let sum = x87_fadd(d.fpu.st(0), top);
+    d.fpu.set(0, sum);
+}
+
+// Translated from 00ed26f6 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handler (no Ghidra name; `atan2`'s for two infinities): `FSTP ST0`, then `00ed26f8`.
+fn pop_two_indefinite(e: &mut Engine, d: &mut Dispatch) {
+    d.fpu.pop();
+    pop_indefinite(e, d);
+}
+
+// Translated from 00ed26f8 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' tail (no Ghidra name): `FSTP ST0; FLD tbyte [011c1d00]` (the indefinite NaN in
+/// place of `ST0`); an error kind above 0 (`CMP byte [EBP-0x90], 0; JG`, signed) is kept,
+/// otherwise `00ed2709` sets it to 1.
+fn pop_indefinite(e: &mut Engine, d: &mut Dispatch) {
+    d.fpu.pop();
+    d.fpu.push(load_extended(e, INDEFINITE));
+    if (d.kind as i8) <= 0 {
+        kind_one(d);
+    }
+}
+
+// Translated from 00ed2709 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' tail (no Ghidra name): `MOV byte ptr [EBP-0x90], 1` (the error kind 1), then
+/// `OR CL, CL`, whose flags the code after the dispatch does not test.
+fn kind_one(d: &mut Dispatch) {
+    d.kind = 1;
+}
+
+// Translated from 00ed2713 (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' tail (no Ghidra name; `CL` the sign, 0 for positive): `FCHS` unless `CL` is 0.
+fn negate_unless_zero(cl: u8, fpu: &mut Fpu) {
+    if cl != 0 {
+        let negated = x87_fchs(fpu.st(0));
+        fpu.set(0, negated);
+    }
+}
+
+// Translated from 00ed7cbc (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan2`'s handler for two normal operands (no Ghidra name; `ST1` = `y`, `ST0` = `x`): the
+/// error kind 0xfe (the tail checks the result's range); `FABS` both (`FABS; FXCH; FABS;
+/// FXCH`), `FPATAN`; `pi - it` for a negative `x` (`CL`: `FLDPI; FSUBRP`), `FCHS` for a
+/// negative `y` (`CH`).
+fn atan2_finite(d: &mut Dispatch) {
+    d.kind = 0xfe;
+    let x = x87_fabs(d.fpu.st(0));
+    d.fpu.set(0, x);
+    d.fpu.fxch(1);
+    let y = x87_fabs(d.fpu.st(0));
+    d.fpu.set(0, y);
+    d.fpu.fxch(1);
+    let x = d.fpu.pop();
+    let r = x87_fpatan(d.fpu.st(0), x);
+    d.fpu.set(0, r);
+    if d.cl != 0 {
+        let r = x87_fsub(x87_fld_constant(X87Constant::Pi), d.fpu.st(0));
+        d.fpu.set(0, r);
+    }
+    negate_unless_zero(d.ch, &mut d.fpu);
+}
+
+// Translated from 00ed7d0c (disassembled, FalloutNV.exe 1.4.0.525)
+/// A handlers' helper (no Ghidra name): `FSTP ST0; FLD tbyte [011c1d0a]`, the extended half
+/// pi in place of `ST0`.
+fn pop_half_pi(e: &Engine, fpu: &mut Fpu) {
+    fpu.pop();
+    fpu.push(load_extended(e, HALF_PI_EXTENDED));
+}
+
+// Translated from 00ed7d15 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan2`'s handler for a zero `y` with `x` not a NaN (no Ghidra name): `FSTP ST0`, then
+/// `FSTP ST0; FLDPI` for a negative `x` (`CL`), else `FSTP ST0; FLDZ`; `FCHS` for a negative
+/// `y` (`CH`).
+fn atan2_zero_y(d: &mut Dispatch) {
+    d.fpu.pop();
+    d.fpu.pop();
+    if d.cl != 0 {
+        d.fpu.push(x87_fld_constant(X87Constant::Pi));
+    } else {
+        d.fpu.push(X87Ext::load64(0.0));
+    }
+    negate_unless_zero(d.ch, &mut d.fpu);
+}
+
+// Translated from 00ed7d38 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `atan2`'s handler for a zero or infinite `x` with a normal `y` (no Ghidra name): `FSTP
+/// ST0`, `MOV CL, CH`, `00ed7d0c` (half pi) and `00ed2713` (`FCHS` for a negative `y`).
+fn atan2_half_pi(e: &mut Engine, d: &mut Dispatch) {
+    d.fpu.pop();
+    d.cl = d.ch;
+    pop_half_pi(e, &mut d.fpu);
+    negate_unless_zero(d.cl, &mut d.fpu);
+}
+
+// Translated from 00ed9301 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `exp`'s handler for a finite nonzero argument (no Ghidra name): the error kind 0xfe, `CH`
+/// cleared, `x * log2(e)` (`FLDL2E; FMULP`), split by `00ed944e` into `n` and `2^|f| - 1`
+/// (unless it left through `00ed9400`); plus 1 (`FLD1; FADDP`); for a negative fraction (the
+/// `FTST` kept at `EBP-0x9f`, C0) inverted (`FLD1`, then `FDIVRP` or, with the Pentium flaw
+/// flag at 1, `00ed6ae1` in `fdiv.rs`); scaled by `n` unless it is zero (`FTST`'s C3 in `DL`:
+/// `FSCALE`); `FCHS` with `CH` (cleared); `n` dropped (`JMP 00ed2648`).
 fn exp_finite(e: &mut Engine, d: &mut Dispatch) {
     d.kind = 0xfe;
     d.ch = 0;
     let product = x87_fmul(d.fpu.pop(), x87_fld_constant(X87Constant::Log2E));
     d.fpu.push(product);
-    // 00ed944e: FLD ST0; FABS; FLD tbyte bound; FCOMPP; TEST AH, 0x41.
-    let ah = fcom_ah(load_extended(e, EXP_BOUND), x87_fabs(product));
-    if ah & 0x41 != 0 {
-        // 00ed9400: POP EAX (the handler returns from here); FTST; TEST AH, 1.
-        let below = fcom_ah(product, X87Ext::load64(0.0)) & 0x01 != 0;
-        d.fpu.pop();
-        if below {
-            d.kind = 4;
-            d.fpu.push(X87Ext::load64(0.0));
-        } else {
-            d.fpu.push(load_extended(e, POW_POLE));
-        }
+    if !exp_split(e, d) {
         return;
     }
-    let n = x87_frndint(product);
-    d.dl = fcom_ah(n, X87Ext::load64(0.0));
-    // FXCH; FSUB ST0, ST1; FTST; FABS; F2XM1.
-    let fraction = x87_fsub(product, n);
-    let negative = fcom_ah(fraction, X87Ext::load64(0.0)) & 0x01 != 0;
-    let power = x87_f2xm1(x87_fabs(fraction));
     // 00ed9313: FLD1; FADDP.
-    let mut r = x87_fadd(power, X87Ext::load64(1.0));
-    if negative {
-        r = if e.global::<u32>(FDIV_FLAWED) == 1 {
-            // CALL 00ed6ae1 with ST0 = 1 and ST1 = the sum (registered ST0 first).
-            let quotient = e.call(ADJUSTED_FDIVR, &args![1.0f64, r.store64()]);
-            X87Ext::load64(quotient.st0)
+    let sum = x87_fadd(d.fpu.st(0), X87Ext::load64(1.0));
+    d.fpu.set(0, sum);
+    if d.status_ah & 0x01 != 0 {
+        d.fpu.push(X87Ext::load64(1.0));
+        if e.global::<u32>(FDIV_FLAWED) == 1 {
+            super::fdiv::divide_st0_by_st1_kept(e, &mut d.fpu);
         } else {
-            // FLD1; FDIVRP: 1 / ST1.
-            x87_fdiv(X87Ext::load64(1.0), r)
-        };
+            // FDIVRP: ST1 = ST0 / ST1, popped.
+            let one = d.fpu.pop();
+            let quotient = x87_fdiv(one, d.fpu.st(0));
+            d.fpu.set(0, quotient);
+        }
     }
     if d.dl & 0x40 == 0 {
-        r = x87_fscale(r, n);
+        let scaled = x87_fscale(d.fpu.st(0), d.fpu.st(1));
+        d.fpu.set(0, scaled);
     }
-    if d.ch != 0 {
-        r = x87_fchs(r);
+    negate_unless_zero(d.ch, &mut d.fpu);
+    drop_st1(&mut d.fpu);
+}
+
+// Translated from 00ed944e (disassembled, FalloutNV.exe 1.4.0.525)
+/// `exp`'s split (no Ghidra name; `ST0` = `x * log2(e)`): `|t|` against the extended bound at
+/// `011c274e` (`FLD ST0; FABS; FLD tbyte; FCOMPP`, the status kept at `EBP-0xa0`); at or beyond
+/// it (or unordered: C3 or C0) `POP EAX` drops the return address and `00ed9400` ends the
+/// handler (answered `false`). Otherwise `n = FRNDINT(t)` pushed, its `FTST` kept in `DL`, `f =
+/// t - n` (`FXCH; FSUB ST0, ST1`), its `FTST` kept at `EBP-0xa0`, and `2^|f| - 1` (`FABS;
+/// F2XM1`) on top of `n`.
+fn exp_split(e: &mut Engine, d: &mut Dispatch) -> bool {
+    let t = d.fpu.st(0);
+    d.status_ah = fcom_ah(load_extended(e, EXP_BOUND), x87_fabs(t));
+    if d.status_ah & 0x41 != 0 {
+        exp_out_of_range(e, d);
+        return false;
     }
-    // 00ed2648: FXCH; FSTP ST0 (n off).
-    d.fpu.set(0, r);
+    let n = x87_frndint(t);
+    d.fpu.push(n);
+    d.status_ah = ftst_ah(n);
+    d.dl = d.status_ah;
+    d.fpu.fxch(1);
+    let fraction = x87_fsub(d.fpu.st(0), d.fpu.st(1));
+    d.status_ah = ftst_ah(fraction);
+    d.fpu.set(0, x87_f2xm1(x87_fabs(fraction)));
+    true
+}
+
+// Translated from 00ed9400 (disassembled, FalloutNV.exe 1.4.0.525)
+/// The end of `exp`'s handler for an argument out of range (inside `00ed9301`'s body; `POP
+/// EAX` first): `FTST`; below zero, the error kind 4 (underflow) and +0 (`00ed2656`);
+/// otherwise `FSTP ST0; FLD tbyte [011c2730]` (+infinity), `FCHS` with `CH`.
+fn exp_out_of_range(e: &mut Engine, d: &mut Dispatch) {
+    d.status_ah = ftst_ah(d.fpu.st(0));
+    if d.status_ah & 0x01 != 0 {
+        d.kind = 4;
+        pop_load_zero(&mut d.fpu);
+        return;
+    }
+    d.fpu.pop();
+    d.fpu.push(load_extended(e, POW_POLE));
+    negate_unless_zero(d.ch, &mut d.fpu);
+}
+
+// Translated from 00ed9441 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `exp`'s handler for an infinite argument (no Ghidra name): negative (`CL`), +0 (`JNZ
+/// 00ed93f4`, which jumps to `00ed2656`); positive, `FSTP ST0; FLD tbyte [011c2730]`.
+fn exp_infinite(e: &mut Engine, d: &mut Dispatch) {
+    if d.cl != 0 {
+        pop_load_zero(&mut d.fpu);
+        return;
+    }
+    d.fpu.pop();
+    d.fpu.push(load_extended(e, POW_POLE));
+}
+
+/// The double `00ed9491` halves its argument with (`011c2762`).
+const INTEGER_HALF: u32 = 0x011c_2762;
+
+// Translated from 00ed9491 (disassembled, FalloutNV.exe 1.4.0.525)
+/// Which integer `ST0` is (no Ghidra name; `pow`'s handlers call it; the stack is left as it
+/// was): `FRNDINT` of a copy compared with it (`FCOMP; FSTSW AX; SAHF; JNZ`): not equal (ZF,
+/// C3, clear) answers 0; otherwise the value times the double at `011c2762`, `FRNDINT` of a
+/// copy compared with that (`FCOMPP`): equal answers 2 (even), else 1 (odd). An unordered
+/// compare sets C3 and counts as equal.
+fn integer_parity(e: &Engine, fpu: &Fpu) -> u32 {
+    let x = fpu.st(0);
+    if fcom_ah(x87_frndint(x), x) & 0x40 == 0 {
+        return 0;
+    }
+    let half = x87_fmul(x, double_operand(e, INTEGER_HALF));
+    if fcom_ah(x87_frndint(half), half) & 0x40 != 0 {
+        2
+    } else {
+        1
+    }
+}
+
+/// The stack of a registered form, `ST0` = `st0` on `ST1` = `st1`, each taken exactly.
+fn two_registers(st0: f64, st1: f64) -> Fpu {
+    let mut fpu = Fpu::with(ext_of_double(st1.to_bits()));
+    fpu.push(ext_of_double(st0.to_bits()));
+    fpu
+}
+
+/// The registered form of `00ed2648`: `ST0`, `ST1`; `ST0` afterwards.
+pub fn fn_00ed2648(_e: &mut Engine, st0: f64, st1: f64) -> f64 {
+    let mut fpu = two_registers(st0, st1);
+    drop_st1(&mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed2654`: `ST0`, `ST1`; `ST0` afterwards (+0).
+pub fn fn_00ed2654(_e: &mut Engine, st0: f64, st1: f64) -> f64 {
+    let mut fpu = two_registers(st0, st1);
+    pop_two_load_zero(&mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed2656`: `ST0`; `ST0` afterwards (+0).
+pub fn fn_00ed2656(_e: &mut Engine, st0: f64) -> f64 {
+    let mut fpu = Fpu::with(ext_of_double(st0.to_bits()));
+    pop_load_zero(&mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed265b`: `ST0`, `ST1`; `ST0` afterwards (1).
+pub fn fn_00ed265b(_e: &mut Engine, st0: f64, st1: f64) -> f64 {
+    let mut fpu = two_registers(st0, st1);
+    pop_two_load_one(&mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed265d`: `ST0`; `ST0` afterwards (1).
+pub fn fn_00ed265d(_e: &mut Engine, st0: f64) -> f64 {
+    let mut fpu = Fpu::with(ext_of_double(st0.to_bits()));
+    pop_load_one(&mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed2713`: `ECX` (its low byte `CL`), `ST0`; `ST0` afterwards.
+pub fn fn_00ed2713(_e: &mut Engine, ecx: u32, st0: f64) -> f64 {
+    let mut fpu = Fpu::with(ext_of_double(st0.to_bits()));
+    negate_unless_zero(ecx as u8, &mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed7d0c`: `ST0`; `ST0` afterwards (half pi, rounded).
+pub fn fn_00ed7d0c(e: &mut Engine, st0: f64) -> f64 {
+    let mut fpu = Fpu::with(ext_of_double(st0.to_bits()));
+    pop_half_pi(e, &mut fpu);
+    fpu.st(0).store64()
+}
+
+/// The registered form of `00ed9491`: `ST0`; the answer in `EAX`.
+pub fn fn_00ed9491(e: &mut Engine, st0: f64) -> u32 {
+    integer_parity(e, &Fpu::with(ext_of_double(st0.to_bits())))
 }
 
 // Translated from 00ed6133 (disassembled, FalloutNV.exe 1.4.0.525)
@@ -5507,11 +5723,8 @@ fn logarithm_sse2(e: &mut Engine, argument: u32, xmm0: Xmm, t: &LogTables) -> f6
 
 // ---- fmod ---------------------------------------------------------------------------------------
 
-/// `fmod`'s descriptor (`.data`, `"fmod"`, two arguments, operation 0x16) and the routine its
-/// handler calls instead of `FPREM` when the Pentium flaw flag is 1 (`00ed6cfc`, register
-/// operands; not translated).
+/// `fmod`'s descriptor (`.data`, `"fmod"`, two arguments, operation 0x16).
 const FMOD_DESCRIPTOR: u32 = 0x011c_18e0;
-const ADJUSTED_FPREM: u32 = 0x00ed_6cfc;
 
 // Translated from 00ec9130 (disassembled, FalloutNV.exe 1.4.0.525)
 /// `fmod` (LIBCMT; unnamed in the engine map, the name `"fmod"` its descriptor holds), cdecl,
@@ -5524,20 +5737,16 @@ pub fn fmod(e: &mut Engine, y: f64, x: f64) -> f64 {
     ctrandisp2(e, FMOD_DESCRIPTOR, 0, y, x)
 }
 
-/// `fmod`'s handler for two normal operands (`00ec9144`): `FXCH` (`y` on top), then `FPREM`
-/// (or, with the Pentium flaw flag at 1, `00ed6cfc` with `ST0` and `ST1`, registered `ST0`
-/// first, giving the partial remainder in `ST0` and the status word `FSTSW` reads in `AX`)
-/// while `FSTSW; SAHF; JP` finds C2 set; `FSTP ST1` leaves the remainder.
+// Translated from 00ec9144 (disassembled, FalloutNV.exe 1.4.0.525)
+/// `fmod`'s handler for two normal operands (no Ghidra name): `FXCH` (`y` on top), then, while
+/// `FSTSW AX; SAHF; JP` finds C2 set, `FPREM` or, with the Pentium flaw flag at 1 (read each
+/// round), the partial remainder `00ed6cfc` (`fdiv.rs`, the condition codes it leaves); `FSTP
+/// ST1` leaves the remainder.
 fn fmod_finite(e: &mut Engine, d: &mut Dispatch) {
     d.fpu.fxch(1);
     loop {
         let status = if e.global::<u32>(FDIV_FLAWED) == 1 {
-            let r = e.call(
-                ADJUSTED_FPREM,
-                &args![d.fpu.st(0).store64(), d.fpu.st(1).store64()],
-            );
-            d.fpu.set(0, X87Ext::load64(r.st0));
-            r.eax as u16
+            super::fdiv::fprem_adjusted(e, &mut d.fpu)
         } else {
             let (r, status) = x87_fprem(d.fpu.st(0), d.fpu.st(1));
             d.fpu.set(0, r);
@@ -5629,6 +5838,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_d160, fn_00edd160(f64) -> f64),
         entry!(0x00ed_d178, fn_00edd178(f64) -> f64),
         entry!(0x00ed_d17e, fn_00edd17e(f64) -> f64),
+        entry!(0x00ed_2648, fn_00ed2648(f64, f64) -> f64),
+        entry!(0x00ed_2654, fn_00ed2654(f64, f64) -> f64),
+        entry!(0x00ed_2656, fn_00ed2656(f64) -> f64),
+        entry!(0x00ed_265b, fn_00ed265b(f64, f64) -> f64),
+        entry!(0x00ed_265d, fn_00ed265d(f64) -> f64),
+        entry!(0x00ed_2713, fn_00ed2713(u32, f64) -> f64),
+        entry!(0x00ed_7d0c, fn_00ed7d0c(f64) -> f64),
+        entry!(0x00ed_9491, fn_00ed9491(f64) -> u32),
     ]
 }
 
@@ -10712,22 +10929,68 @@ mod tests_bodies {
     #[test]
     fn fmod_takes_the_flawed_fprem_routine_with_the_pentium_flag() {
         let (mut e, _) = fmod_engine();
-        e.mem.set_u32(FDIV_FLAWED, 1);
-        let rounds = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let seen = rounds.clone();
-        // A double that answers 1.0 incomplete (C2) once, then 0.5 complete.
-        e.register_double(ADJUSTED_FPREM, move |_, a| {
-            let st0 = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
-            let st1 = f64::from_bits(u64::from(a[2]) | u64::from(a[3]) << 32);
-            seen.borrow_mut().push((st0, st1));
-            let first = seen.borrow().len() == 1;
-            Ret {
-                eax: if first { u32::from(X87_STATUS_C2) } else { 0 },
-                st0: if first { 1.0 } else { 0.5 },
-                ..Ret::default()
-            }
-        });
-        assert_eq!(e.call(0x00ec_9130, &args![9.0f64, 4.0f64]).f64(), 0.5);
-        assert_eq!(*rounds.borrow(), vec![(9.0, 4.0), (1.0, 4.0)]);
+        // The workaround's tables (all zero: no divisor marked), then the same answers with the
+        // flag at 1 (00ed6cfc) as with FPREM, the large exponent difference over several rounds.
+        e.map(0x011c_2540, 0x80);
+        for (y, x) in [
+            (9.0f64, 4.0f64),
+            (-17.5, 0.75),
+            (1e300, 3.0),
+            (2.5e-300, 7e-310),
+        ] {
+            e.mem.set_u32(FDIV_FLAWED, 0);
+            let want = e.call(0x00ec_9130, &args![y, x]).f64().to_bits();
+            e.mem.set_u32(FDIV_FLAWED, 1);
+            let got = e.call(0x00ec_9130, &args![y, x]).f64().to_bits();
+            assert_eq!(got, want, "fmod({y:e}, {x:e})");
+        }
+    }
+
+    #[test]
+    fn exp_divides_through_the_flawed_routine_with_the_pentium_flag() {
+        let (mut e, _, _) = dispatch_engine();
+        e.map(0x011c_2540, 0x80);
+        for x in [-0.3f64, -2.75, -100.125, 0.4] {
+            e.mem.set_u32(FDIV_FLAWED, 0);
+            let want = e.call(0x00ec_ae30, &args![x]).f64().to_bits();
+            e.mem.set_u32(FDIV_FLAWED, 1);
+            let got = e.call(0x00ec_ae30, &args![x]).f64().to_bits();
+            assert_eq!(got, want, "exp({x:e})");
+        }
+    }
+
+    #[test]
+    fn the_handlers_register_forms_change_the_stack_as_the_exe() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ed_2648, &args![3.5f64, 9.0f64]).f64(), 3.5);
+        for addr in [0x00ed_2654u32, 0x00ed_265b] {
+            let got = e.call(addr, &args![3.5f64, 9.0f64]).f64().to_bits();
+            let want = if addr == 0x00ed_2654 {
+                0
+            } else {
+                1.0f64.to_bits()
+            };
+            assert_eq!(got, want, "{addr:08x}");
+        }
+        assert_eq!(e.call(0x00ed_2656, &args![-3.5f64]).f64().to_bits(), 0);
+        assert_eq!(e.call(0x00ed_265d, &args![-3.5f64]).f64(), 1.0);
+        assert_eq!(e.call(0x00ed_2713, &args![0x400u32, 2.0f64]).f64(), 2.0);
+        assert_eq!(e.call(0x00ed_2713, &args![0x404u32, 2.0f64]).f64(), -2.0);
+        put_extended(&mut e, HALF_PI_EXTENDED, 0x3fff, 0xc90f_daa2_2168_c235);
+        let got = e.call(0x00ed_7d0c, &args![7.0f64]).f64();
+        assert_eq!(got, std::f64::consts::FRAC_PI_2);
+        // 00ed9491: 0 not an integer, 1 odd, 2 even (a NaN compares unordered: "even").
+        put(&mut e, INTEGER_HALF, 0.5f64.to_bits());
+        for (x, want) in [
+            (2.5f64, 0u32),
+            (3.0, 1),
+            (-7.0, 1),
+            (4.0, 2),
+            (0.0, 2),
+            (1e300, 2),
+            (f64::NAN, 2),
+        ] {
+            assert_eq!(e.call(0x00ed_9491, &args![x]).u32(), want, "{x:e}");
+        }
     }
 }
