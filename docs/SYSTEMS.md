@@ -59,7 +59,7 @@ functions (ledger of 2026-10-28). Regenerate the numbers before relying on them.
 | BSCore + BSSystem + BSSystemUtilities | 559 | 557 | 100 | Memory, threads, files, strings | platform |
 | BSMovie | 64 | 64 | 100 | Bink video playback (decoder in crates/bink) | D |
 | NiSystem, BSDevices, BSDiag, XAPILIB, XBOXKRNL, RemoteLog | 115 | 113 | 98 | Platform glue, input devices, diagnostics | platform |
-| LIBCMT, libcpmt, zLib | 815 | 668 | 82 | C runtime, zlib (platform replacements or translation) | platform |
+| LIBCMT, libcpmt, zLib | 815 | 810 | 99 | C runtime, zlib (translated from the exe; 5 allocator functions stay platform replacements) | platform |
 | fallout/debug, fallout shared/settings | 19 | 19 | 100 | Debug, settings | D |
 
 ## Systems and what each needs

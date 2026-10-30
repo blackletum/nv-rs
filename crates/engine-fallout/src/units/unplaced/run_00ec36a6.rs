@@ -449,6 +449,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_3b9a, fn_00ec3b9a() -> u32),
         entry!(0x00ec_379c, tolower_ctype(i32, Ptr) -> i32),
         entry!(0x00ec_3909, toupper_ctype(i32, Ptr) -> i32),
+        entry!(0x00ec_3ca6, jump_to_continuation(u32, u32)),
         (0x00ec_3cd8, call_member_function_entry as AbiFn),
         entry!(0x00ec_3cdf, unwind_nested_frames(Ptr, Ptr)),
         entry!(0x00ec_3d33, cxx_frame_handler(u32, Ptr, Ptr, Ptr, Ptr) -> u32),
@@ -591,6 +592,18 @@ pub fn tolower_ctype(e: &mut Engine, c: i32, ctype: Ptr) -> i32 {
 /// (`_islower` / table bit 2) and map flags 0x200.
 pub fn toupper_ctype(e: &mut Engine, c: i32, ctype: Ptr) -> i32 {
     map_case(e, c, ctype, 2, 0x200, ISLOWER, 0x61, -0x20)
+}
+
+// Translated from 00ec3ca6 (disassembled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec3ca6 - the structured-exception chain at FS:[0] (one node unlinked) and the stack switch (ESP = [node-4], EBX = the node) are not modelled; the jump to the continuation is a call with its frame as its one word, and in the exe it never comes back
+/// `_JumpToContinuation` (Ghidra library match; stdcall: the continuation address, the
+/// registration node): `FS:[0]` takes the next node of the chain's head, then a jump to the
+/// continuation (the code after a catch block) with `EBP` = the node + 0xc (the frame of the
+/// function the catch belongs to), `EBX` = the node and `ESP` = the stack pointer the frame
+/// kept just below the node (`[node-4]`).
+pub fn jump_to_continuation(e: &mut Engine, continuation: u32, node: u32) {
+    let frame = node.wrapping_add(0xc);
+    e.call(continuation, &args![frame]);
 }
 
 // Translated from 00ec3cd8 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -974,6 +987,15 @@ mod n081_tests {
         e.call_log = Some(vec![]);
         e.call(0x00ec_3d69, &args![0x1000u32, node, 0x2000u32, 0x3000u32]);
         assert_eq!(calls_to(&e, REPORT_GS_FAILURE).len(), 1);
+    }
+
+    #[test]
+    fn jump_to_continuation_enters_the_continuation_on_the_node_s_frame() {
+        let mut e = Engine::new();
+        e.register(0x0090_0000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00ec_3ca6, &args![0x0090_0000u32, 0x5000u32]);
+        assert_eq!(calls_to(&e, 0x0090_0000), vec![vec![0x500c]]);
     }
 
     #[test]
