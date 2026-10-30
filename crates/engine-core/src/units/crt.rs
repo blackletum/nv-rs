@@ -15,6 +15,8 @@
 use crate::prelude::*;
 
 pub mod cvt;
+pub mod cxxframe;
+pub mod fdiv;
 pub mod files;
 pub mod fpinit;
 pub mod glue;
@@ -40,8 +42,10 @@ pub mod printf;
 pub mod qualified;
 pub mod rtti;
 pub mod runtime;
+pub mod sbh;
 pub mod scanf;
 pub mod search;
+pub mod seh;
 pub mod sort;
 #[cfg(any(test, feature = "test-support"))]
 pub mod start_up_test;
@@ -6183,6 +6187,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x00ed_2f21, output_l_entry as AbiFn),
     ];
     table.extend(cvt::funcs());
+    table.extend(cxxframe::funcs());
+    table.extend(fdiv::funcs());
+    table.extend(sbh::funcs());
+    table.extend(seh::funcs());
     table.extend(files::funcs());
     table.extend(fpinit::funcs());
     table.extend(glue::funcs());
