@@ -312,6 +312,8 @@ impl Host {
         self.join();
         #[cfg(windows)]
         engine_platform::d3d9real::finish_recording(&mut self.engine);
+        // The saves the run wrote, all on disk before the process ends (`NV_SAVE_OUT`).
+        save_out::finish(&self.engine);
         eprintln!("NV_REPEATABLE: {frames} main frames run; the run ends");
         true
     }
