@@ -622,6 +622,15 @@ transform's getters and the bone's setters. The translations keep their plain ca
 only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
 (AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
 recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
+And `anim_keys` (same crate, id 27): the code that reads and writes the key arrays an animation keeps
+(`NiTransformData`'s rotation, position and scale keys, about 12 MB of the guest heap on the smoothness route), typed so
+that stage 2 can keep them outside the 32-bit space as plain byte buffers. Its first batch is what the touch census saw
+reaching rotation keys: `NiQuaternion`'s constructor from four floats, its negation, `Slerp` with its parameter
+correction, `NiRotKey::GenInterp` with the key search the `GenInterp` functions share, and the preparation of a
+rotation key array (neighbours in one hemisphere, `W` clamped). The key types' interpolation functions,
+`NiQuaternion::FastNormalize` and the loading of the keys stay by address; the typed code reaches a key array only
+through one accessor (`anim_keys::Keys`), so stage 2 changes where the keys are in one place. Its tests are
+`crates/engine/tests/typed_anim_keys.rs`. Off until its gate (`NV_TYPED=anim_keys` turns it on).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
