@@ -621,7 +621,9 @@ weights' normalisation, an interpolator's own `Update` (the key lookups), the qu
 transform's getters and the bone's setters. The translations keep their plain calls of the family's small functions;
 only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
 (AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
-recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
+recorded street run with it on against off. Its float maths is native (ADR-0014: `f64` locals rounded at each float
+store, since it runs on main and the AI threads), not the exact x87 helpers; its tests compare floats within an ulp
+(`Diff::float_ulps(1)`).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
