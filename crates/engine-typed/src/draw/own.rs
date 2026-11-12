@@ -6,6 +6,7 @@
 //! does what the exe does there, in its order; the pass lists' words go through the drawing thread's view
 //! ([`super::detach`]), which holds them while the cut's draw runs with `NV_DRAW_DETACH=1` (a check).
 
+use super::capture;
 use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassGroup, PassHolder};
 use crate::shader::{self, batch, state};
 use engine_core::ptr::Ptr;
@@ -213,8 +214,8 @@ const GROUP_ZERO_FLAG: u32 = 0x011a_9608;
 /// it (condition 2).
 #[inline(always)]
 pub(crate) fn coverage_count_down(e: &mut Engine) {
-    let count = e.global::<u32>(state::COVERAGE_COUNTER).wrapping_sub(1);
-    e.set_global(state::COVERAGE_COUNTER, count);
+    let count = capture::own_word(e, state::COVERAGE_COUNTER, 0).wrapping_sub(1);
+    capture::set_word(e, state::COVERAGE_COUNTER, 0, count);
 }
 
 /// The two list counters (`011ffa24`, then `011ff9e8`) counted down when not zero, as a list's draw ends
@@ -222,9 +223,9 @@ pub(crate) fn coverage_count_down(e: &mut Engine) {
 #[inline(always)]
 pub(crate) fn list_counters_down(e: &mut Engine) {
     for counter in [0x011f_fa24u32, 0x011f_f9e8] {
-        let count = e.global::<u32>(counter);
+        let count = capture::own_word(e, counter, 0);
         if count != 0 {
-            e.set_global(counter, count - 1);
+            capture::set_word(e, counter, 0, count - 1);
         }
     }
 }
@@ -259,8 +260,8 @@ pub(crate) fn clip_planes(e: &mut Engine, on: u32) {
 /// global the draw of group 0 reads).
 #[inline(always)]
 pub(crate) fn swap_group_zero_flag(e: &mut Engine, value: u32) -> u32 {
-    let saved = e.global::<u32>(GROUP_ZERO_FLAG);
-    e.set_global(GROUP_ZERO_FLAG, value);
+    let saved = capture::own_word(e, GROUP_ZERO_FLAG, 0);
+    capture::set_word(e, GROUP_ZERO_FLAG, 0, value);
     saved
 }
 
@@ -291,15 +292,15 @@ pub(crate) fn decal_state_on(e: &mut Engine) {
 /// The decal state off: the first lock given back by hand, z-writes on, the third lock given back,
 /// no depth bias (condition 2).
 pub(crate) fn decal_state_off(e: &mut Engine) {
-    let count = e.global::<u32>(LOCK_COUNT_1).wrapping_sub(1);
-    e.set_global(LOCK_COUNT_1, count);
+    let count = capture::own_word(e, LOCK_COUNT_1, 0).wrapping_sub(1);
+    capture::set_word(e, LOCK_COUNT_1, 0, count);
     typed_call!(
         shader::FAMILY,
         0x00b9_7e30,
         state::set_z_write_enable(e, 1u8, 0u32)
     );
-    let count = e.global::<u32>(LOCK_COUNT_3).wrapping_sub(1);
-    e.set_global(LOCK_COUNT_3, count);
+    let count = capture::own_word(e, LOCK_COUNT_3, 0).wrapping_sub(1);
+    capture::set_word(e, LOCK_COUNT_3, 0, count);
     e.call(SET_DEPTH_BIAS, &args![x87_store32(0.0), 0u32]);
 }
 
@@ -661,7 +662,7 @@ const COPY_COUNTED: u32 = 0x00c6_63d0;
 /// The current shader pass set (condition 2).
 #[inline(always)]
 pub(crate) fn set_current_pass(e: &mut Engine, pass: u32) {
-    e.set_global(super::packet::CURRENT_PASS, pass);
+    capture::set_word(e, super::packet::CURRENT_PASS, 0, pass);
 }
 
 /// A pass stage's texture (+8) set (condition 2).
@@ -686,7 +687,7 @@ pub(crate) fn set_entry_enabled(e: &mut Engine, entry: u32, on: bool) {
 /// copies `011fd9b8`, the land toggles `011fa2d0`) (condition 2).
 #[inline(always)]
 pub(crate) fn set_constant_word(e: &mut Engine, at: u32, word: u32) {
-    e.set_global(at, word);
+    capture::set_word(e, at, 0, word);
 }
 
 /// `count` vertex shader constant registers from `register` on (`data`) on `device`, of the kind the

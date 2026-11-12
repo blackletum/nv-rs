@@ -19,8 +19,6 @@ use engine_core::{args, typed_call, Engine};
 /// The bone constants' switch object (`011fec00`): with its byte +8 set, a shader without its own
 /// bone constants still uploads them under it.
 const BONE_SWITCH: u32 = 0x011f_ec00;
-/// The current shader pass (`0126f74c`), whose +0x5c takes the constants (its slot 0x78).
-const CURRENT_PASS: u32 = 0x0126_f74c;
 /// `"BoneMatrix3"` (`010a1cac`), the name a shader's bone constant handle is asked by (its slot 0x70).
 const BONE_MATRIX_NAME: u32 = 0x010a_1cac;
 
@@ -72,7 +70,7 @@ pub fn bone_setup(
     );
     let own_bones = e.mem.u32(t.wrapping_add(0x80));
     let matrices = e.mem.u32(skin.wrapping_add(0x28));
-    let constants = e.mem.u32(e.global::<u32>(CURRENT_PASS).wrapping_add(0x5c));
+    let constants = e.mem.u32(packet::current_pass(e).wrapping_add(0x5c));
     let count = u32::from(e.mem.u16(partition.wrapping_add(0x20)));
     let indices = e.mem.u32(partition.wrapping_add(4));
     let head = if e.mem.u32(t.wrapping_add(0x34)) == own_bones {

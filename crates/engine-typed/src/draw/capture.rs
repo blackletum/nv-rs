@@ -495,6 +495,28 @@ pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
     })
 }
 
+/// The word at `object + offset` of the draw's own state: the packet's copy while it holds it ([`own`]), else guest
+/// memory, with no miss counted (own state the cut has not taken is guest memory's, as without a packet).
+#[inline(always)]
+pub fn own_word(e: &Engine, object: u32, offset: u32) -> u32 {
+    if OPEN.load(Relaxed) != 0 {
+        let held = PACKET.with(|p| {
+            let p = p.borrow();
+            let p = p.as_ref()?;
+            if p.run != run(e) {
+                return None;
+            }
+            let mut b = [0u8; 4];
+            p.read_into(object, offset, &mut b)
+                .then(|| u32::from_le_bytes(b))
+        });
+        if let Some(word) = held {
+            return word;
+        }
+    }
+    e.global::<u32>(object.wrapping_add(offset))
+}
+
 /// Writes `bytes` at `object + offset`: into the open packet's copy when an own range of the object holds them all
 /// ([`own`]), else into guest memory.
 fn store<const N: usize>(e: &mut Engine, object: u32, offset: u32, bytes: [u8; N]) {
