@@ -79,6 +79,8 @@ struct Range {
     to: u32,
     at: u32,
     next: u32,
+    /// The draw's own state ([`own`]): written through the packet ([`set_word`]) and back to guest memory at [`end`].
+    own: bool,
 }
 
 const NONE: u32 = u32::MAX;
@@ -192,6 +194,18 @@ pub fn begin(e: &Engine) -> bool {
 /// Copies `object`'s bytes `[from, to)` into the open packet: the parts no range of it holds yet, each its own
 /// range. Nothing without an open packet, after [`poison`], or for a null object.
 pub fn take(e: &Engine, object: u32, from: u32, to: u32) {
+    take_as(e, object, from, to, false);
+}
+
+/// Takes `object`'s bytes `[from, to)` into the open packet as the draw's own state (step 2, piece 3): the draw
+/// reads and writes them through the packet ([`word`], [`set_word`]) while main's tail has the guest bytes, and
+/// at [`end`] the packet's values go back to guest memory, as the draw left them. A part already taken stays as it
+/// was taken. Nothing without an open packet, after [`poison`], or for a null object.
+pub fn own(e: &Engine, object: u32, from: u32, to: u32) {
+    take_as(e, object, from, to, true);
+}
+
+fn take_as(e: &Engine, object: u32, from: u32, to: u32, own: bool) {
     if object == 0 || from >= to {
         return;
     }
@@ -239,6 +253,7 @@ pub fn take(e: &Engine, object: u32, from: u32, to: u32) {
                 to: b,
                 at,
                 next: head,
+                own,
             });
             p.order.push((object, index));
             head = index;
@@ -344,6 +359,9 @@ pub fn end(e: &mut Engine) -> Report {
     if let Some(scribble) = packet.scribble {
         for &(object, index) in packet.order.iter().rev() {
             let r = packet.ranges[index as usize];
+            if r.own {
+                continue;
+            }
             let addr = object.wrapping_add(r.from);
             let mut live = vec![0u8; (r.to - r.from) as usize];
             e.mem.read(addr, &mut live);
@@ -356,6 +374,17 @@ pub fn end(e: &mut Engine) -> Report {
                 }
             }
             e.mem.write(addr, &live);
+        }
+    }
+    // The draw's own state goes back to guest memory as the draw left it.
+    for &(object, index) in &packet.order {
+        let r = packet.ranges[index as usize];
+        if r.own {
+            let at = r.at as usize;
+            e.mem.write(
+                object.wrapping_add(r.from),
+                &packet.bytes[at..at + (r.to - r.from) as usize],
+            );
         }
     }
     for object in &packet.held {
@@ -464,6 +493,54 @@ pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
                 .wrapping_add(4 * u32::try_from(i).unwrap_or(0)),
         )
     })
+}
+
+/// Writes `bytes` at `object + offset`: into the open packet's copy when an own range of the object holds them all
+/// ([`own`]), else into guest memory.
+fn store<const N: usize>(e: &mut Engine, object: u32, offset: u32, bytes: [u8; N]) {
+    if OPEN.load(Relaxed) != 0 {
+        let stored = PACKET.with(|p| {
+            let mut p = p.borrow_mut();
+            let Some(p) = p.as_mut() else {
+                return false;
+            };
+            if p.run != run(e) {
+                return false;
+            }
+            let len = u32::try_from(N).unwrap_or(u32::MAX);
+            match p.find(object, offset, len) {
+                Some(r) if r.own => {
+                    let at = (r.at + (offset - r.from)) as usize;
+                    p.bytes[at..at + N].copy_from_slice(&bytes);
+                    true
+                }
+                _ => false,
+            }
+        });
+        if stored {
+            return;
+        }
+    }
+    e.mem.write(object.wrapping_add(offset), &bytes);
+}
+
+/// Writes the word at `object + offset`: the packet's copy of the draw's own state while it holds it ([`own`]),
+/// else guest memory.
+#[inline(always)]
+pub fn set_word(e: &mut Engine, object: u32, offset: u32, value: u32) {
+    store(e, object, offset, value.to_le_bytes());
+}
+
+/// Writes the 16-bit half at `object + offset`, as [`set_word`].
+#[inline(always)]
+pub fn set_half(e: &mut Engine, object: u32, offset: u32, value: u16) {
+    store(e, object, offset, value.to_le_bytes());
+}
+
+/// Writes the byte at `object + offset`, as [`set_word`].
+#[inline(always)]
+pub fn set_byte(e: &mut Engine, object: u32, offset: u32, value: u8) {
+    store(e, object, offset, [value]);
 }
 
 /// An object's bytes from offset `from` on, read through the packet: its copy when the open packet holds them
@@ -661,6 +738,37 @@ mod tests {
             ],
             [1, 0x77, 3, 4, 1, 2]
         );
+    }
+
+    #[test]
+    fn own_state_is_written_through_the_packet_and_goes_back_at_the_end() {
+        for scribble in [None, Some(SCRIBBLE)] {
+            let mut e = Engine::new();
+            let at = block(&mut e, 3);
+            assert!(begin(&e));
+            own(&e, at, 0, 8);
+            take(&e, at, 8, 12);
+            if let Some(s) = scribble {
+                poison(&mut e, s);
+            }
+            set_word(&mut e, at, 0, 0x55);
+            set_half(&mut e, at, 6, 0x7777);
+            // A taken (read-only) range is not written through the packet.
+            set_byte(&mut e, at, 8, 0x99);
+            assert_eq!(
+                [word(&e, at, 0), word(&e, at, 4), word(&e, at, 8)],
+                [0x55, 0x7777_0002, 3]
+            );
+            if scribble.is_none() {
+                assert_eq!([e.mem.u32(at), e.mem.u32(at + 4)], [1, 2]);
+            }
+            let report = end(&mut e);
+            assert_eq!(
+                [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)],
+                [0x55, 0x7777_0002, 0x99]
+            );
+            assert_eq!(report.written, u64::from(scribble.is_some()));
+        }
     }
 
     #[test]
