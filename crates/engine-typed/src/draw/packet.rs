@@ -37,10 +37,11 @@ pub(crate) fn render_mode_draw(e: &Engine, mode: u32) -> u32 {
     e.global::<u32>(RENDER_MODE_DRAWS.wrapping_add(mode.wrapping_mul(4)))
 }
 
-/// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one.
+/// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one. The draw's own state (step 2,
+/// piece 3: written as the draw starts and cleared as it ends).
 #[inline(always)]
 pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::m_pkCamera)
+    capture::own_word(e, acc.addr(), BSShaderAccumulator::m_pkCamera.off)
 }
 
 /// The render mode (`eRenderMode`).
@@ -316,13 +317,13 @@ pub(crate) fn clear_scene_word(e: &mut Engine) {
 // Typed from 00d47a40
 /// `thiscall(accumulator, camera)`, the accumulator's slot 0x8c: the camera into `m_pkCamera` (+8).
 pub fn set_camera(e: &mut Engine, this: Ptr<BSShaderAccumulator>, camera: u32) {
-    e.set(this, BSShaderAccumulator::m_pkCamera, camera);
+    capture::set_word(e, this.addr(), BSShaderAccumulator::m_pkCamera.off, camera);
 }
 
 // Typed from 00aa0fe0
 /// `NiAccumulator::FinishAccumulating` (Xbox PDB), `thiscall(accumulator)`: the camera cleared.
 pub fn finish_accumulating(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
-    e.set(this, BSShaderAccumulator::m_pkCamera, 0);
+    capture::set_word(e, this.addr(), BSShaderAccumulator::m_pkCamera.off, 0);
 }
 
 /// The camera direction's words as the exe keeps them in locals (each through `FLD`/`FSTP`, so quieted).
@@ -678,11 +679,7 @@ pub(crate) fn render_state_cache(e: &Engine, renderer: u32) -> u32 {
 /// The render-state cache's stored value of `state` (+0x124 + 8 · state).
 #[inline(always)]
 pub(crate) fn stored_render_state(e: &Engine, cache: u32, state: u32) -> u32 {
-    e.global::<u32>(
-        cache
-            .wrapping_add(state.wrapping_mul(8))
-            .wrapping_add(0x124),
-    )
+    capture::own_word(e, cache, state.wrapping_mul(8).wrapping_add(0x124))
 }
 
 /// The shadow scene nodes (`011f91c8`, a word an index).
