@@ -11117,7 +11117,10 @@ fn leaf_setup_constants_copies_the_leaves_through_the_packet() {
             engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
         )
         .1,
-        &cases_of(LEAF_CONSTANTS, &[&[1, 2, 1, 9, ONE, 1], &[0, 0, 0, 8, HALF, 0]]),
+        &cases_of(
+            LEAF_CONSTANTS,
+            &[&[1, 2, 1, 9, ONE, 1], &[0, 0, 0, 8, HALF, 0]],
+        ),
         true,
         |e, case| {
             let words = leaf_constants_words(e, case);

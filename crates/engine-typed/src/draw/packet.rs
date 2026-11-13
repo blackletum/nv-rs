@@ -1291,47 +1291,10 @@ pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
 // +0xd4, +0xed, +0x144 to +0x208; a light's +0xe4 and +0xe8): a read of those through the packet would be a miss, so
 // they stay guest reads until the cut takes them (listed for the drawing thread's cut).
 
-/// A pass light's flag byte (+0xf4 a point light, +0xf5 its ambient), as the cut copies it.
-#[inline(always)]
-pub(crate) fn pass_light_flag(e: &Engine, shadow: u32, offset: u32) -> u8 {
-    debug_assert!(offset == 0xf4 || offset == 0xf5);
-    capture::byte(e, shadow, offset)
-}
-
-/// A pass light's weight (+0xd0, a float's word), as the cut copies it.
-#[inline(always)]
-pub(crate) fn pass_light_weight(e: &Engine, shadow: u32) -> u32 {
-    capture::word(e, shadow, 0xd0)
-}
-
-/// A pass light's light (its +0xf8, read in place: set when the light is made).
-#[inline(always)]
-pub(crate) fn pass_light_light(e: &Engine, shadow: u32) -> u32 {
-    e.global::<u32>(shadow.wrapping_add(0xf8))
-}
-
-/// A pass light's light's word at `offset`, as the cut copies it: its world transform (+0x68 to +0x9c; the
-/// translation +0x8c), its values (+0xc4 to +0xe4) or its direction (+0xf0 to +0xfc, a light that is not a point
-/// light).
-#[inline(always)]
-pub(crate) fn pass_light_value(e: &Engine, light: u32, offset: u32) -> u32 {
-    debug_assert!(
-        (0x68..0x9c).contains(&offset)
-            || (0xc4..0xe4).contains(&offset)
-            || (0xf0..0xfc).contains(&offset)
-    );
-    capture::word(e, light, offset)
-}
-
-/// The shaders' time values (`011f940c`, word `index` of four) and the start time (`011f94ac`), as the cut copies
-/// them.
+/// The shaders' time values (`011f940c`, word `index` of four), as the cut copies them (TEMPORARY: #532 defines it).
 #[inline(always)]
 pub(crate) fn time_value(e: &Engine, index: u32) -> u32 {
     capture::word(e, 0x011f_940c, index.wrapping_mul(4))
-}
-#[inline(always)]
-pub(crate) fn start_time(e: &Engine) -> u32 {
-    capture::word(e, 0x011f_94ac, 0)
 }
 
 /// Hands `f` the address of `object`'s world transform (`m_kWorld`, +0x68, 13 words: a drawn geometry's, which the
