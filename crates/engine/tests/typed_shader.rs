@@ -11532,27 +11532,48 @@ const ACCEPTANCE_PATHS: &[(u32, &str)] = &[
     (0x00a9_b1f0, "particles (NiParticles::RenderImmediate)"),
 ];
 
-/// The acceptance check: prints, for the switch-on run, every census hit during the whole draw (function, object
-/// kind, offset, length, read or write, count), marked ESCAPE where the range is one the packet or the own state
-/// holds, with the paths the world reached; and checks that both runs leave the same memory. Run by hand
-/// (`--ignored`); `NV_ACCEPTANCE_OUT=FILE` also writes the table to FILE.
+/// The census's hits summed over the objects of each kind: (function, caller, kind, offset, length, write) -> count.
+fn acceptance_table(hits: &[(TouchHit, u64)]) -> std::collections::BTreeMap<(u32, u32, u16, u32, u8, bool), u64> {
+    let mut table = std::collections::BTreeMap::new();
+    for (h, n) in hits {
+        *table
+            .entry((h.function, h.caller, h.tag, h.offset, h.len, h.write))
+            .or_insert(0) += n;
+    }
+    table
+}
+
+/// One line of the acceptance table.
+fn acceptance_line(key: &(u32, u32, u16, u32, u8, bool), n: u64, mark: &str) -> String {
+    let (function, caller, kind, offset, len, write) = *key;
+    format!(
+        "  {mark} {function:08x} {caller:08x} {}+{offset:#x} {len} {} x{n}\n",
+        ACCEPTANCE_KINDS[kind as usize].0,
+        if write { "w" } else { "r" },
+    )
+}
+
+/// The acceptance check: prints, for the switch-on run, every census hit during the whole draw (function, its
+/// caller, object kind, offset, length, read or write, count), marked ESCAPE where the range is one the packet or
+/// the own state holds and the access came from inside the draw (function 0 is the halves' own bodies: the cut,
+/// the join and their walk), with the switch-off run's table for comparison and the paths the world reached. Run by
+/// hand (`--ignored`); `NV_ACCEPTANCE_OUT=FILE` also writes the table to FILE. The memory is not compared here (the
+/// census's block check makes every stack frame a heap block, which the packet's images move): the whole-draw
+/// POISON test compares it (`the_whole_draw_reads_the_packet_the_cut_fills`).
 #[test]
 #[ignore = "the drawing thread's acceptance census: run by hand while its findings are open"]
 fn whole_frame_acceptance() {
-    let (off_engine, off_answer, off_hits, _) = acceptance_run(false);
-    let (on_engine, on_answer, on_hits, called) = acceptance_run(true);
+    let (_, off_answer, off_hits, off_called) = acceptance_run(false);
+    let (_, on_answer, on_hits, called) = acceptance_run(true);
     let report = cut::last_report().expect("the cut opened a packet and the join closed it");
     let mut out = String::new();
     out.push_str(&format!("packet report: {report:?}\n"));
     out.push_str(&format!(
-        "answers: off {off_answer:?} on {on_answer:?}; memory {}\n",
-        if memory_digest_beside_stack(&off_engine) == memory_digest_beside_stack(&on_engine) {
-            "the same"
-        } else {
-            "DIFFERS"
-        }
+        "answers: off {off_answer:?} on {on_answer:?}; functions called by address: off {}, on {}\n",
+        off_called.len(),
+        called.len()
     ));
-    out.push_str("paths reached:\n");
+    out.push_str("paths reached (switch on):\n");
     for (addr, name) in ACCEPTANCE_PATHS {
         let reached = called.binary_search(addr).is_ok();
         out.push_str(&format!(
@@ -11560,37 +11581,31 @@ fn whole_frame_acceptance() {
             if reached { "yes" } else { "NO " }
         ));
     }
-    let off_kinds: std::collections::BTreeSet<(u16, u32, bool)> = off_hits
-        .iter()
-        .map(|(h, _)| (h.tag, h.offset, h.write))
-        .collect();
-    out.push_str(&format!(
-        "switch off: {} kinds of access to main-owned ranges\n",
-        off_kinds.len()
-    ));
-    out.push_str("switch on (function caller kind+offset len r/w count):\n");
-    let mut escapes = 0;
-    for (h, n) in &on_hits {
-        let copied = acceptance_copied(h.tag, h.offset, h.len);
-        if copied && h.function != 0 {
-            escapes += 1;
+    out.push_str("functions called by address (switch on):");
+    for (i, a) in called.iter().enumerate() {
+        if i % 10 == 0 {
+            out.push_str("\n ");
         }
-        out.push_str(&format!(
-            "  {} {:08x} {:08x} {}+{:#x} {} {} x{n}\n",
-            if !copied {
-                "not-copied"
-            } else if h.function == 0 {
-                "cut/join  "
-            } else {
-                "ESCAPE    "
-            },
-            h.function,
-            h.caller,
-            ACCEPTANCE_KINDS[h.tag as usize].0,
-            h.offset,
-            h.len,
-            if h.write { "w" } else { "r" },
-        ));
+        out.push_str(&format!(" {a:08x}"));
+    }
+    out.push('\n');
+    out.push_str("switch off (function caller kind+offset len r/w count):\n");
+    for (key, n) in acceptance_table(&off_hits) {
+        out.push_str(&acceptance_line(&key, n, "          "));
+    }
+    out.push_str("switch on:\n");
+    let mut escapes = 0;
+    for (key, n) in acceptance_table(&on_hits) {
+        let (function, _, kind, offset, len, _) = key;
+        let mark = if !acceptance_copied(kind, offset, len) {
+            "not-copied"
+        } else if function == 0 {
+            "cut/join  "
+        } else {
+            escapes += 1;
+            "ESCAPE    "
+        };
+        out.push_str(&acceptance_line(&key, n, mark));
     }
     out.push_str(&format!("escapes: {escapes}\n"));
     println!("{out}");
