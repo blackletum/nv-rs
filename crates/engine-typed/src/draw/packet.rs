@@ -1281,15 +1281,12 @@ pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_95ec)
 }
 
-// ---- Value packet B: the shader family's reads of what the cut copies (a pass's lights, the time values). ----
+// ---- Value packet B: the set-ups that hand helpers what the cut copies, and the Group C bulk copies. ----
 //
-// The cut (`super::cut`) copies each pass's lights: a pass light's (`ShadowSceneLight`) weight (+0xd0) and flags
-// (+0xf4, +0xf5), and through its +0xf8 its light's (`NiLight`) world transform (+0x68 to +0x9c), values (+0xc4 to
-// +0xe4: dimmer, ambient and diffuse colours, radius) and, for a light that is not a point light, its direction
-// (+0xf0 to +0xfc); and the time values. These accessors read those through the packet. Not routed, read in place:
-// a pass light's light pointer (+0xf8, set when the light is made), and what the cut does not take (a pass light's
-// +0xd4, +0xed, +0x144 to +0x208; a light's +0xe4 and +0xe8): a read of those through the packet would be a miss, so
-// they stay guest reads until the cut takes them (listed for the drawing thread's cut).
+// A set-up that passes a drawn geometry's world transform or bound to helpers by pointer hands them the packet's
+// guest-stack image of it ([`with_world`], [`with_drawn`]); a word of the transform is read through [`world_word`];
+// the Group C bulk copies read the packet's image of their block. The pass lights' and the time values' accessors
+// are the shared ones above (the per-light set-up's section).
 
 /// The shaders' time values (`011f940c`, word `index` of four), as the cut copies them (TEMPORARY: #532 defines it).
 #[inline(always)]
