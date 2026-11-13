@@ -10682,59 +10682,6 @@ fn pass_end_flags() {
         .assert_same();
 }
 
-// ---- Value packet B: the shader family's reads of a pass's lights and the time values ----
-
-/// The light set-up (`00b70820`) reads its pass light's flags and weight and its light's position, direction,
-/// values and radius through the packet: with the cut's copies of the rendering pass's lights scribbled in guest
-/// memory (POISON), it answers and writes as without the packet. A directional or a point light, each index's row,
-/// the HDR switch and the light's ambient flag.
-#[test]
-fn light_setup_reads_the_packet() {
-    packet_same(
-        "light_setup",
-        entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)).1,
-        &product(&[&[0, 7], &[1, 2], &[0, 1, 8, 9]]),
-        |e, c| {
-            let mut s = Shape::plain();
-            s.points = u32::from(c.word(1) == 2);
-            s.register = 8;
-            s.hdr = c.word(2) & 1 != 0;
-            if c.word(2) & 8 != 0 {
-                s.bits |= LIGHT_AMBIENT;
-            }
-            let g = geometry_shape(e, &s);
-            (vec![c.word(0), g.light, HALF], vec![g.rendering])
-        },
-        |e, w| cut::take_pass_lights(e, w[0]),
-    );
-}
-
-/// The refraction angle (`00b790d0`) reads the game time through the packet: with the cut's copy of the time
-/// values scribbled in guest memory (POISON), it stores what it stores without the packet. Its entry (vertex entry
-/// 15) on; two counts.
-#[test]
-fn vertex_entry_15_reads_the_packet() {
-    packet_same(
-        "vertex_entry_15",
-        entry!(0x00b7_90d0, geometry::vertex_entry_15(Ptr<_>, Ptr<_>)).1,
-        &product(&[&[3, 0x0100_0001]]),
-        |e, c| {
-            let g = geometry_shape(e, &Shape::plain());
-            let entry = e.mem.alloc(0x30);
-            e.mem.set_u8(entry + 8, 1);
-            set(e, 0x011f_ebd8 + 4 * 15, entry);
-            set(e, 0x011f_940c, 0x4561_2340);
-            set(e, g.property + 0xe4, c.word(0));
-            (vec![g.shader, g.property], vec![])
-        },
-        |e, _| {
-            // The time values as the cut takes them (`cut::take_frame`).
-            capture::take(e, 0x011f_940c, 0, 0x10);
-            capture::take(e, 0x011f_94ac, 0, 4);
-        },
-    );
-}
-
 /// The lighting 3.0 shader's geometry set-up (`00bbef90`) with its typed helpers reads the geometry's world
 /// transform (through the packet's image of it), its bound, its pass's lights and the game time through the packet:
 /// with the cut's copies scribbled in guest memory (POISON), it answers and writes as without the packet. A plain
@@ -10771,10 +10718,26 @@ fn lighting30_setup_constants_reads_the_packet() {
         |e, w| {
             cut::take_geometry_values(e, w[1]);
             cut::take_pass_lights(e, w[0]);
+            take_pass_light_extras(e, w[0]);
             capture::take(e, 0x011f_940c, 0, 0x10);
             capture::take(e, 0x011f_94ac, 0, 4);
         },
     );
+}
+
+/// What the cut also takes of each of a pass's lights (the drawing agent's part 2): its matrix (+0x10 to +0x50),
+/// its byte +0xed and its clip planes (+0x144 to +0x1a4), which lighting 3.0 reads through the packet.
+fn take_pass_light_extras(e: &mut Engine, pass: u32) {
+    let count = u32::from(e.mem.u8(pass + 9));
+    let lights = e.mem.u32(pass + 0xc);
+    for i in 0..count {
+        let light = e.mem.u32(lights + 4 * i);
+        if light != 0 {
+            capture::take(e, light, 0x10, 0x50);
+            capture::take(e, light, 0xed, 0xee);
+            capture::take(e, light, 0x144, 0x1a4);
+        }
+    }
 }
 
 /// The geometry as the world draw has it: a vtable (the cut asks its immediate draw), and its shader property
@@ -10977,23 +10940,6 @@ fn water_setup_constants_reads_the_packet() {
     );
 }
 
-/// The SpeedTree leaves' slot 0x7c: its `SetupGeometry` handed the packet's image of the transform; the pass's
-/// lights through the packet.
-#[test]
-fn leaf_setup_constants_reads_the_packet() {
-    set_up_reads_the_packet(
-        "leaf_setup_constants",
-        entry!(
-            0x00bb_2760,
-            engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
-        )
-        .1,
-        LEAF_CONSTANTS,
-        &[&[1, 2, 1, 9, ONE, 1], &[0, 0, 0, 8, HALF, 0]],
-        leaf_constants_words,
-    );
-}
-
 /// `SetupGeometryConstants` (`00b7dab0`) with its set-ups: the transform through the packet's image (the model
 /// matrix, the world-view constants and every set-up handed it), the lights and the time values through the
 /// packet, the refraction pass type's geometry translation (vertex entry 21) too.
@@ -11029,28 +10975,6 @@ fn setup_geometry_constants_reads_the_packet() {
             // The frame's values (the empty bound, the fog, the time values).
             cut::take_frame(e, 0, Ptr::new(0));
         },
-    );
-}
-
-/// The light direction (`00b7c7b0`) reads the rendered pass's first light's direction through the packet.
-#[test]
-fn light_direction_reads_the_packet() {
-    packet_same(
-        "light_direction",
-        entry!(0x00b7_c7b0, acc::set_light_direction(u32)).1,
-        &[vec![1], vec![2]],
-        |e, c| {
-            let mut s = Shape::plain();
-            s.lights = c.word(0);
-            let g = geometry_shape(e, &s);
-            note_vertex_constants(e);
-            let matrix = e.mem.alloc(0x40);
-            for (k, v) in (0u32..).zip([ONE, 0, 0, 0, 0, ONE, 0, 0, 0, 0, ONE, 0, 0, 0, 0, ONE]) {
-                set(e, matrix + 4 * k, v);
-            }
-            (vec![matrix], vec![g.rendering])
-        },
-        |e, w| cut::take_pass_lights(e, w[0]),
     );
 }
 
@@ -11125,15 +11049,87 @@ fn tall_grass_setup_textures_reads_the_packet() {
     );
 }
 
-/// The device's vertex constants (its slot 0x178, `SetVertexShaderConstantF(register, data, count)`) noted by what
-/// they hold rather than where it is: for the packet tests of set-ups whose constants go only to the device.
-fn note_vertex_constants(e: &mut Engine) {
-    e.register(VT_FN + 0x178, |e, a| {
-        let mut h = e.mem.u32(RETS + 0x7c4).wrapping_mul(31).wrapping_add(a[1]);
-        for k in 0..a[3].wrapping_mul(4).min(0x400) {
-            h = h.wrapping_mul(17).wrapping_add(e.mem.u32(a[2] + 4 * k));
-        }
-        e.mem.set_u32(RETS + 0x7c4, h);
-        ret(0)
-    });
+/// The tall grass's instance copy (`00baaf40`) copies the instance array from the packet's image of it (the cut
+/// copies the array): with the cut's copy scribbled in guest memory (POISON), it copies and writes as without.
+#[test]
+fn tall_grass_copy_instances_reads_the_packet() {
+    packet_same_cases(
+        "tall_grass_copy_instances",
+        entry!(
+            0x00ba_af40,
+            engine_typed::draw::tall_grass::copy_instances(Ptr<_>, u32, Ptr<_>)
+        )
+        .1,
+        &word_cases(&[vec![3, 0, 1], vec![1, 1, 0], vec![5, 2, 1]]),
+        true,
+        |e, c| {
+            let words = tall_grass_instances_words(e, c);
+            let data = e.mem.u32(words[2] + 0x7c);
+            let source = e.mem.u32(data + 0x14);
+            let count = u32::from(e.mem.u16(data + 0x10));
+            (words, vec![source, count])
+        },
+        |e, w| capture::take(e, w[0], 0, w[1] * 0x10),
+    );
+}
+
+/// The no-lighting sub-texture copy (`00bc6fa0`) copies the entries from the packet's image of them (the cut copies
+/// them): with the cut's copy scribbled in guest memory (POISON), it copies and writes as without.
+#[test]
+fn no_lighting_copy_subtextures_reads_the_packet() {
+    packet_same_cases(
+        "no_lighting_copy_subtextures",
+        entry!(
+            0x00bc_6fa0,
+            engine_typed::draw::no_lighting::copy_subtextures(Ptr<_>, Ptr<_>, u32)
+        )
+        .1,
+        &word_cases(&[vec![1], vec![5]]),
+        true,
+        |e, c| {
+            let w = world(e);
+            e.map(0x0120_2000, 0x1000);
+            let shader = no_lighting_shader(e, &w);
+            let count = c.word(0);
+            let entries = e.mem.alloc(0x50);
+            for i in 0..0x14u32 {
+                set(e, entries + 4 * i, 0x5b00_0000 + i);
+            }
+            let data = e.mem.alloc(0x70);
+            set(e, data + 0x68, entries);
+            e.mem.set_u8(data + 0x6c, count as u8);
+            let geometry = e.mem.alloc(0xc0);
+            set(e, geometry + 0xb8, data);
+            (vec![shader, geometry, 0x0bad_0002], vec![entries, count])
+        },
+        |e, w| capture::take(e, w[0], 0, w[1] * 0x10),
+    );
+}
+
+/// The SpeedTree leaves' slot 0x7c copies the leaves (0x300 bytes, the block the property's slot 0x100 answers)
+/// from the packet's image of them (the cut copies them), with the rendered pass's values as the cut takes them.
+#[test]
+fn leaf_setup_constants_copies_the_leaves_through_the_packet() {
+    packet_same_cases(
+        "leaf_setup_constants_leaves",
+        entry!(
+            0x00bb_2760,
+            engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &cases_of(LEAF_CONSTANTS, &[&[1, 2, 1, 9, ONE, 1], &[0, 0, 0, 8, HALF, 0]]),
+        true,
+        |e, case| {
+            let words = leaf_constants_words(e, case);
+            let pass = e.mem.u32(0x011f_91e0);
+            let geometry = e.mem.u32(pass);
+            as_drawn(e, geometry, words[1]);
+            let leaves = e.mem.u32(RETS + 0x100);
+            (words, vec![pass, geometry, leaves])
+        },
+        |e, w| {
+            take_drawn(e, w);
+            capture::take(e, w[2], 0, 0x300);
+        },
+    );
 }

@@ -646,17 +646,14 @@ pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transfo
 /// a normal, normalized, goes to vertex constant 0x19. The frame is the translation's: 0x24 bytes, the
 /// constant's fourth float its last word (in the exe the word above its 0x20-byte frame).
 pub fn set_light_direction(e: &mut Engine, matrix: u32) {
-    // The rendered pass's first light and its light's direction as the value packet holds them (value packet B).
     let rendering = e.global::<u32>(RENDERING_PASS);
-    let object = crate::draw::packet::rendering_light(e, rendering, 0);
-    let vector = crate::draw::packet::pass_light_light(e, object);
-    let direction = |e: &Engine, offset: u32| {
-        f32::from_bits(crate::draw::packet::pass_light_value(e, vector, offset))
-    };
+    let holder = e.global::<u32>(rendering.wrapping_add(0xc));
+    let object = e.global::<u32>(holder);
+    let vector = e.global::<u32>(object.wrapping_add(0xf8));
     let minus_one = e.global::<f64>(MINUS_ONE);
-    let y = mul_d(direction(e, 0xf4), minus_one);
-    let z = mul_d(direction(e, 0xf8), minus_one);
-    let x = mul_d(direction(e, 0xf0), minus_one);
+    let y = mul_d(e.global::<f32>(vector.wrapping_add(0xf4)), minus_one);
+    let z = mul_d(e.global::<f32>(vector.wrapping_add(0xf8)), minus_one);
+    let x = mul_d(e.global::<f32>(vector.wrapping_add(0xf0)), minus_one);
     e.with_stack(0x24, |e, frame| {
         let frame = frame.addr();
         e.set_global(frame, y);

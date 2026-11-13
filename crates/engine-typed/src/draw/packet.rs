@@ -1206,7 +1206,7 @@ pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
     e.global::<u32>(light.wrapping_add(0xd4 + 4 * index))
 }
 
-/// A light's data (+0xf8) and a light's byte at `offset` (+0xed, +0x208).
+/// A light's data (+0xf8) and a light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
 #[inline(always)]
 pub(crate) fn light_data(e: &Engine, light: u32) -> u32 {
     e.global::<u32>(light.wrapping_add(0xf8))
@@ -1216,10 +1216,21 @@ pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
     e.global::<u8>(light.wrapping_add(offset))
 }
 
-/// A pass's lights (+0xc; the packet's, value packet B).
+// (TEMPORARY, until the rebase onto #532 and the drawing agent's part 2, which define these three: delete then.)
+/// A pass's light array (+0xc), the packet's.
 #[inline(always)]
-pub(crate) fn pass_lights(e: &Engine, pass: u32) -> u32 {
+pub(crate) fn rendering_pass_lights(e: &Engine, pass: u32) -> u32 {
     capture::word(e, pass, 0xc)
+}
+/// A pass light's word at `offset`, the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_word(e: &Engine, light: u32, offset: u32) -> u32 {
+    capture::word(e, light, offset)
+}
+/// A pass light's byte at `offset`, the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
+    capture::byte(e, light, offset)
 }
 
 /// A renderer's view and light matrices' word at `offset` (+0x940, +0x980, +0x9c0, sixteen words each).
@@ -1365,30 +1376,37 @@ pub(crate) fn pass_light_at(e: &Engine, lights: u32, index: u32) -> u32 {
     capture::word(e, lights, index.wrapping_mul(4))
 }
 
-// Waiting for the cut (value packet B, 2026-11-12): what the Group C set-ups copy in bulk from data the cut does not
-// take yet: the tall grass's instance array, the no-lighting sub-textures and the SpeedTree leaves' 0x300 bytes.
-// Each copy goes through one accessor here and reads in place until the cut copies the block (the drawing agent's
-// `cut.rs`); then the body becomes `capture::image(e, source, 0, size, ..)` and the waiting POISON tests turn on.
+// The Group C set-ups' bulk copies (value packet B): the tall grass's instance array, the no-lighting sub-textures
+// and the SpeedTree leaves' 0x300 bytes, which the cut copies (the drawing agent's part 2). Each copy reads the
+// packet's guest-stack image of the block while the packet is open, the block itself otherwise.
 
 /// The tall grass's `count` 0x10-byte instances (the instance data's array, +0x14) copied to `to` (`_memcpy`).
 #[inline(always)]
 pub(crate) fn copy_grass_instances(e: &mut Engine, to: u32, data: u32, count: u16) {
     let source = grass_instance_array(e, data);
-    super::own::copy_constants(e, to, source, u32::from(count) << 4);
+    let size = u32::from(count) << 4;
+    capture::image(e, source, 0, size, |e, image| {
+        super::own::copy_constants(e, to, image, size);
+    });
 }
 
 /// A geometry data's `count` 0x10-byte sub-textures (+0x68) copied to `to` (`_memcpy`).
 #[inline(always)]
 pub(crate) fn copy_subtextures(e: &mut Engine, to: u32, data: u32, count: u8) {
     let source = subtextures(e, data);
-    super::own::copy_constants(e, to, source, u32::from(count) << 4);
+    let size = u32::from(count) << 4;
+    capture::image(e, source, 0, size, |e, image| {
+        super::own::copy_constants(e, to, image, size);
+    });
 }
 
 /// A leaf property's leaves (the block its slot 0x100 answers, 0x300 bytes) copied to `to` (`_memcpy`).
 #[inline(always)]
 pub(crate) fn copy_leaves(e: &mut Engine, to: u32, property: u32) {
     let source = e.vcall(property, 0x100, &[]).u32();
-    super::own::copy_constants(e, to, source, 0x300);
+    capture::image(e, source, 0, 0x300, |e, image| {
+        super::own::copy_constants(e, to, image, 0x300);
+    });
 }
 
 /// [`with_world`] with the geometry's world bound as well ([`bound_of`]: its +0x20, or the empty bound): `f` gets

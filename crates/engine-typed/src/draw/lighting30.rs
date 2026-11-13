@@ -479,11 +479,13 @@ pub fn view_matrix(
         let result = frame + 0x90;
         if entry_on(e, VIEW_ENTRY) {
             let pass = pass.addr();
-            let lights = packet::pass_lights(e, pass);
+            // The pass's lights, the first one's byte +0xed and the chosen one's matrix (+0x10) through the
+            // packet (value packet B).
+            let lights = packet::rendering_pass_lights(e, pass);
             let selected = packet::rendering_pass_byte9(e, pass);
             let copy = lights == 0
                 || (selected != 0
-                    && packet::light_byte(e, packet::pass_light_at(e, lights, 0), 0xed) != 0)
+                    && packet::pass_light_byte(e, packet::pass_light_at(e, lights, 0), 0xed) != 0)
                 || (0x1bd..=0x1c3).contains(&pass_type)
                 || (0x2d8..=0x2ef).contains(&pass_type);
             if copy {
@@ -515,7 +517,9 @@ pub fn view_matrix(
                 } else {
                     packet::pass_light_at(e, lights, 1)
                 };
-                super::thunks::call_matrix_multiply(e, result, local, light.wrapping_add(0x10));
+                super::capture::image(e, light, 0x10, 0x50, |e, image| {
+                    super::thunks::call_matrix_multiply(e, result, local, image.wrapping_add(0x10));
+                });
                 for k in 0..16u32 {
                     let word = e.global::<u32>(result + 4 * k);
                     e.set_global(matrix + 4 * k, word);
@@ -852,10 +856,11 @@ fn shadow_clip_planes(e: &mut Engine, shader: u32, light: u32) {
         for index in 0..6u32 {
             let source = 0x144 + 0x10 * index;
             for k in 0..3u32 {
-                let word = packet::light_word(e, light, source + 4 * k);
+                // The pass light's planes through the packet (value packet B).
+                let word = packet::pass_light_word(e, light, source + 4 * k);
                 e.set_global(point + 4 * k, word);
             }
-            let distance = f32::from_bits(packet::light_word(e, light, source + 0xc));
+            let distance = f32::from_bits(packet::pass_light_word(e, light, source + 0xc));
             e.set_global(point + 0xc, (-distance).to_bits());
             super::thunks::call_plane_normalize(e, point, point);
             super::thunks::call_plane_transform(e, column, point, product);
@@ -1051,6 +1056,7 @@ fn constants_with(
         typed_call!(super::FAMILY, 0x00bb_be80, fog(e, this));
         if pass_type.wrapping_sub(0x1c4) <= 3 {
             let light = packet::rendering_light(e, packet::rendering_pass(e), 0);
+            // own: the pass light's clip-plane cache byte (+0x208, written by the draw), piece 4; in place.
             let refused = packet::light_byte(e, light, 0x208) != 0 || {
                 let held = packet::shader_accumulator(e);
                 packet::skips_type13(e, held) != 0 || {
