@@ -11405,7 +11405,11 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
             }
             seen.push(shadow);
             v.push((7, shadow, 0x1a4));
-            let light = e.mem.u32(shadow + 0xf8);
+            let mut word = [0u8; 4];
+            if e.mem.try_read(shadow + 0xf8, &mut word).is_err() {
+                continue;
+            }
+            let light = u32::from_le_bytes(word);
             if light != 0 && !seen.contains(&light) {
                 seen.push(light);
                 v.push((8, light, 0xfc));
@@ -11492,7 +11496,7 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
                     ONE,
                     0x4500_0000,
                     0x4396_0000,
-                    1,
+                    0,
                     1,
                     0x4580_0000,
                     0x4480_0000,
@@ -11514,24 +11518,24 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
                     2,
                     0,
                     0x3fc0_0000,
-                    2,
+                    0,
                 ]],
             )[0];
             (tall_grass_constants_words(e, c), 0x00ba_c9c0, 4)
         }
         AcceptanceSetup::NoLighting => {
-            let c = &cases_of(NO_LIGHTING_CONSTANTS, &[&[0, 0x42, 0x40, 1, 1, 1, 1]])[0];
+            let c = &cases_of(NO_LIGHTING_CONSTANTS, &[&[0, 0x42, 0x40, 1, 1, 1, 0]])[0];
             (no_lighting_constants_words(e, c), 0x00bc_9a50, 5)
         }
         AcceptanceSetup::Water => {
             let c = &cases_of(
                 WATER_CONSTANTS,
-                &[&[0x30, 1, 1, ONE, 0x4500_0000, 0x3f40_0000, 1, 3, 1]],
+                &[&[0x30, 1, 1, ONE, 0x4500_0000, 0x3f40_0000, 1, 3, 0]],
             )[0];
             (water_constants_words(e, c), 0x00b8_64d0, 5)
         }
         AcceptanceSetup::Leaves => {
-            let c = &cases_of(LEAF_CONSTANTS, &[&[1, 2, 1, 9, ONE, 1]])[0];
+            let c = &cases_of(LEAF_CONSTANTS, &[&[1, 0, 1, 9, ONE, 0]])[0];
             (leaf_constants_words(e, c), 0x00bb_2760, 5)
         }
         AcceptanceSetup::Lighting30 => {
@@ -11540,7 +11544,7 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
                 Value::Word(0),
                 Value::Word(u32::MAX),
                 Value::Word(0),
-                Value::Word(1),
+                Value::Word(0),
                 Value::Word(0),
                 Value::F32(0x4561_2340),
                 Value::Word(3),
