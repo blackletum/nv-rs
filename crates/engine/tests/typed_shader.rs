@@ -11426,6 +11426,26 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
     v
 }
 
+/// Cases of a test's inputs from their raw words: a float input's word as a float's bits, the others as words.
+fn cases_of(inputs: &[Input], picks: &[&[u32]]) -> Vec<Case> {
+    picks
+        .iter()
+        .map(|words| {
+            assert_eq!(words.len(), inputs.len());
+            Case(
+                inputs
+                    .iter()
+                    .zip(words.iter())
+                    .map(|(input, w)| match input {
+                        Input::F32 | Input::F32Swept(_) => Value::F32(*w),
+                        _ => Value::Word(*w),
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 /// The shader set-ups the acceptance world can add a pass for, each on its own shader class (its slot 0x7c the
 /// real set-up), its data made by the set-up's own test world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11483,7 +11503,19 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
         AcceptanceSetup::TallGrass => {
             let c = &cases_of(
                 TALL_GRASS_CONSTANTS,
-                &[&[1, 0, 1, 0x4561_2340, 0x4040_0000, 1, 1, 2, 0, 0x3fc0_0000, 2]],
+                &[&[
+                    1,
+                    0,
+                    1,
+                    0x4561_2340,
+                    0x4040_0000,
+                    1,
+                    1,
+                    2,
+                    0,
+                    0x3fc0_0000,
+                    2,
+                ]],
             )[0];
             (tall_grass_constants_words(e, c), 0x00ba_c9c0, 4)
         }
