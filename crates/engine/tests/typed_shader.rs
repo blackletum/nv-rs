@@ -11586,8 +11586,8 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
         let word = e.mem.u32(d.w.passes[0] + 4 * k);
         set(e, pass + 4 * k, word);
     }
+    // The first pass's type, kind and flag (it joins that pass's list), with this geometry and the lights.
     set(e, pass, geometry);
-    e.mem.set_u16(pass + 4, e.mem.u32(0x011f_91e4) as u16);
     e.mem.set_u8(pass + 9, e.mem.u8(record + 9));
     let lights = e.mem.u32(record + 0xc);
     set(e, pass + 0xc, lights);
@@ -11597,7 +11597,7 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
 /// The acceptance world: the whole draw's world with both renderers drawn, the water reflection copied, the
 /// active lists' pass types and every alpha list filled (each sorted group and grouped alpha with a geometry of
 /// its own); two passes of their own in renderer 0's first alpha holder (so the alpha sort compares them); and a
-/// pass for each set-up in `setups` in renderer 0's first grouped alpha's list. Answers the draw's world, the
+/// pass for each set-up in `setups` in renderer 0's list of the first pass's type. Answers the draw's world, the
 /// halves' words and every pass whose objects the census tags.
 fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u32>, Vec<u32>) {
     let d = draw_world(e);
@@ -11617,9 +11617,14 @@ fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u
         extra.push(acceptance_setup_pass(e, &d, *which));
     }
     passes.extend_from_slice(&extra);
+    // Renderer 0's list of the first pass's type (group 1, list 0) draws them after its own two.
+    let groups = e.mem.u32(d.w.br + 8);
+    let mut list = vec![d.w.passes[0], d.w.passes[1]];
+    list.extend_from_slice(&extra);
+    list_at(e, groups + 0x68, &list);
     for group in 0..2 {
         alpha_state(e, &d, group, 3, 0xf, HALF);
-        for (r, br) in d.renderers().into_iter().enumerate() {
+        for br in d.renderers() {
             let mut node = e.mem.u32(br + 0x78 + 0xc * group);
             while node != 0 {
                 let g = e.mem.u32(node + 8);
@@ -11637,11 +11642,7 @@ fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u
             set(e, h + 8, br);
             let pass = own_geometry_pass(e, &d);
             passes.push(pass);
-            let mut list = vec![pass];
-            if r == 0 && group == 0 {
-                list.extend_from_slice(&extra);
-            }
-            list_at(e, h + 0xc, &list);
+            list_at(e, h + 0xc, &[pass]);
             set(e, br + 0x90 + 4 * group, h);
         }
     }
