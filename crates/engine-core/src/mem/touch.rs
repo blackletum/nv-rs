@@ -174,6 +174,12 @@ impl Touch {
 }
 
 impl Live {
+    /// Tags `[addr, addr + len)` with tag `tag` and class `class` by hand (a diagnostic test's census of chosen ranges:
+    /// the drawing thread's acceptance check tags what main owns). As [`Mem::touch_tag`]; nothing with the census off.
+    pub fn touch_tag_range(&self, addr: u32, len: u32, tag: u16, class: u32) {
+        self.touch_tag(addr, len, tag, class);
+    }
+
     /// Drops the tags of the objects that overlap `[addr, addr + len)`; answers the pages left
     /// with none, to be plainly mapped again.
     fn forget(&mut self, addr: u32, len: u32) -> Vec<usize> {

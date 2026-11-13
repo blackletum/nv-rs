@@ -11316,3 +11316,269 @@ fn set_shader_constants_uploads_the_draws_own_constants() {
         |_, _, _| {},
     );
 }
+
+// ---- The whole-frame acceptance check (the drawing thread's piece 8 entry condition) ----
+//
+// The whole world draw runs twice in the test world, with the touch census (`Mem::enable_touch`) on the ranges main
+// owns (what the frame's tail may change): once with the switch off, once with it on (the packet filled at the cut,
+// the own state taken). With the switch on every read of a range the packet or the own state holds is served from
+// the packet, so a census hit on such a range during the draw is a read or write that escaped them: the census
+// names the function (each typed call goes by address while a diagnostic is on), the object kind, the offset and
+// whether it wrote. Hits on main-owned fields the cut does not copy are listed too, for their owners to class as
+// set at load (read in place) or changed by the tail (to copy). The two runs must also leave the same memory.
+
+use engine_core::mem::{TouchHit, TouchSpec};
+
+/// The kinds of main-owned range the check tags, with the ranges of each the cut or the own state copies (offsets
+/// in the object; the cut's `take_*` rules and the own blocks).
+const ACCEPTANCE_KINDS: &[(&str, &[(u32, u32)])] = &[
+    ("geometry", &[(0x68, 0x9c)]),
+    ("bound", &[(0, 0x10)]),
+    ("shader property", &[(0x24, 0x38)]),
+    ("camera", &[(0x68, 0x114)]),
+    ("accumulator", &[(8, 0xc), (0x38, 0x39), (0x3a, 0x3b)]),
+    ("pass", &[(9, 0xa), (0xc, 0x10)]),
+    ("light array", &[(0, 0x40)]),
+    ("pass light", &[(0x10, 0x50), (0xd0, 0xd8), (0xed, 0xee), (0xf4, 0xfc), (0x144, 0x1a4)]),
+    ("light", &[(0x68, 0x9c), (0xc4, 0xec), (0xf0, 0xfc)]),
+    ("own global", &[(0, u32::MAX)]),
+    ("render state cache", &[(0, u32::MAX)]),
+    ("frame value", &[(0, u32::MAX)]),
+];
+
+/// What the acceptance world tags: (kind index, address, length).
+fn acceptance_objects(e: &Engine, d: &DrawW, own: &[u32]) -> Vec<(u16, u32, u32)> {
+    let mut v = Vec::new();
+    let mut passes: Vec<u32> = d.w.passes.to_vec();
+    passes.push(d.w.skin_pass);
+    let mut geometries: Vec<u32> = passes.iter().map(|p| e.mem.u32(*p)).collect();
+    geometries.extend_from_slice(own);
+    geometries.sort_unstable();
+    geometries.dedup();
+    for g in geometries.into_iter().filter(|g| *g != 0) {
+        v.push((0, g, 0xc4));
+        let bound = e.mem.u32(g + 0x20);
+        if bound != 0 {
+            v.push((1, bound, 0x10));
+        }
+        let property = e.mem.u32(g + 0xa8);
+        if property != 0 {
+            v.push((2, property, 0x80));
+        }
+    }
+    v.push((3, e.mem.u32(d.w.acc + 8), 0x114));
+    v.push((4, d.w.acc, 0x1ac));
+    passes.sort_unstable();
+    passes.dedup();
+    let mut seen = Vec::new();
+    for p in passes.into_iter().filter(|p| *p != 0) {
+        v.push((5, p, 0x10));
+        let count = u32::from(e.mem.u8(p + 9));
+        let lights = e.mem.u32(p + 0xc);
+        if lights == 0 || seen.contains(&lights) {
+            continue;
+        }
+        seen.push(lights);
+        v.push((6, lights, 4 * count.max(1)));
+        for i in 0..count {
+            let shadow = e.mem.u32(lights + 4 * i);
+            if shadow == 0 || seen.contains(&shadow) {
+                continue;
+            }
+            seen.push(shadow);
+            v.push((7, shadow, 0xf8 + 4));
+            let light = e.mem.u32(shadow + 0xf8);
+            if light != 0 && !seen.contains(&light) {
+                seen.push(light);
+                v.push((8, light, 0xfc));
+            }
+        }
+    }
+    for (from, to) in statics::GLOBAL_BLOCKS {
+        v.push((9, from, to - from));
+    }
+    v.push((10, d.w.cache, 0x1114));
+    for (at, len) in [(0x011f_940cu32, 0x10u32), (0x011f_94ac, 4), (0x011f_91c4, 1)] {
+        v.push((11, at, len));
+    }
+    v
+}
+
+/// The acceptance world: the whole draw's world with both renderers drawn, the water reflection copied, the
+/// active lists' pass types and every alpha list filled (each sorted group and grouped alpha with a geometry of
+/// its own). Answers the halves' words and the own geometries.
+fn acceptance_world(e: &mut Engine) -> (DrawW, Vec<u32>, Vec<u32>) {
+    let d = draw_world(e);
+    let mut own = Vec::new();
+    acc_slots(e, d.w.acc, true);
+    set(e, d.w.acc + 0x19c, 0);
+    held(e, d.w.acc, 1);
+    for g in [d.w.geometry, d.w.skinned] {
+        set(e, g + 4, 1);
+    }
+    e.mem.set_u8(d.w.acc + 0x38, 1);
+    set(e, d.w.acc + 0x18c, 2);
+    active_lists(e, &d, 2);
+    for group in 0..2 {
+        alpha_state(e, &d, group, 3, 0xf, HALF);
+        for br in d.renderers() {
+            let mut node = e.mem.u32(br + 0x78 + 0xc * group);
+            while node != 0 {
+                let g = e.mem.u32(node + 8);
+                e.mem.set_u8(g, 1);
+                e.mem.set_u16(g + 2, 1);
+                set(e, g + 4, 4);
+                let pass = own_geometry_pass(e, &d);
+                own.push(e.mem.u32(pass));
+                list_at(e, g + 0xc, &[pass]);
+                node = e.mem.u32(node);
+            }
+            let h = e.mem.alloc(0x20);
+            e.mem.set_u16(h + 2, 1);
+            set(e, h + 4, 4);
+            set(e, h + 8, br);
+            let pass = own_geometry_pass(e, &d);
+            own.push(e.mem.u32(pass));
+            list_at(e, h + 0xc, &[pass]);
+            set(e, br + 0x90 + 4 * group, h);
+        }
+    }
+    set(e, 0x011f_9438, 0x4242);
+    set(e, 0x011f_943c, 0x4343);
+    let camera = full_camera(e, &d.w);
+    e.with_stack(4, |_, _| ());
+    let words = vec![camera, d.w.acc, 1];
+    (d, words, own)
+}
+
+/// One whole draw of the acceptance world with the census on what main owns; `on`: the switch on (the packet, the
+/// own state taken). Answers the halves' answers, the census's hits and the functions called by address.
+#[allow(clippy::type_complexity)]
+fn acceptance_run(on: bool) -> (Engine, (Ret, Ret), Vec<(TouchHit, u64)>, Vec<u32>) {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let mut e = Engine::new();
+    let (d, words, own) = acceptance_world(&mut e);
+    let mut spec = TouchSpec::default();
+    for (name, _) in ACCEPTANCE_KINDS {
+        spec.tag(name);
+    }
+    e.mem.enable_touch(spec);
+    for (kind, addr, len) in acceptance_objects(&e, &d, &own) {
+        e.mem.touch_tag_range(addr, len, kind, addr);
+    }
+    e.call_log = Some(Vec::new());
+    if on {
+        statics::set_forced(true);
+        capture::set_thread_mode(Some(capture::Mode::On));
+    }
+    let answer = (first(&mut e, &words), second(&mut e, &words));
+    if on {
+        capture::set_thread_mode(None);
+        statics::set_forced(false);
+    }
+    let hits = e.mem.touch_hits();
+    let mut called: Vec<u32> = e
+        .call_log
+        .take()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(a, _)| a)
+        .collect();
+    called.sort_unstable();
+    called.dedup();
+    (e, answer, hits, called)
+}
+
+/// Whether `[offset, offset + len)` of an object of kind `kind` lies in what the cut or the own state copies.
+fn acceptance_copied(kind: u16, offset: u32, len: u8) -> bool {
+    let end = offset.saturating_add(u32::from(len.max(1)));
+    ACCEPTANCE_KINDS[kind as usize]
+        .1
+        .iter()
+        .any(|(from, to)| offset < *to && end > *from)
+}
+
+/// The typed draw paths the acceptance world should reach, by the function that enters each.
+const ACCEPTANCE_PATHS: &[(u32, &str)] = &[
+    (0x00b9_8b20, "the alpha sort's comparison"),
+    (0x00b9_9a10, "the alpha sort"),
+    (0x00b7_dab0, "SetupGeometryConstants (the shadow light shader)"),
+    (0x00b7_0820, "the per-light set-up"),
+    (0x00b7_be00, "the simple shadow clip planes"),
+    (0x00b7_dde0, "the geometry pass"),
+    (0x00b8_9d80, "the sky"),
+    (0x00ba_c9c0, "tall grass"),
+    (0x00bc_9a50, "no-lighting"),
+    (0x00b8_64d0, "water"),
+    (0x00bb_2760, "SpeedTree leaves"),
+    (0x00bb_ef90, "lighting 3.0"),
+    (0x00a9_b1f0, "particles (NiParticles::RenderImmediate)"),
+];
+
+/// The acceptance check: prints, for the switch-on run, every census hit during the whole draw (function, object
+/// kind, offset, length, read or write, count), marked ESCAPE where the range is one the packet or the own state
+/// holds, with the paths the world reached; and checks that both runs leave the same memory. Run by hand
+/// (`--ignored`); `NV_ACCEPTANCE_OUT=FILE` also writes the table to FILE.
+#[test]
+#[ignore = "the drawing thread's acceptance census: run by hand while its findings are open"]
+fn whole_frame_acceptance() {
+    let (off_engine, off_answer, off_hits, _) = acceptance_run(false);
+    let (on_engine, on_answer, on_hits, called) = acceptance_run(true);
+    let report = cut::last_report().expect("the cut opened a packet and the join closed it");
+    let mut out = String::new();
+    out.push_str(&format!("packet report: {report:?}\n"));
+    out.push_str(&format!(
+        "answers: off {off_answer:?} on {on_answer:?}; memory {}\n",
+        if memory_digest_beside_stack(&off_engine) == memory_digest_beside_stack(&on_engine) {
+            "the same"
+        } else {
+            "DIFFERS"
+        }
+    ));
+    out.push_str("paths reached:\n");
+    for (addr, name) in ACCEPTANCE_PATHS {
+        let reached = called.binary_search(addr).is_ok();
+        out.push_str(&format!(
+            "  {} {addr:08x} {name}\n",
+            if reached { "yes" } else { "NO " }
+        ));
+    }
+    let off_kinds: std::collections::BTreeSet<(u16, u32, bool)> = off_hits
+        .iter()
+        .map(|(h, _)| (h.tag, h.offset, h.write))
+        .collect();
+    out.push_str(&format!(
+        "switch off: {} kinds of access to main-owned ranges\n",
+        off_kinds.len()
+    ));
+    out.push_str("switch on (function caller kind+offset len r/w count):\n");
+    let mut escapes = 0;
+    for (h, n) in &on_hits {
+        let copied = acceptance_copied(h.tag, h.offset, h.len);
+        if copied && h.function != 0 {
+            escapes += 1;
+        }
+        out.push_str(&format!(
+            "  {} {:08x} {:08x} {}+{:#x} {} {} x{n}\n",
+            if !copied {
+                "not-copied"
+            } else if h.function == 0 {
+                "cut/join  "
+            } else {
+                "ESCAPE    "
+            },
+            h.function,
+            h.caller,
+            ACCEPTANCE_KINDS[h.tag as usize].0,
+            h.offset,
+            h.len,
+            if h.write { "w" } else { "r" },
+        ));
+    }
+    out.push_str(&format!("escapes: {escapes}\n"));
+    println!("{out}");
+    if let Ok(path) = std::env::var("NV_ACCEPTANCE_OUT") {
+        std::fs::write(path, &out).expect("the acceptance table written");
+    }
+}
