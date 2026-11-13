@@ -11339,7 +11339,16 @@ const ACCEPTANCE_KINDS: &[(&str, &[(u32, u32)])] = &[
     ("accumulator", &[(8, 0xc), (0x38, 0x39), (0x3a, 0x3b)]),
     ("pass", &[(9, 0xa), (0xc, 0x10)]),
     ("light array", &[(0, 0x40)]),
-    ("pass light", &[(0x10, 0x50), (0xd0, 0xd8), (0xed, 0xee), (0xf4, 0xfc), (0x144, 0x1a4)]),
+    (
+        "pass light",
+        &[
+            (0x10, 0x50),
+            (0xd0, 0xd8),
+            (0xed, 0xee),
+            (0xf4, 0xfc),
+            (0x144, 0x1a4),
+        ],
+    ),
     ("light", &[(0x68, 0x9c), (0xc4, 0xec), (0xf0, 0xfc)]),
     ("own global", &[(0, u32::MAX)]),
     ("render state cache", &[(0, u32::MAX)]),
@@ -11398,7 +11407,11 @@ fn acceptance_objects(e: &Engine, d: &DrawW, own: &[u32]) -> Vec<(u16, u32, u32)
         v.push((9, from, to - from));
     }
     v.push((10, d.w.cache, 0x1114));
-    for (at, len) in [(0x011f_940cu32, 0x10u32), (0x011f_94ac, 4), (0x011f_91c4, 1)] {
+    for (at, len) in [
+        (0x011f_940cu32, 0x10u32),
+        (0x011f_94ac, 4),
+        (0x011f_91c4, 1),
+    ] {
         v.push((11, at, len));
     }
     v
@@ -11503,7 +11516,10 @@ fn acceptance_copied(kind: u16, offset: u32, len: u8) -> bool {
 const ACCEPTANCE_PATHS: &[(u32, &str)] = &[
     (0x00b9_8b20, "the alpha sort's comparison"),
     (0x00b9_9a10, "the alpha sort"),
-    (0x00b7_dab0, "SetupGeometryConstants (the shadow light shader)"),
+    (
+        0x00b7_dab0,
+        "SetupGeometryConstants (the shadow light shader)",
+    ),
     (0x00b7_0820, "the per-light set-up"),
     (0x00b7_be00, "the simple shadow clip planes"),
     (0x00b7_dde0, "the geometry pass"),
