@@ -11351,7 +11351,7 @@ const ACCEPTANCE_KINDS: &[(&str, &[(u32, u32)])] = &[
     ),
     ("light", &[(0x68, 0x9c), (0xc4, 0xec), (0xf0, 0xfc)]),
     ("own global", &[(0, u32::MAX)]),
-    ("render state cache", &[(0, u32::MAX)]),
+    ("render state cache", &[(4, 0x1114)]),
     ("frame value", &[(0, u32::MAX)]),
 ];
 
@@ -11533,7 +11533,9 @@ const ACCEPTANCE_PATHS: &[(u32, &str)] = &[
 ];
 
 /// The census's hits summed over the objects of each kind: (function, caller, kind, offset, length, write) -> count.
-fn acceptance_table(hits: &[(TouchHit, u64)]) -> std::collections::BTreeMap<(u32, u32, u16, u32, u8, bool), u64> {
+fn acceptance_table(
+    hits: &[(TouchHit, u64)],
+) -> std::collections::BTreeMap<(u32, u32, u16, u32, u8, bool), u64> {
     let mut table = std::collections::BTreeMap::new();
     for (h, n) in hits {
         *table
