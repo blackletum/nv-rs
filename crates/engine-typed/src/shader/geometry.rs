@@ -34,11 +34,9 @@ fn idx(i: usize) -> u32 {
     i as u32
 }
 
-/// The first word of the rendering pass's (`011f91e0`) +0xc: its first light.
+/// The first word of the rendering pass's (`011f91e0`) +0xc: its first light (the packet's, value packet B).
 fn rendering_object(e: &Engine) -> u32 {
-    let rendering = e.global::<u32>(RENDERING_PASS);
-    let holder = e.mem.u32(rendering + 0xc);
-    e.mem.u32(holder)
+    crate::draw::packet::rendering_light(e, e.global::<u32>(RENDERING_PASS), 0)
 }
 
 /// The renderer (`011f4748`), the HDR switch (`011f941e`) and the colour row the lights scale (`011fa0d0`);
@@ -95,9 +93,8 @@ pub fn vertex_entry_12(e: &mut Engine, _this: Ptr, object: u32) {
     });
 }
 
-/// The game time the shaders animate with (`011f940c`), `3600.0` (`double`, `01012640`), the
+/// (The game time the shaders animate with, `011f940c`, is read through the packet: `packet::time_value`.) `3600.0` (`double`, `01012640`), the
 /// `double` `6.28318` (`0104eea0`) and the angle `00b790d0` stores (`011fd868`).
-const GAME_TIME: u32 = 0x011f_940c;
 const SECONDS_PER_HOUR: u32 = 0x0101_2640;
 const TWO_PI: u32 = 0x0104_eea0;
 const ANGLE: u32 = 0x011f_d868;
@@ -111,7 +108,7 @@ pub fn vertex_entry_15(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 15) {
         return;
     }
-    let time = e.global::<f32>(GAME_TIME);
+    let time = f32::from_bits(crate::draw::packet::time_value(e, 0));
     let value = div_d(time, e.global::<f64>(SECONDS_PER_HOUR));
     let value = mul_d(value, e.global::<f64>(TWO_PI));
     let count = e.mem.u32(object.addr() + 0xe4) as i32;
@@ -167,7 +164,9 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
     let mut values = [0f32; 3];
     for (index, value) in values.iter_mut().enumerate() {
         let offset = 4 * idx(index);
-        *value = float_at(e, position + offset) - e.global::<f32>(CAMERA + offset);
+        // The bound's centre through the packet (value packet B).
+        let centre = f32::from_bits(crate::draw::packet::bound_word(e, position, idx(index)));
+        *value = centre - e.global::<f32>(CAMERA + offset);
     }
     for (index, value) in values.iter().enumerate() {
         e.set_global(OFFSET + 4 * idx(index), *value);
@@ -181,7 +180,6 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
 /// float max / min helpers (`00404010`, `0040ebd0`; `cdecl`, two floats, the result in ST0).
 const VECTOR: u32 = 0x011f_a0b0;
 const VALUE_DEFAULT: u32 = 0x011a_d808;
-const START_TIME: u32 = 0x011f_94ac;
 const DURATION: u32 = 0x011a_d838;
 const FIVE: u32 = 0x0102_0998;
 const TO_X: u32 = 0x011f_962c;
@@ -221,12 +219,13 @@ pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, s
             }
         }
         0x230 => {
-            let elapsed = e.global::<f32>(GAME_TIME) - e.global::<f32>(START_TIME);
+            let elapsed = f32::from_bits(crate::draw::packet::time_value(e, 0))
+                - f32::from_bits(crate::draw::packet::start_time(e));
             let scale = mul_d(e.global::<f32>(DURATION), e.global::<f64>(FIVE));
-            let x_offset = float_at(e, second + 0x8c);
-            let y_offset = float_at(e, second + 0x90);
-            // The exe also reads +0x94 into a stack slot nothing reads.
-            let _unread = e.mem.u32(second + 0x94);
+            // The geometry's translation (its world transform, the packet's: value packet B).
+            let x_offset = f32::from_bits(crate::draw::packet::world_word(e, second, 0x8c));
+            let y_offset = f32::from_bits(crate::draw::packet::world_word(e, second, 0x90));
+            // The exe also reads +0x94 into a stack slot nothing reads (not read here).
             let ratio = elapsed / scale;
             // The larger of 0 and the ratio (`00404010`), then the smaller of 1 and that (`0040ebd0`):
             // `cdecl(a, b)`, each answering in ST0.
@@ -404,7 +403,8 @@ pub fn toggles(
     let lit = e.vcall(property, 0xf4, &args![5u32, 0u32]).u32();
     let value = if lit != 0 { 1.0f32.to_bits() } else { 0 };
     e.set_global(TOGGLE_THIRD, value);
-    let word = copy_float(e, property + 0x30);
+    // The property's per-frame value through the packet (value packet B).
+    let word = crate::draw::packet::property_word(e, property, 0x30);
     e.set_global(TOGGLE_SECOND, word);
 }
 
@@ -426,7 +426,8 @@ pub fn pixel_entry_16(e: &mut Engine, _this: Ptr, object: Ptr) {
     let object = object.addr();
     let value = copy_float(e, object + 0xe0);
     e.set_global(VALUE_FIRST, value);
-    let value = if e.mem.u8(object + 0x24) & 0x10 != 0 {
+    // The property's second flags through the packet (value packet B).
+    let value = if crate::draw::packet::property_word(e, object, 0x24) & 0x10 != 0 {
         copy_float(e, VALUE_CONSTANT)
     } else {
         1.0f32.to_bits()
@@ -657,12 +658,13 @@ pub fn obj_to_cube(
     if !entry_enabled(e, VERTEX_ENTRIES + 4) {
         return;
     }
+    // The pass's lights (array and count) through the packet (value packet B).
     let block = block.addr();
-    let object = e.mem.u32(block + 0xc);
-    let byte = e.mem.u8(block + 9);
+    let object = crate::draw::packet::pass_lights(e, block);
+    let byte = crate::draw::packet::rendering_pass_byte9(e, block);
     let mut direct = object == 0;
-    if !direct && byte != 0 && e.mem.u32(object) != 0 {
-        let first = e.mem.u32(object);
+    if !direct && byte != 0 && crate::draw::packet::pass_light_at(e, object, 0) != 0 {
+        let first = crate::draw::packet::pass_light_at(e, object, 0);
         direct = e.mem.u8(first + 0xed) != 0;
     }
     if !direct {
@@ -684,7 +686,7 @@ pub fn obj_to_cube(
             return;
         }
         let rendering = e.global::<u32>(RENDERING_PASS);
-        if e.mem.u32(rendering + 0xc) == 0 || byte == 0 {
+        if crate::draw::packet::pass_lights(e, rendering) == 0 || byte == 0 {
             return;
         }
         for matrix in [first, second] {
@@ -701,8 +703,7 @@ pub fn obj_to_cube(
             let value = e.global::<f32>(CAMERA + 4 * index) + float_at(e, slot);
             e.mem.set_f32(slot, value);
         }
-        let lights = e.mem.u32(rendering + 0xc);
-        let light = e.mem.u32(lights);
+        let light = crate::draw::packet::rendering_light(e, rendering, 0);
         crate::draw::thunks::call_matrix_multiply(e, product, first, light + 0x10);
         let bytes = e.mem.bytes(product, 0x40);
         e.mem.write(second, &bytes);
@@ -865,7 +866,8 @@ pub fn lights(
         }
         return;
     }
-    let count = u32::from(e.mem.u8(rendering + 9));
+    // The pass's light count, array and each light's point flag through the packet (value packet B).
+    let count = u32::from(crate::draw::packet::rendering_pass_byte9(e, rendering));
     let kind = e.mem.u16(rendering + 4);
     let entry = e.global::<u32>(VERTEX_ENTRIES + 4 * 6);
     if e.mem.u8(entry + 8) != 0 {
@@ -885,7 +887,7 @@ pub fn lights(
         e.mem.set_u32(entry + 0x20, count.wrapping_sub(1));
     }
     let mut index: u8 = 0;
-    if e.mem.u8(rendering + 9) > 0 {
+    if count > 0 {
         e.with_stack(0x80, |e, frame| {
             let frame = frame.addr();
             let by_value = frame;
@@ -899,8 +901,7 @@ pub fn lights(
                     break;
                 }
                 let i = u32::from(index);
-                let lights = e.mem.u32(rendering + 0xc);
-                let light = e.mem.u32(lights.wrapping_add(i * 4));
+                let light = crate::draw::packet::rendering_light(e, rendering, i);
                 typed_call!(
                     FAMILY,
                     0x00b7_0820,
@@ -918,7 +919,7 @@ pub fn lights(
                     let fourth = copy_float(e, direction);
                     e.mem.set_u32(row + 0xc, fourth);
                 } else if light != 0 {
-                    if e.mem.u8(light + 0xf4) != 0 {
+                    if crate::draw::packet::pass_light_flag(e, light, 0xf4) != 0 {
                         for word in 0..3u32 {
                             let value = copy_float(e, position + 4 * word);
                             e.mem.set_u32(vector + 4 * word, value);
@@ -968,7 +969,7 @@ pub fn lights(
                     }
                 }
                 index = index.wrapping_add(1);
-                if index >= e.mem.u8(rendering + 9) {
+                if index >= crate::draw::packet::rendering_pass_byte9(e, rendering) {
                     break;
                 }
             }
@@ -976,11 +977,11 @@ pub fn lights(
     }
     let mut scale_colour = e.global::<u8>(HDR) != 0
         && e.mem.u32(property + 0x20) & 0x400 != 0
-        && e.mem.u8(rendering + 9) != 0;
+        && crate::draw::packet::rendering_pass_byte9(e, rendering) != 0;
     if scale_colour {
-        let lights = e.mem.u32(rendering + 0xc);
-        let first = e.mem.u32(lights);
-        scale_colour = e.mem.u8(first + 0xf4) == 0;
+        // The pass's first light's point flag, through the packet (value packet B).
+        let first = crate::draw::packet::rendering_light(e, rendering, 0);
+        scale_colour = crate::draw::packet::pass_light_flag(e, first, 0xf4) == 0;
     }
     if scale_colour {
         let scale = e.global::<f32>(HDR_LIGHT_SCALE);
@@ -1071,7 +1072,8 @@ pub fn ambient_emittance(
     let rendering = rendering.addr();
     let current = e.global::<u32>(RENDERING_PASS);
     let colour: [u32; 3] = std::array::from_fn(|index| copy_float(e, ROWS + 4 * idx(index)));
-    let alpha = copy_float(e, property + 0x28);
+    // The property's alpha through the packet (value packet B).
+    let alpha = crate::draw::packet::property_word(e, property, 0x28);
     for (index, value) in colour.iter().enumerate() {
         e.set_global(ROWS + 4 * idx(index), *value);
     }
@@ -1093,9 +1095,10 @@ pub fn ambient_emittance(
     }
     let kind = e.mem.u16(rendering + 4);
     if (0xc3..=0xd6).contains(&kind) {
-        let count = f32::from(e.mem.u8(rendering + 9));
+        // The pass's light count through the packet (value packet B).
+        let count = f32::from(crate::draw::packet::rendering_pass_byte9(e, rendering));
         e.set_global(LIGHT_COUNT, count);
-        let count = f32::from(e.mem.u8(rendering + 9));
+        let count = f32::from(crate::draw::packet::rendering_pass_byte9(e, rendering));
         e.set_global(LIGHT_COUNT_CONSTANT, count);
     }
     if e.global::<u8>(WHITE_AMBIENT) != 0 {
@@ -1104,7 +1107,7 @@ pub fn ambient_emittance(
         }
     }
     let current_kind = e.mem.u16(current + 4);
-    if e.mem.u32(property + 0x24) & 0x8000 != 0
+    if crate::draw::packet::property_word(e, property, 0x24) & 0x8000 != 0
         && e.mem.u32(property + 0x20) & 0x20000 == 0
         && (0x244..=0x24b).contains(&current_kind)
     {
@@ -1159,7 +1162,7 @@ pub fn ambient_emittance(
     let mode = e.global::<u32>(SHADER_MODE);
     if mode == 8 {
         let one = 1.0f32.to_bits();
-        let alpha = if e.mem.u32(property + 0x24) & 0x20000 != 0 {
+        let alpha = if crate::draw::packet::property_word(e, property, 0x24) & 0x20000 != 0 {
             0
         } else {
             one
@@ -1210,15 +1213,22 @@ const SET_SHADER_CONSTANTS: u32 = 0x00e8_26d0;
 /// vtable +0x78) for the pass's pixel (+0x44) and vertex (+0x5c) program; with the block's +0x10
 /// property's bit 0, the shader's +0x1c gets it through its vtable +0x24.
 pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
+    let geometry = e.mem.u32(e.global::<u32>(RENDERING_PASS));
+    // The geometry's world transform and bound as the value packet holds them (value packet B): the helpers
+    // handed them read the packet's images while the packet is open, the geometry's own otherwise.
+    crate::draw::packet::with_drawn(e, geometry, |e, transform, position| {
+        geometry_constants_with(e, this, block, transform, position);
+    });
+}
+
+/// [`setup_geometry_constants`] with the transform and the bound (`transform`: the geometry's +0x68, `position`: its
+/// bound; or the packet's images of them).
+fn geometry_constants_with(e: &mut Engine, this: Ptr, block: Ptr, transform: u32, position: u32) {
     let base = this.addr();
     let block = block.addr();
     let rendering = e.global::<u32>(RENDERING_PASS);
     let geometry = e.mem.u32(rendering);
     let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
-    let mut position = e.mem.u32(geometry + 0x20);
-    if position == 0 {
-        position = DEFAULT_POSITION;
-    }
     let data = e.mem.u32(geometry + 0xb8);
     let geometry_data = e.mem.u32(data + 0x34);
     let fog_word = e.mem.u32(block + 8);
@@ -1232,7 +1242,6 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
         typed_call!(FAMILY, 0x00b9_7e30, state::set_z_write_enable(e, 0u8, 1u32));
         typed_call!(FAMILY, 0x00b9_8380, state::set_color_write(e, 0u32, 1u32));
     }
-    let transform = geometry + 0x68;
     e.with_stack(0x40, |e, matrix| {
         let matrix_addr = matrix.addr();
         typed_call!(

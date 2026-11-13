@@ -85,9 +85,9 @@ const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
 /// +0xc).
 pub fn stage_light_texture(e: &mut Engine, stage: u32) {
     let stage = pass_stage(e, stage);
+    // The rendered pass's first light through the packet (value packet B).
     let rendering = e.global::<u32>(RENDERING_PASS);
-    let lights = e.mem.u32(rendering.wrapping_add(0xc));
-    let light = e.mem.u32(lights);
+    let light = crate::draw::packet::rendering_light(e, rendering, 0);
     let rendered = e.mem.u32(light.wrapping_add(0x10c));
     let texture = e
         .call(RENDERED_TEXTURE_GET_TEXTURE, &args![rendered, 0u32])
@@ -217,7 +217,8 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
     let kind = u32::from(e.mem.u16(rendering.wrapping_add(4)));
     let property = e.mem.u32(block.addr().wrapping_add(0xc));
     let pass = e.global::<u32>(CURRENT_PASS);
-    let second_set = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;
+    // The property's second flags through the packet (value packet B).
+    let second_set = crate::draw::packet::property_word(e, property, 0x24) & 0x100000 == 0;
     let p = Ptr::new(property);
     let body = match kind {
         0x2

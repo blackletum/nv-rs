@@ -797,11 +797,11 @@ pub(crate) fn point_lights_on(e: &Engine) -> u8 {
     e.global::<u8>(0x011f_9ef0)
 }
 
-/// The pass being rendered's first scene light (the first word of its light list, +0xc).
+/// The pass being rendered's first scene light (the first word of its light list, +0xc; the packet's, value
+/// packet B).
 #[inline(always)]
 pub(crate) fn rendering_first_light(e: &Engine) -> u32 {
-    let lights = e.global::<u32>(rendering_pass(e).wrapping_add(0xc));
-    e.global::<u32>(lights)
+    rendering_light(e, rendering_pass(e), 0)
 }
 
 /// A scene light's word at `offset` (+0x10c its shadow map, a rendered texture).
@@ -869,7 +869,7 @@ pub(crate) fn full_bright(e: &Engine) -> u8 {
 }
 #[inline(always)]
 pub(crate) fn game_time(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_940c)
+    time_value(e, 0)
 }
 #[inline(always)]
 pub(crate) fn ambient_word(e: &Engine, index: u32) -> u32 {
@@ -919,10 +919,10 @@ pub(crate) fn subtextures(e: &Engine, data: u32) -> u32 {
     e.global::<u32>(data.wrapping_add(0x68))
 }
 
-/// A shader property's alpha (+0x28, a float's word).
+/// A shader property's alpha (+0x28, a float's word; the packet's, value packet B).
 #[inline(always)]
 pub(crate) fn property_alpha(e: &Engine, property: u32) -> u32 {
-    e.global::<u32>(property.wrapping_add(0x28))
+    property_word(e, property, 0x28)
 }
 
 /// A shader property's falloff word `index` (+0x70 to +0x7c).
@@ -1125,11 +1125,12 @@ pub(crate) fn water_extra_word(e: &Engine, index: u32) -> u32 {
     e.global::<u32>(0x011f_f398 + 4 * index)
 }
 
-/// The pass being rendered's scene light `index` (its lights, +0xc, a word each).
+/// The pass being rendered's scene light `index` (its lights, +0xc, a word each). The array's word and its words as the cut copies them
+/// (value packet B).
 #[inline(always)]
 pub(crate) fn rendering_light(e: &Engine, pass: u32, index: u32) -> u32 {
-    let lights = e.global::<u32>(pass.wrapping_add(0xc));
-    e.global::<u32>(lights.wrapping_add(index.wrapping_mul(4)))
+    let lights = capture::word(e, pass, 0xc);
+    capture::word(e, lights, index.wrapping_mul(4))
 }
 
 /// A leaf property's light value (+0x6c, a float's word).
@@ -1162,10 +1163,11 @@ pub(crate) fn hdr_effect_scale(e: &Engine) -> u32 {
 }
 
 /// A lighting property's word at `offset`: its alpha (+0x30), light value (+0x6c), emittance (+0x84 to
-/// +0x90), glow (+0xe0), refraction count (+0xe4) and parallax (+0xe8, +0xec).
+/// +0x90), glow (+0xe0), refraction count (+0xe4) and parallax (+0xe8, +0xec); the alpha the packet's ([`property_word`],
+/// value packet B).
 #[inline(always)]
 pub(crate) fn lighting_word(e: &Engine, property: u32, offset: u32) -> u32 {
-    e.global::<u32>(property.wrapping_add(offset))
+    property_word(e, property, offset)
 }
 
 /// Whether a lighting property has lights (the first word of its light list, +0xb4).
@@ -1214,14 +1216,10 @@ pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
     e.global::<u8>(light.wrapping_add(offset))
 }
 
-/// A pass's lights (+0xc) and a word list's word `index`.
+/// A pass's lights (+0xc; the packet's, value packet B).
 #[inline(always)]
 pub(crate) fn pass_lights(e: &Engine, pass: u32) -> u32 {
-    e.global::<u32>(pass.wrapping_add(0xc))
-}
-#[inline(always)]
-pub(crate) fn list_word(e: &Engine, list: u32, index: u32) -> u32 {
-    e.global::<u32>(list.wrapping_add(index.wrapping_mul(4)))
+    capture::word(e, pass, 0xc)
 }
 
 /// A renderer's view and light matrices' word at `offset` (+0x940, +0x980, +0x9c0, sixteen words each).
@@ -1270,4 +1268,148 @@ pub(crate) fn held_accumulator(e: &Engine) -> u32 {
 #[inline(always)]
 pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_95ec)
+}
+
+// ---- Value packet B: the shader family's reads of what the cut copies (a pass's lights, the time values). ----
+//
+// The cut (`super::cut`) copies each pass's lights: a pass light's (`ShadowSceneLight`) weight (+0xd0) and flags
+// (+0xf4, +0xf5), and through its +0xf8 its light's (`NiLight`) world transform (+0x68 to +0x9c), values (+0xc4 to
+// +0xe4: dimmer, ambient and diffuse colours, radius) and, for a light that is not a point light, its direction
+// (+0xf0 to +0xfc); and the time values. These accessors read those through the packet. Not routed, read in place:
+// a pass light's light pointer (+0xf8, set when the light is made), and what the cut does not take (a pass light's
+// +0xd4, +0xed, +0x144 to +0x208; a light's +0xe4 and +0xe8): a read of those through the packet would be a miss, so
+// they stay guest reads until the cut takes them (listed for the drawing thread's cut).
+
+/// A pass light's flag byte (+0xf4 a point light, +0xf5 its ambient), as the cut copies it.
+#[inline(always)]
+pub(crate) fn pass_light_flag(e: &Engine, shadow: u32, offset: u32) -> u8 {
+    debug_assert!(offset == 0xf4 || offset == 0xf5);
+    capture::byte(e, shadow, offset)
+}
+
+/// A pass light's weight (+0xd0, a float's word), as the cut copies it.
+#[inline(always)]
+pub(crate) fn pass_light_weight(e: &Engine, shadow: u32) -> u32 {
+    capture::word(e, shadow, 0xd0)
+}
+
+/// A pass light's light (its +0xf8, read in place: set when the light is made).
+#[inline(always)]
+pub(crate) fn pass_light_light(e: &Engine, shadow: u32) -> u32 {
+    e.global::<u32>(shadow.wrapping_add(0xf8))
+}
+
+/// A pass light's light's word at `offset`, as the cut copies it: its world transform (+0x68 to +0x9c; the
+/// translation +0x8c), its values (+0xc4 to +0xe4) or its direction (+0xf0 to +0xfc, a light that is not a point
+/// light).
+#[inline(always)]
+pub(crate) fn pass_light_value(e: &Engine, light: u32, offset: u32) -> u32 {
+    debug_assert!(
+        (0x68..0x9c).contains(&offset)
+            || (0xc4..0xe4).contains(&offset)
+            || (0xf0..0xfc).contains(&offset)
+    );
+    capture::word(e, light, offset)
+}
+
+/// The shaders' time values (`011f940c`, word `index` of four) and the start time (`011f94ac`), as the cut copies
+/// them.
+#[inline(always)]
+pub(crate) fn time_value(e: &Engine, index: u32) -> u32 {
+    capture::word(e, 0x011f_940c, index.wrapping_mul(4))
+}
+#[inline(always)]
+pub(crate) fn start_time(e: &Engine) -> u32 {
+    capture::word(e, 0x011f_94ac, 0)
+}
+
+/// Hands `f` the address of `object`'s world transform (`m_kWorld`, +0x68, 13 words: a drawn geometry's, which the
+/// cut copies), for the set-ups that pass the transform to helpers by pointer: while the packet is open, the
+/// transform of a guest-stack image of the packet's copy; else the object's own (`object + 0x68`). Off, one relaxed
+/// load and a branch (`capture::image`).
+#[inline(always)]
+pub(crate) fn with_world<R>(
+    e: &mut Engine,
+    object: u32,
+    f: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    let (from, to) = super::cut::WORLD;
+    capture::image(e, object, from, to, |e, base| f(e, base.wrapping_add(from)))
+}
+
+/// A drawn geometry's world transform word at `offset` (+0x68 to +0x98: the rotation, the translation +0x8c, the
+/// scale +0x98), as the cut copies it.
+#[inline(always)]
+pub(crate) fn world_word(e: &Engine, object: u32, offset: u32) -> u32 {
+    debug_assert!((0x68..0x9c).contains(&offset));
+    capture::word(e, object, offset)
+}
+
+/// A shader property's word at `offset`: its per-frame values (+0x24 to +0x34: the second flags, the alpha, the
+/// fade alpha, the distance) as the cut copies them, others (set at load) in place. `offset` is a constant at
+/// every call, so the test folds away.
+#[inline(always)]
+pub(crate) fn property_word(e: &Engine, property: u32, offset: u32) -> u32 {
+    let (from, to) = super::cut::PROPERTY;
+    if offset >= from && offset < to {
+        capture::word(e, property, offset)
+    } else {
+        e.global::<u32>(property.wrapping_add(offset))
+    }
+}
+
+/// Word `index` of a pass's light array (`lights`: the pass's +0xc), as the cut copies it (the pass's light count
+/// words: a read past them, as the exe's second light of a pass with one, is a miss until the cut takes more).
+#[inline(always)]
+pub(crate) fn pass_light_at(e: &Engine, lights: u32, index: u32) -> u32 {
+    capture::word(e, lights, index.wrapping_mul(4))
+}
+
+// Waiting for the cut (value packet B, 2026-11-12): what the Group C set-ups copy in bulk from data the cut does not
+// take yet: the tall grass's instance array, the no-lighting sub-textures and the SpeedTree leaves' 0x300 bytes.
+// Each copy goes through one accessor here and reads in place until the cut copies the block (the drawing agent's
+// `cut.rs`); then the body becomes `capture::image(e, source, 0, size, ..)` and the waiting POISON tests turn on.
+
+/// The tall grass's `count` 0x10-byte instances (the instance data's array, +0x14) copied to `to` (`_memcpy`).
+#[inline(always)]
+pub(crate) fn copy_grass_instances(e: &mut Engine, to: u32, data: u32, count: u16) {
+    let source = grass_instance_array(e, data);
+    super::own::copy_constants(e, to, source, u32::from(count) << 4);
+}
+
+/// A geometry data's `count` 0x10-byte sub-textures (+0x68) copied to `to` (`_memcpy`).
+#[inline(always)]
+pub(crate) fn copy_subtextures(e: &mut Engine, to: u32, data: u32, count: u8) {
+    let source = subtextures(e, data);
+    super::own::copy_constants(e, to, source, u32::from(count) << 4);
+}
+
+/// A leaf property's leaves (the block its slot 0x100 answers, 0x300 bytes) copied to `to` (`_memcpy`).
+#[inline(always)]
+pub(crate) fn copy_leaves(e: &mut Engine, to: u32, property: u32) {
+    let source = e.vcall(property, 0x100, &[]).u32();
+    super::own::copy_constants(e, to, source, 0x300);
+}
+
+/// [`with_world`] with the geometry's world bound as well ([`bound_of`]: its +0x20, or the empty bound): `f` gets
+/// the transform's address and the bound's, each the packet's guest-stack image while the packet is open, for the
+/// set-ups that hand both to helpers by pointer.
+#[inline(always)]
+pub(crate) fn with_drawn<R>(
+    e: &mut Engine,
+    geometry: u32,
+    f: impl FnOnce(&mut Engine, u32, u32) -> R,
+) -> R {
+    let bound = bound_of(e, geometry);
+    with_world(e, geometry, |e, transform| {
+        let (from, to) = super::cut::BOUND;
+        capture::image(e, bound, from, to, |e, image| f(e, transform, image))
+    })
+}
+
+/// The word at `offset` of a block a set-up was handed by [`with_world`] or [`with_drawn`] (the packet's image while
+/// the packet is open, the object's own otherwise): a plain read, since the image is the copy.
+#[inline(always)]
+pub(crate) fn handed_word(e: &Engine, at: u32, offset: u32) -> u32 {
+    e.global::<u32>(at.wrapping_add(offset))
 }
