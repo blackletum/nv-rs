@@ -88,7 +88,9 @@ patch (step 3.5d), switched on only by its commands and only once JIP answers "i
 UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
 in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
 memory, its reader at `Tile::ReadFile`) is a row, off in every preset until proven in the game with a UI
-mod; part 2 is its XML parser and `UIOInjectComponent`, part 3 its tile operators and text patches.
+mod; part 3 (its tile operators, the text zoom, the HUD's hardcore texts; audit
+`measure/uio/AUDIT-uio3-unchanged.md`) is under the same row; part 2 is its XML parser and
+`UIOInjectComponent`.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

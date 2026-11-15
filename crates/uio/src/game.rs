@@ -150,6 +150,7 @@ pub fn game_text(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
 /// target read (`Menu::CompressAndStoreXML`) and patched in memory; a target the game cannot read
 /// is passed over. Nothing is written to a file. The exe's path goes on.
 pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    crate::operators::on_load(e);
     let lists = lists::scan(&mut GameFiles(e));
     let mut patched = std::mem::take(&mut e.ext::<Uio>().patched);
     for (file, tiles) in lists.iter() {
