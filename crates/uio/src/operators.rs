@@ -65,7 +65,7 @@ const ONE: u32 = 0x3f80_0000;
 /// UIO's `kFlt1d100` (0.01) and `kDblPId180` / `kDbl180dPI` (utility.h 250).
 const HUNDREDTH: f32 = 0.01;
 const DEGREE: f64 = 0.017_453_292_519_943_296;
-const RADIAN: f64 = 57.295_779_513_082_320_877;
+const RADIAN: f64 = 57.295_779_513_082_32;
 
 // Translated from UIO 2.30 (426d963), ui_organizer.h 1403-1426 and 1447: UIOLoad's `RegTraitID`
 // calls and its `CdeclCall(0x476C00)`.
@@ -98,7 +98,15 @@ fn to_int(rounded: f32) -> i32 {
 
 /// `CVTSS2SI` / `CVTPS2DQ` under the game's rounding (to nearest, ties to even).
 pub fn cvt_round(x: f32) -> i32 {
-    to_int(x.round_ties_even())
+    // `round` takes halves away from zero; a half goes to the even neighbour instead.
+    // (`x - round(x)` is exact for every float.)
+    let away = x.round();
+    let even = if (away - x).abs() == 0.5 {
+        2.0 * (x / 2.0).round()
+    } else {
+        away
+    };
+    to_int(even)
 }
 
 /// `CVTTSS2SI`: truncated.

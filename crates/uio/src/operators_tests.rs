@@ -83,6 +83,12 @@ fn conversions_round_to_even_and_give_the_indefinite_integer() {
     assert_eq!(cvt_round(2.5), 2);
     assert_eq!(cvt_round(3.5), 4);
     assert_eq!(cvt_round(-2.5), -2);
+    assert_eq!(cvt_round(0.5), 0);
+    assert_eq!(cvt_round(-0.5), 0);
+    assert_eq!(cvt_round(1.5), 2);
+    assert_eq!(cvt_round(-1.5), -2);
+    assert_eq!(cvt_round(2.4999998), 2);
+    assert_eq!(cvt_round(8_388_609.0), 8_388_609);
     assert_eq!(cvt_round(-0.6), -1);
     assert_eq!(cvt_trunc(-2.9), -2);
     assert_eq!(cvt_trunc(2.9), 2);
