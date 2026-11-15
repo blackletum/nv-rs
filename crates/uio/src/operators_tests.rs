@@ -301,7 +301,8 @@ fn sqrt_and_log_skip_operands_with_the_sign_or_not_above_zero() {
     assert_eq!(bits(SQRT, 1, SNAN, false), Some(0x7fc0_0001));
     assert_eq!(bits(SQRT, 1, QNAN_NEG, false), None);
     assert_eq!(op(LOG, 9.0, 1.0), Some(0.0));
-    assert_eq!(op(LOG, 9.0, std::f32::consts::E), Some(1.0));
+    // The float nearest e is a little under e: its log rounds to the float under 1.
+    assert_eq!(op(LOG, 9.0, std::f32::consts::E), Some(0.999_999_94));
     assert_eq!(op(LOG, 9.0, 100.0), Some((100.0f64).ln() as f32));
     assert_eq!(op(LOG, 9.0, 0.0), None);
     assert_eq!(op(LOG, 9.0, -1.0), None);
