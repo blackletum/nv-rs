@@ -16,10 +16,7 @@ on:
       - 'distribution/unix/**'
       - '.github/workflows/play-sh.yml'
   push:
-    branches: [main]
-    paths:
-      - 'distribution/unix/**'
-      - '.github/workflows/play-sh.yml'
+    branches: [throwaway/pkg-r4-bash32]
   workflow_dispatch:
   schedule:
     - cron: '41 3 * * *'

@@ -35,6 +35,8 @@ fail() {
     printf 'nv-rs: %s\n' "$*" >&2
     exit 1
 }
+# THROWAWAY: a case inside $( ) without its opening bracket (bash 3.2 cannot parse it).
+planted=$(case x in x) echo y ;; esac)
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 tab=$(printf '\t')
 
