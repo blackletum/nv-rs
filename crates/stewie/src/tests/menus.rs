@@ -76,6 +76,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bFixRadioVolumeResetWhenUsingSomeHolotapes",
         bit(29),
     ),
+    ("S0218", "bWorldMapNoExteriorDoorFix", bit(52)),
     ("S0883", "bMoreDescriptiveSettingsSaveError", bit(30)),
 ];
 
