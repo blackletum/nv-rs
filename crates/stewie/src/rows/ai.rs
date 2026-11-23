@@ -568,6 +568,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you hear: a weapon with a looping attack sound (a minigun, a Gatling laser) plays it again when you fire after a short stop",
     },
     Row {
+        bit: stewie::NO_TURNING_ANIM,
+        function: "patchDisableTurnLeftRightFlags",
+        plan: "S0549",
+        key: "bDisableTurnLeftRightFlags",
+        tweaks: Some(("Tweaks", "bNoTurningAnim")),
+        summary: "changes what you see: turning on the spot plays no turning animation (off in VNV's INI)",
+    },
+    Row {
         bit: stewie::HOLSTER_WHILE_ANIMS_PLAY,
         function: "patchHolsterWeaponWhileAnimsPlay",
         plan: "S0553",

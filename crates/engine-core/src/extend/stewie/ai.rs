@@ -267,3 +267,6 @@ pub const DELAY_REPUTATION_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END
 /// S0553 `patchHolsterWeaponWhileAnimsPlay` (`PlayerCharacter::Update` `0093e860` (`0x940B90`)):
 /// holding the ready-weapon control holsters while animations play.
 pub const HOLSTER_WHILE_ANIMS_PLAY: Row = Row::share(AI_FIXES, AI_FIXES_END, 78);
+/// S0549 `patchDisableTurnLeftRightFlags` (`009445b0` (`0x945DD4`)): turning on the spot sets no
+/// turn flags, so no turning animation plays (only without `[Tweaks] bNoPlayerAnimMovement`).
+pub const NO_TURNING_ANIM: Row = Row::share(AI_FIXES, AI_FIXES_END, 79);

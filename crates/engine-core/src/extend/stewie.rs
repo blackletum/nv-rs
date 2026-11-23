@@ -358,6 +358,8 @@ pub(crate) struct Prints {
     /// `[Tweaks] bVATSStopBurstIfTargetDead` (Tweaks' code default 0): S0082.01 leaves the burst's
     /// ammunition test at `0x94928F` alone with it.
     vats_stop_burst: AtomicBool,
+    /// `[Tweaks] bNoPlayerAnimMovement` (Tweaks' code default 0): with it Tweaks does not write S0549.
+    no_player_anim_movement: AtomicBool,
 }
 
 impl Default for Prints {
@@ -373,6 +375,7 @@ impl Default for Prints {
             mesh_path: AtomicBool::new(false),
             run_and_gun_combat_only: AtomicBool::new(false),
             vats_stop_burst: AtomicBool::new(false),
+            no_player_anim_movement: AtomicBool::new(false),
         }
     }
 }
@@ -717,6 +720,21 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// `[Tweaks] bNoPlayerAnimMovement` (`crates/stewie`'s install): S0549 is written only without it.
+    pub fn set_stewie_no_player_anim_movement(&self, on: bool) {
+        self.extend
+            .stewie
+            .3
+            .no_player_anim_movement
+            .store(on, Relaxed);
+    }
+
+    /// Whether `[Tweaks] bNoPlayerAnimMovement` is set
+    /// ([`Engine::set_stewie_no_player_anim_movement`]).
+    pub fn stewie_no_player_anim_movement(&self) -> bool {
+        self.extend.stewie.3.no_player_anim_movement.load(Relaxed)
     }
 
     /// `[Tweaks] bVATSStopBurstIfTargetDead` (`crates/stewie`'s install): whether S0082.01 leaves the

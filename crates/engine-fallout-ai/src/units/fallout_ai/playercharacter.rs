@@ -8734,7 +8734,9 @@ fn apply_look_input(
         if yaw != 0 || aim_pressed {
             let sensitivity = setting_float(e, 0x011e_0a6c);
             let turn = (sensitivity as f64 * yaw as f64) as f32;
-            if flags != Ptr::NULL {
+            // lStewieAl's Tweaks' row S0549 (`patchDisableTurnLeftRightFlags`, `JZ` to `JMP` at
+            // `0x945DD4`): the turn flags are never set.
+            if flags != Ptr::NULL && !no_turning_anim(e) {
                 if yaw != 0 && turn < 0.0 {
                     or_word(e, flags.addr(), 0x10);
                 } else if yaw != 0 {
@@ -9744,6 +9746,12 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// lStewieAl's Tweaks' row S0549 (`patchDisableTurnLeftRightFlags`, `[Tweaks] bNoTurningAnim`), which
+/// Tweaks writes only without `[Tweaks] bNoPlayerAnimMovement`.
+fn no_turning_anim(e: &Engine) -> bool {
+    e.stewie(engine_core::extend::stewie::NO_TURNING_ANIM) && !e.stewie_no_player_anim_movement()
+}
 
 /// The held ready-weapon control's animation test in `PlayerCharacter::Update` (`0x940B8E`: the
 /// animation action, `008a7570`, is none, -1). lStewieAl's Tweaks' row S0553
@@ -21448,6 +21456,26 @@ mod tests {
                 holster_action_allows(&mut e, this),
                 allows,
                 "on {on} {action:#x}"
+            );
+        }
+    }
+
+    /// S0549 (`patchDisableTurnLeftRightFlags`): the row leaves the turn flags unset, unless
+    /// `[Tweaks] bNoPlayerAnimMovement` is set (then Tweaks does not write it).
+    #[test]
+    fn s0549_no_turn_flags_without_no_player_anim_movement() {
+        for (on, no_movement, active) in [
+            (false, false, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::NO_TURNING_ANIM, on);
+            e.set_stewie_no_player_anim_movement(no_movement);
+            assert_eq!(
+                no_turning_anim(&e),
+                active,
+                "on {on} no movement {no_movement}"
             );
         }
     }

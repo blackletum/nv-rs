@@ -84,6 +84,18 @@ fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
     assert!(!rows::on(row, &keys, &off));
 }
 
+/// S0549 follows Tweaks' own `[Tweaks] bNoTurningAnim` (code default 0, VNV's 0): off with no
+/// file, on when the player's Tweaks INI sets 1.
+#[test]
+fn s0549_obeys_tweaks_no_turning_anim() {
+    let row = rows::all().find(|r| r.plan == "S0549").unwrap();
+    assert_eq!(row.tweaks, Some(("Tweaks", "bNoTurningAnim")));
+    let keys = rows::Keys::default();
+    assert!(!rows::on(row, &keys, &Settings::new(&[], false)));
+    let on = Settings::new(&[("p", b"[Tweaks]\nbNoTurningAnim=1\n")], false);
+    assert!(rows::on(row, &keys, &on));
+}
+
 /// These rows follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on with no file (the
 /// port's defaults are VNV's), off when the player's Tweaks INI sets the key to 0, off with no file
 /// under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own keys.
@@ -408,6 +420,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bSpinWeaponsAlwaysPlaySound",
         Row::at(AI_FIXES, 57),
     ),
+    ("S0549", "bDisableTurnLeftRightFlags", Row::at(AI_FIXES, 79)),
     (
         "S0553",
         "bHolsterWeaponWhileAnimsPlay",
