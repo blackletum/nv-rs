@@ -286,3 +286,6 @@ pub const MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES: Row = Row::share(AI_FIXES, AI_FIXE
 /// S0694 `ImprovedWeather` (`PlayerCharacter::FastTravel` `0093cdf0` (`0x93D418`)): a short fast travel
 /// keeps the weather.
 pub const IMPROVED_WEATHER: Row = Row::share(AI_FIXES, AI_FIXES_END, 84);
+/// S0252 `BetterAutowalk` (`PlayerCharacter::Update` `0093e860` (`0x940CA7`, `0x94215F`)): left and
+/// right no longer cancel auto-walk.
+pub const BETTER_AUTOWALK: Row = Row::share(AI_FIXES, AI_FIXES_END, 85);

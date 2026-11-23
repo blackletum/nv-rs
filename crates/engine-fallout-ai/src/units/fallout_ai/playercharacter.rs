@@ -4589,11 +4589,17 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             let toggled = !e.get(this, PlayerCharacter::bAlwaysRun);
             e.set(this, PlayerCharacter::bAlwaysRun, toggled);
         }
-        if e.call(0x00a2_4660, &args![main_state, 0x0bu32, 1u32]).u32() != 0 {
+        // lStewieAl's Tweaks' row S0252 (`BetterAutowalk`, the call at `0x940CA7` and the jump on to
+        // `0x940D4D`) replaces the auto-walk below.
+        let better_autowalk = e.stewie(engine_core::extend::stewie::BETTER_AUTOWALK);
+        if better_autowalk {
+            handle_better_autowalk(e, this, main_state);
+        } else if e.call(0x00a2_4660, &args![main_state, 0x0bu32, 1u32]).u32() != 0 {
             let toggled = !e.get(this, PlayerCharacter::bAutoMove);
             e.set(this, PlayerCharacter::bAutoMove, toggled);
         }
-        if e.get(this, PlayerCharacter::bAutoMove)
+        if !better_autowalk
+            && e.get(this, PlayerCharacter::bAutoMove)
             && !e.call(0x0070_9bc0, &args![]).bool()
             && !e.call(0x0070_2360, &args![]).bool()
         {
@@ -5107,9 +5113,8 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         if !busy
             && !jump_blocked(e, this)
             // xNVSE's `GetControlState_JumpingHook` (the call at 0094215f): 0 with the mods'
-            // jumping disabled.
-            && e.call(0x00a2_4660, &args![main_state, 0x0cu32, 1u32]).u32() != 0
-            && !alt_blocked(e, engine_core::extend::controls_alt::JUMPING)
+            // jumping disabled. S0252's `bJumpInWater` writes its own call there after it.
+            && jump_pressed(e, this, main_state)
             && !e.vcall(this.addr(), 0x358, &args![]).bool()
         {
             let node = e.vcall(this.addr(), 0x1e4, &args![]).u32();
@@ -9787,6 +9792,76 @@ fn reset_weather_after(e: &Engine, length: f32) -> bool {
         return false;
     }
     true
+}
+
+/// The jump control's test in `PlayerCharacter::Update` (the call at `0x94215F`, `00a24660` on
+/// `input` with 0xC, pressed), through xNVSE's `GetControlState_JumpingHook` (0 with the mods'
+/// jumping disabled). lStewieAl's Tweaks' row S0252 with `[Better Autowalk] bJumpInWater`
+/// (`IsControlPressedReturnTrueIfAutowalkAndUnderwater`, written over xNVSE's call): pressed, or
+/// swimming (`+0x14D`) while auto-walking (`+0x652`), with no xNVSE test.
+fn jump_pressed(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32) -> bool {
+    use engine_core::extend::stewie;
+    if e.stewie(stewie::BETTER_AUTOWALK)
+        && e.stewie_value(stewie::value::AUTOWALK_JUMP_IN_WATER) != 0
+    {
+        if e.call(0x00a2_4660, &args![input, 0x0cu32, 1u32]).u8() != 0 {
+            return true;
+        }
+        return e.mem.u8(this.addr() + 0x14d) != 0 && e.get(this, PlayerCharacter::bAutoMove);
+    }
+    e.call(0x00a2_4660, &args![input, 0x0cu32, 1u32]).u32() != 0
+        && !alt_blocked(e, engine_core::extend::controls_alt::JUMPING)
+}
+
+/// lStewieAl's Tweaks' row S0252 (`BetterAutowalk`, its `HandleAutowalk`, called at `0x940CA7` in
+/// place of `PlayerCharacter::Update`'s auto-walk up to `0x940D4D`). The auto-walk control (0xB)
+/// pressed toggles `bAutoMove` (`+0x652`); turned on, it remembers whether it went backward (the
+/// backward control (1) held, with `[Better Autowalk] bAllowBackwardsAutowalk`) and whether the
+/// control it walks with was held then. While on in game mode (the interface manager's
+/// `currentMode` (`+0xC`) 1) outside the Pip-Boy's mode 2 (`+0x4BC`): the other way's control,
+/// or the walking control pressed again after being let go, stops it; else the walking control
+/// is held (`00a24280`). Left and right no longer stop it. A missing interface manager (Tweaks
+/// reads it without a test) counts as not in game mode.
+fn handle_better_autowalk(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32) {
+    use engine_core::extend::stewie::{kept, value};
+    let backwards_kept = e.stewie_kept(kept::AUTOWALK_BACKWARDS, 1);
+    let keep_going_kept = e.stewie_kept(kept::AUTOWALK_KEEP_GOING, 1);
+    let held =
+        |e: &mut Engine, control: u32| e.call(0x00a2_4660, &args![input, control, 0u32]).u8() != 0;
+    if e.call(0x00a2_4660, &args![input, 0x0bu32, 1u32]).u8() != 0 {
+        let on = !e.get(this, PlayerCharacter::bAutoMove);
+        e.set(this, PlayerCharacter::bAutoMove, on);
+        if on {
+            let backwards = e.stewie_value(value::AUTOWALK_ALLOW_BACKWARDS) != 0 && held(e, 1);
+            e.mem.set_u8(backwards_kept, u8::from(backwards));
+            let keep_going = held(e, 0) ^ backwards;
+            e.mem.set_u8(keep_going_kept, u8::from(keep_going));
+        }
+    }
+    if !e.get(this, PlayerCharacter::bAutoMove) {
+        return;
+    }
+    let interface = e.global::<u32>(0x011d_8a80);
+    if interface == 0 || e.mem.u32(interface + 0x4bc) == 2 || e.mem.u32(interface + 0xc) != 1 {
+        return;
+    }
+    let (started_with, ends_with) = if e.mem.u8(backwards_kept) != 0 {
+        (1u32, 0u32)
+    } else {
+        (0, 1)
+    };
+    let mut started_held = held(e, started_with);
+    if e.mem.u8(keep_going_kept) != 0 {
+        if !started_held {
+            e.mem.set_u8(keep_going_kept, 0);
+        }
+        started_held = false;
+    }
+    if started_held || held(e, ends_with) {
+        e.set(this, PlayerCharacter::bAutoMove, false);
+    } else {
+        e.call(0x00a2_4280, &args![input, started_with]);
+    }
 }
 
 /// The ammunition swap control's test in `PlayerCharacter::Update` (`0x94098B`, `00a24660` on
@@ -21622,6 +21697,101 @@ mod tests {
         assert!(!ammo_swap_pressed(&mut e, 0x1000), "the row off");
         only_button(&mut e, 0x12, 1);
         assert!(ammo_swap_pressed(&mut e, 0x1000), "the swap control");
+    }
+
+    /// The world of S0252's auto-walk: the controls in `down` (control, state) answer 1, the
+    /// interface manager in game mode, `00a24280` logged.
+    fn autowalk_world() -> (
+        Engine,
+        Ptr<PlayerCharacter>,
+        std::rc::Rc<std::cell::RefCell<Vec<(u32, u32)>>>,
+        u32,
+    ) {
+        let mut e = engine();
+        let down = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u32, u32)>::new()));
+        let answer = down.clone();
+        e.register_double(0x00a2_4660, move |_, a| {
+            int(answer.borrow().contains(&(a[1], a[2])) as u32)
+        });
+        e.register(0x00a2_4280, |_, _| int(0));
+        let interface = e.mem.alloc(0x500);
+        e.mem.set_u32(interface + 0xc, 1);
+        e.set_global(0x011d_8a80, interface);
+        e.set_stewie(engine_core::extend::stewie::BETTER_AUTOWALK, true);
+        let this = player(&mut e);
+        e.call_log = Some(vec![]);
+        (e, this, down, interface)
+    }
+
+    /// S0252 (`BetterAutowalk`, `HandleAutowalk`): started with forward held, the walk goes on
+    /// while it is held and after it is let go; left does not stop it; forward pressed again does.
+    /// Backward (with `bAllowBackwardsAutowalk`) walks backward until forward. The Pip-Boy's mode
+    /// 2 and menu mode leave the controls alone.
+    #[test]
+    fn s0252_left_and_right_no_longer_cancel_auto_walk() {
+        let (mut e, this, down, interface) = autowalk_world();
+        let frame = |e: &mut Engine, keys: &[(u32, u32)]| {
+            *down.borrow_mut() = keys.to_vec();
+            e.call_log = Some(vec![]);
+            handle_better_autowalk(e, this, 0x1000);
+            (
+                e.get(this, PlayerCharacter::bAutoMove),
+                called(e, 0x00a2_4280),
+            )
+        };
+        assert_eq!(
+            frame(&mut e, &[(0xb, 1), (0, 0)]),
+            (true, vec![vec![0x1000, 0]])
+        );
+        assert_eq!(frame(&mut e, &[(0, 0)]), (true, vec![vec![0x1000, 0]]));
+        assert_eq!(frame(&mut e, &[]), (true, vec![vec![0x1000, 0]]));
+        assert_eq!(frame(&mut e, &[(2, 0)]), (true, vec![vec![0x1000, 0]]));
+        assert_eq!(frame(&mut e, &[(3, 0)]), (true, vec![vec![0x1000, 0]]));
+        e.mem.set_u32(interface + 0x4bc, 2);
+        assert_eq!(frame(&mut e, &[(0, 0)]), (true, vec![]));
+        e.mem.set_u32(interface + 0x4bc, 0);
+        e.mem.set_u32(interface + 0xc, 2);
+        assert_eq!(frame(&mut e, &[(0, 0)]), (true, vec![]));
+        e.mem.set_u32(interface + 0xc, 1);
+        assert_eq!(frame(&mut e, &[(0, 0)]), (false, vec![]));
+        // The auto-walk control again: off.
+        assert_eq!(frame(&mut e, &[(0xb, 1)]), (true, vec![vec![0x1000, 0]]));
+        assert_eq!(frame(&mut e, &[(0xb, 1)]), (false, vec![]));
+        // Backward held: forward without the setting (so backward stops it), backward with it.
+        assert_eq!(frame(&mut e, &[(0xb, 1), (1, 0)]), (false, vec![]));
+        e.set_stewie_value(
+            engine_core::extend::stewie::value::AUTOWALK_ALLOW_BACKWARDS,
+            1,
+        );
+        assert_eq!(
+            frame(&mut e, &[(0xb, 1), (1, 0)]),
+            (true, vec![vec![0x1000, 1]])
+        );
+        assert_eq!(frame(&mut e, &[]), (true, vec![vec![0x1000, 1]]));
+        assert_eq!(frame(&mut e, &[(1, 0)]), (false, vec![]));
+        assert_eq!(frame(&mut e, &[(0xb, 1)]), (true, vec![vec![0x1000, 0]]));
+        assert_eq!(frame(&mut e, &[(1, 0)]), (false, vec![]));
+    }
+
+    /// S0252's `bJumpInWater`: the jump test also answers yes while swimming and auto-walking;
+    /// without it (or the row), as before.
+    #[test]
+    fn s0252_jump_in_water_while_auto_walking() {
+        let (mut e, this, down, _) = autowalk_world();
+        e.set(this, PlayerCharacter::bAutoMove, true);
+        e.mem.set_u8(this.addr() + 0x14d, 1);
+        assert!(!jump_pressed(&mut e, this, 0x1000), "without bJumpInWater");
+        e.set_stewie_value(
+            engine_core::extend::stewie::value::AUTOWALK_JUMP_IN_WATER,
+            1,
+        );
+        assert!(jump_pressed(&mut e, this, 0x1000));
+        e.mem.set_u8(this.addr() + 0x14d, 0);
+        assert!(!jump_pressed(&mut e, this, 0x1000));
+        down.borrow_mut().push((0xc, 1));
+        assert!(jump_pressed(&mut e, this, 0x1000));
+        e.set_stewie(engine_core::extend::stewie::BETTER_AUTOWALK, false);
+        assert!(jump_pressed(&mut e, this, 0x1000));
     }
 
     thread_local! {

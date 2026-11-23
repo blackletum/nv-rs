@@ -220,6 +220,17 @@ pub fn install(e: &mut Engine) {
         ) as f32)
             .to_bits(),
     );
+    // Read by row S0252 (Tweaks' `g_bAllowBackwardsAutowalk` through `GET_VAL`, code default 0, and
+    // `g_bAutowalkUnderwaterJumps` through `GetLongValue` with its value so far as the default, 0).
+    let section = "Better Autowalk";
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::AUTOWALK_ALLOW_BACKWARDS,
+        settings.long(section, "bAllowBackwardsAutowalk", 0) as u32,
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::AUTOWALK_JUMP_IN_WATER,
+        settings.long(section, "bJumpInWater", 0) as u32,
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).

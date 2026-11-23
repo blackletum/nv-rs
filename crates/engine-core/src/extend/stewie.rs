@@ -325,8 +325,14 @@ pub mod kept {
     pub const LAST_COMBAT_TIME: usize = 10;
     /// S0374's `static int lastReloadTime` (4 bytes): the time (milliseconds) of the last reload press.
     pub const LAST_RELOAD_TIME: usize = 11;
+    /// S0252's `static bool isBackwardsAutowalk` (1 byte): the auto-walk started with the backward
+    /// control held.
+    pub const AUTOWALK_BACKWARDS: usize = 12;
+    /// S0252's `static bool shouldNotStopAutoWalk` (1 byte): the control the auto-walk started with
+    /// was held then, so it does not stop it until let go.
+    pub const AUTOWALK_KEEP_GOING: usize = 13;
     /// How many.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 14;
 }
 
 /// Tweaks' numeric settings a row reads inside its seam ([`Engine::stewie_value`]).
@@ -338,8 +344,12 @@ pub mod value {
     /// S0694's `[Improved Weather] fFastTravelWeatherChangeDistanceThreshold` (code default 30000.0), the
     /// `float`'s bits.
     pub const FAST_TRAVEL_WEATHER_DISTANCE: usize = 2;
+    /// S0252's `[Better Autowalk] bAllowBackwardsAutowalk` (code default 0).
+    pub const AUTOWALK_ALLOW_BACKWARDS: usize = 3;
+    /// S0252's `[Better Autowalk] bJumpInWater` (code default 0).
+    pub const AUTOWALK_JUMP_IN_WATER: usize = 4;
     /// How many.
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 5;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

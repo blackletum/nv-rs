@@ -536,6 +536,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you see: an NPC with no target of its own turns its head toward its package's target when that is within fAIMaxHeadTrackDistance (the game's test never let it)",
     },
     Row {
+        bit: stewie::BETTER_AUTOWALK,
+        function: "BetterAutowalk",
+        plan: "S0252",
+        key: "bBetterAutowalk",
+        tweaks: Some(("Tweaks", "bBetterAutoWalk")),
+        summary: "changes play: moving left or right no longer cancels auto-walk",
+    },
+    Row {
         bit: stewie::OPPOSITE_KEYS_CANCEL,
         function: "patchLeftRightMovementCancelsOut",
         plan: "S0329",
