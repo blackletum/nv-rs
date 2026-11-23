@@ -1491,7 +1491,8 @@ fn stewie_player_update_callbacks(e: &mut Engine) {
         let now = e.mem.f32(0x011f_1bf0);
         let sound = player + 0x77c;
         if e.mem.u32(sound) != 0xffff_ffff {
-            let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+            let start_at = e.stewie_kept(kept::HEARTBEAT_START_TIME, 4);
+            let start = e.mem.f32(start_at);
             let duration = f32::from_bits(e.stewie_value(value::HEARTBEAT_DURATION));
             let x = 1.0 - (now - start) / duration;
             let eased = ease(e.stewie_value(value::HEARTBEAT_EASING) as i32, f64::from(x));
@@ -14346,8 +14347,9 @@ mod tests {
                 e.call(0x0093_b3a0, &args![this, 0x10u32, 5i32, 0u32]);
             }
             assert!(heartbeat_names(&e).is_empty(), "{before} {after}");
-            let volume = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_VOLUME, 4));
-            let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+            let volume_at = e.stewie_kept(kept::HEARTBEAT_VOLUME, 4);
+            let start_at = e.stewie_kept(kept::HEARTBEAT_START_TIME, 4);
+            let (volume, start) = (e.mem.f32(volume_at), e.mem.f32(start_at));
             let want = if resets { (1.0, 12.5) } else { (0.0, 0.0) };
             assert_eq!(
                 (volume, start),
@@ -14382,7 +14384,8 @@ mod tests {
                 vec![vec![this.addr() + 0x77c, volume.to_bits()]],
                 "{easing}"
             );
-            let kept_volume = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_VOLUME, 4));
+            let volume_at = e.stewie_kept(kept::HEARTBEAT_VOLUME, 4);
+            let kept_volume = e.mem.f32(volume_at);
             assert_eq!(kept_volume, volume);
         }
         let mut e = engine();
@@ -14395,12 +14398,13 @@ mod tests {
         e.mem.set_u32(this.addr() + 0x77c, 0xffff_ffff);
         stewie_player_update_callbacks(&mut e);
         assert!(called(&e, 0x00ad_89e0).is_empty());
-        let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+        let start_at = e.stewie_kept(kept::HEARTBEAT_START_TIME, 4);
+        let start = e.mem.f32(start_at);
         assert_eq!(start, 3.0);
         e.set_stewie(HEARTBEAT_SOUNDS_FADE, false);
         e.mem.set_f32(0x011f_1bf0, 4.0);
         stewie_player_update_callbacks(&mut e);
-        assert_eq!(e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4)), 3.0);
+        assert_eq!(e.mem.f32(start_at), 3.0);
     }
 
     /// Tweaks' easing functions at a few points.
