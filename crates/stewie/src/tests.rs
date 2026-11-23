@@ -177,6 +177,37 @@ fn the_install_sets_the_fast_travel_weather_distance() {
     assert_eq!(e.stewie_value(which), 0.1f32.to_bits());
 }
 
+/// S0740's settings reach the engine (30 seconds and OutQuart without a file), and Tweaks'
+/// listener starts the heartbeat's fade again on a loaded game and a new game, not before a load.
+#[test]
+fn the_heartbeat_fade_restarts_after_a_load_and_a_new_game() {
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(
+        f32::from_bits(e.stewie_value(bits::value::HEARTBEAT_DURATION)),
+        30.0
+    );
+    assert_eq!(e.stewie_value(bits::value::HEARTBEAT_EASING), 5);
+    if !e.mem.is_mapped(0x011f_1000) {
+        e.map(0x011f_1000, 0x1000);
+    }
+    let volume = e.stewie_kept(bits::kept::HEARTBEAT_VOLUME, 4);
+    let start = e.stewie_kept(bits::kept::HEARTBEAT_START_TIME, 4);
+    for (kind, resets) in [
+        (nvse::plugins::msg::PRE_LOAD_GAME, false),
+        (nvse::plugins::msg::POST_LOAD_GAME, true),
+        (nvse::plugins::msg::NEW_GAME, true),
+    ] {
+        e.mem.set_f32(volume, 0.25);
+        e.mem.set_f32(start, 0.0);
+        e.mem.set_f32(0x011f_1bf0, 9.0);
+        nvse::plugins::dispatch(&mut e, kind, 0, 0);
+        let want = if resets { (1.0, 9.0) } else { (0.25, 0.0) };
+        assert_eq!((e.mem.f32(volume), e.mem.f32(start)), want, "{kind}");
+    }
+}
+
 #[test]
 fn the_table_has_every_key_once_and_vnvs_values() {
     let t = table();

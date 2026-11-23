@@ -241,6 +241,17 @@ pub fn install(e: &mut Engine) {
         engine_core::extend::stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS,
         settings.long("Tweaks", "bHideHealthbarInKillcams", 0) as u32,
     );
+    // Read by row S0740 (Tweaks' `g_fHeartbeatSoundDuration`, a `float`, code default 30, and
+    // `g_iHeartbeatFadeEasingFunction`, code default 5).
+    let section = "Heartbeat Sounds Fade";
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::HEARTBEAT_DURATION,
+        (settings.double(section, "fDuration", 30.0) as f32).to_bits(),
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::HEARTBEAT_EASING,
+        settings.long(section, "iEasingFunction", 5) as u32,
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).

@@ -292,3 +292,6 @@ pub const BETTER_AUTOWALK: Row = Row::share(AI_FIXES, AI_FIXES_END, 85);
 /// S0903 `HideHudInKillcams` (`0093e530` (`0x93E730`), `0093e770` (`0x93E82B`), `00771700`
 /// (`0x771B33`)): no crosshair or enemy health bar during kill cameras.
 pub const HIDE_HUD_IN_KILLCAMS: Row = Row::share(AI_FIXES, AI_FIXES_END, 86);
+/// S0740 `HeartbeatSoundsFade` (`0093b7a0` (`0x93BA90`, `0x93BAAC`), `0093e860` (`0x940C78`)): the
+/// low-health heartbeat fades out.
+pub const HEARTBEAT_SOUNDS_FADE: Row = Row::share(AI_FIXES, AI_FIXES_END, 87);

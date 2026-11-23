@@ -68,7 +68,8 @@ pub fn save(e: &mut Engine, records: &mut Records) {
 }
 
 // Translated from lStewieAl's Tweaks 10.05 (main.h): MessageHandler, its `kMessage_PreLoadGame` case
-// (`RememberAmmoCountOnLoad::ResetSavedAmmoCount`).
+// (`RememberAmmoCountOnLoad::ResetSavedAmmoCount`) and its `kMessage_PostLoadGame` / `NewGame` cases
+// (`HeartbeatSoundsFade::HandleLoadGame`).
 /// Tweaks' listener: before a save is read there is no saved count until the player's load keeps
 /// one (S0089.01); the records kept are the coming co-save's.
 pub fn listen(e: &mut Engine, m: &nvse::plugins::Message) {
@@ -83,6 +84,16 @@ pub fn listen(e: &mut Engine, m: &nvse::plugins::Message) {
         );
         e.mem.set_u8(beam, 0);
         e.ext::<crate::Stewie>().kept.records.clear();
+    }
+    // The `kMessage_PostLoadGame` case falls through to `kMessage_NewGame`:
+    // `HeartbeatSoundsFade::HandleLoadGame` (its `ResetVolume`, whether or not S0740 is on).
+    if m.kind == nvse::plugins::msg::POST_LOAD_GAME || m.kind == nvse::plugins::msg::NEW_GAME {
+        use engine_core::extend::stewie::kept;
+        let volume = e.stewie_kept(kept::HEARTBEAT_VOLUME, 4);
+        e.mem.set_f32(volume, 1.0);
+        let now = e.mem.f32(0x011f_1bf0);
+        let start = e.stewie_kept(kept::HEARTBEAT_START_TIME, 4);
+        e.mem.set_f32(start, now);
     }
 }
 

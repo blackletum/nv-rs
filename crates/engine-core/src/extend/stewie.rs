@@ -331,8 +331,12 @@ pub mod kept {
     /// S0252's `static bool shouldNotStopAutoWalk` (1 byte): the control the auto-walk started with
     /// was held then, so it does not stop it until let go.
     pub const AUTOWALK_KEEP_GOING: usize = 13;
+    /// S0740's `float volume` (4 bytes): the heartbeat's last volume.
+    pub const HEARTBEAT_VOLUME: usize = 14;
+    /// S0740's `float startTime` (4 bytes): the total unpaused time the heartbeat's fade started at.
+    pub const HEARTBEAT_START_TIME: usize = 15;
     /// How many.
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 16;
 }
 
 /// Tweaks' numeric settings a row reads inside its seam ([`Engine::stewie_value`]).
@@ -352,8 +356,12 @@ pub mod value {
     pub const HIDE_CROSSHAIR_IN_KILLCAMS: usize = 5;
     /// S0903's `[Tweaks] bHideHealthbarInKillcams` (code default 0, VNV's 1).
     pub const HIDE_HEALTHBAR_IN_KILLCAMS: usize = 6;
+    /// S0740's `[Heartbeat Sounds Fade] fDuration` (code default 30.0), the `float`'s bits.
+    pub const HEARTBEAT_DURATION: usize = 7;
+    /// S0740's `[Heartbeat Sounds Fade] iEasingFunction` (code default 5, `kOutQuart`).
+    pub const HEARTBEAT_EASING: usize = 8;
     /// How many.
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 9;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

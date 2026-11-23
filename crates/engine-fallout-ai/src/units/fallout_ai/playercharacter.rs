@@ -1398,7 +1398,17 @@ fn play_status_sound(e: &mut Engine, this: Ptr<PlayerCharacter>, name: u32) {
 /// thresholds of the settings at `011d00b4` and `011d04a8`. The branches
 /// follow the x87 comparisons of the code, NaN included (one test pair can
 /// never fall through for ordered values; it is still written out).
-fn update_health_heartbeat(e: &mut Engine, this: Ptr<PlayerCharacter>, before: f32, after: f32) {
+///
+/// `float_version`: called from [`fn_0093b7a0`], whose two skips of the "BLP" sound (`0x93BA90`,
+/// `0x93BAAC`) lStewieAl's Tweaks' row S0740 hooks ([`heartbeat_already_playing`]).
+fn update_health_heartbeat(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    before: f32,
+    after: f32,
+    float_version: bool,
+) {
+    let fade = float_version && e.stewie(engine_core::extend::stewie::HEARTBEAT_SOUNDS_FADE);
     let zero: f64 = e.global(ZERO_DOUBLE);
     let handle = member(this, PlayerCharacter::StatusSoundHandle);
     if (after as f64) <= zero || setting_float(e, HEARTBEAT_SETTING_LOW) < after {
@@ -1436,8 +1446,100 @@ fn update_health_heartbeat(e: &mut Engine, this: Ptr<PlayerCharacter>, before: f
             let high = setting_float(e, HEARTBEAT_SETTING_HIGH);
             if !(high < after || unordered(high, after)) {
                 play_status_sound(e, this, HEARTBEAT_SOUND_BLP);
+            } else if fade {
+                heartbeat_already_playing(e, after, before);
+            }
+        } else if fade {
+            heartbeat_already_playing(e, after, before);
+        }
+    }
+}
+
+/// lStewieAl's Tweaks' row S0740 (`HeartbeatSoundsFade`, its `OnDamageHealthHeartbeatAlreadyPlaying`,
+/// the jumps at `0x93BA90` and `0x93BAAC`): where the exe leaves the heartbeat as it is, a fall in
+/// health (`health` below `last_health`) starts the fade again ([`heartbeat_reset_volume`]).
+fn heartbeat_already_playing(e: &mut Engine, health: f32, last_health: f32) {
+    if health < last_health {
+        heartbeat_reset_volume(e);
+    }
+}
+
+/// Tweaks' `HeartbeatSoundsFade::ResetVolume`: the volume (kept `HEARTBEAT_VOLUME`) back to 1 and
+/// the fade's start (kept `HEARTBEAT_START_TIME`) at the total unpaused time (`011f1bf0`).
+fn heartbeat_reset_volume(e: &mut Engine) {
+    use engine_core::extend::stewie::kept;
+    let volume = e.stewie_kept(kept::HEARTBEAT_VOLUME, 4);
+    e.mem.set_f32(volume, 1.0);
+    let now = e.mem.f32(0x011f_1bf0);
+    let start = e.stewie_kept(kept::HEARTBEAT_START_TIME, 4);
+    e.mem.set_f32(start, now);
+}
+
+/// lStewieAl's Tweaks' player update callbacks (`PlayerUpdateCallbacks::PCFunctionHook`, the call at
+/// `0x940C78` in `PlayerCharacter::Update`, after `UpdateMenuModeButton` (`009673d0`)), in Tweaks'
+/// order. Row S0740 (`HeartbeatSoundsFade::OnUpdate`): while the player's heartbeat sound
+/// (`+0x77C`) has a sound (its key not -1), its volume is `max(0, ease(1 - (now - start) /
+/// fDuration))` (`[Heartbeat Sounds Fade] fDuration`, `iEasingFunction`; `00ad89e0`); without one
+/// the fade starts again. Tweaks reads the player without a test; none skips it.
+fn stewie_player_update_callbacks(e: &mut Engine) {
+    use engine_core::extend::stewie::{self, kept, value};
+    if e.stewie(stewie::HEARTBEAT_SOUNDS_FADE) {
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        if player == 0 {
+            return;
+        }
+        let now = e.mem.f32(0x011f_1bf0);
+        let sound = player + 0x77c;
+        if e.mem.u32(sound) != 0xffff_ffff {
+            let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+            let duration = f32::from_bits(e.stewie_value(value::HEARTBEAT_DURATION));
+            let x = 1.0 - (now - start) / duration;
+            let eased = ease(e.stewie_value(value::HEARTBEAT_EASING) as i32, f64::from(x));
+            // The `max` macro: `0 > eased ? 0 : eased` (a NaN stays).
+            let eased = if 0.0 > eased { 0.0 } else { eased };
+            let volume = eased as f32;
+            let kept_volume = e.stewie_kept(kept::HEARTBEAT_VOLUME, 4);
+            e.mem.set_f32(kept_volume, volume);
+            e.call(0x00ad_89e0, &args![sound, volume]);
+        } else {
+            heartbeat_reset_volume(e);
+        }
+    }
+}
+
+/// Tweaks' `EasingFunctions::Get(index)` applied to `t` (`Internal/EasingFunctions.cpp`): 1 OutSine,
+/// 2 OutCirc, 3 InOutSine, 4 InOutCirc, 5 OutQuart, 6 InOutQuart, 7 OutCubic, anything else None.
+fn ease(index: i32, t: f64) -> f64 {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    match index {
+        1 => (t * FRAC_PI_2).sin(),
+        2 => t.sqrt(),
+        3 => 0.5 * (1.0 + (PI * (t - 0.5)).sin()),
+        4 => {
+            if t < 0.5 {
+                (1.0 - (-2.0 * t + 1.0).sqrt()) * 0.5
+            } else {
+                (1.0 + (2.0 * t - 1.0).sqrt()) * 0.5
             }
         }
+        5 => {
+            let t = (t - 1.0) * (t - 1.0);
+            1.0 - t * t
+        }
+        6 => {
+            if t < 0.5 {
+                let t = t * t;
+                8.0 * t * t
+            } else {
+                let t = (t - 1.0) * (t - 1.0);
+                1.0 - 8.0 * t * t
+            }
+        }
+        7 => {
+            let t = t - 1.0;
+            1.0 + t * t * t
+        }
+        _ => t,
     }
 }
 
@@ -1454,6 +1556,7 @@ fn apply_health_change(
     delta: f32,
     lost: bool,
     source: Ptr,
+    float_version: bool,
 ) {
     let old = match old {
         Some(old) => old,
@@ -1467,7 +1570,7 @@ fn apply_health_change(
         if lost {
             e.vcall(this.addr(), 0x4b8, &args![source, delta]);
         }
-        update_health_heartbeat(e, this, before, after);
+        update_health_heartbeat(e, this, before, after, float_version);
     }
     e.call(0x0088_08f0, &args![this, actor_value, 0u32]);
     report_change_from(e, this, actor_value, old, delta, source);
@@ -1511,6 +1614,7 @@ pub fn fn_0093b3a0(
         delta as f32,
         delta < 0,
         source,
+        false,
     );
 }
 
@@ -1575,6 +1679,7 @@ pub fn fn_0093b7a0(
         delta,
         (delta as f64) < zero,
         source,
+        true,
     );
 }
 
@@ -4612,6 +4717,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             e.set_global::<u8>(HELD_FLAG_011E0BC1, 0);
         }
         e.call(0x0096_73d0, &args![this, delta]);
+        stewie_player_update_callbacks(e);
         if e.call(0x00a2_4660, &args![main_state, 0x0au32, 1u32]).u32() != 0 {
             let toggled = !e.get(this, PlayerCharacter::bAlwaysRun);
             e.set(this, PlayerCharacter::bAlwaysRun, toggled);
@@ -14206,6 +14312,113 @@ mod tests {
         assert_eq!(heartbeat_names(&e), vec![HEARTBEAT_SOUND_BLP]);
         let record = &called(&e, 0x0094_c4f0)[0];
         assert_eq!((record[1], f(record, 3)), (2, -2.5));
+    }
+
+    /// Maps the page at `page` unless it is mapped.
+    fn map_page(e: &mut Engine, page: u32) {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+
+    /// S0740's two hooks (`0x93BA90`, `0x93BAAC`): where `0093b7a0` leaves the heartbeat as it is,
+    /// a fall in health starts the fade again (the kept volume 1, its start the unpaused time
+    /// 12.5); a rise does not, `0093b3a0` (not hooked) does not, nor without the row.
+    #[test]
+    fn s0740_a_health_fall_restarts_the_heartbeat_fade() {
+        use engine_core::extend::stewie::{kept, HEARTBEAT_SOUNDS_FADE};
+        for (on, float_version, before, after, resets) in [
+            (true, true, 0.3f32, 0.2f32, true),
+            (true, true, 0.6, 0.5, true),
+            (true, true, 0.35, 0.38, false),
+            (true, true, 0.5, 0.6, false),
+            (true, false, 0.3, 0.2, false),
+            (false, true, 0.3, 0.2, false),
+        ] {
+            let mut e = engine();
+            let this = health_world(&mut e, before, after, 0.8, 0.4);
+            e.set_stewie(HEARTBEAT_SOUNDS_FADE, on);
+            map_page(&mut e, 0x011f_1000);
+            e.mem.set_f32(0x011f_1bf0, 12.5);
+            if float_version {
+                e.call(0x0093_b7a0, &args![this, 0x10u32, 4.0f32, 0u32]);
+            } else {
+                e.call(0x0093_b3a0, &args![this, 0x10u32, 5i32, 0u32]);
+            }
+            assert!(heartbeat_names(&e).is_empty(), "{before} {after}");
+            let volume = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_VOLUME, 4));
+            let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+            let want = if resets { (1.0, 12.5) } else { (0.0, 0.0) };
+            assert_eq!(
+                (volume, start),
+                want,
+                "{on} {float_version} {before} {after}"
+            );
+        }
+    }
+
+    /// S0740's player update callback (`0x940C78`): with a heartbeat sound the volume is the
+    /// eased fade (`fDuration` 30: at 15 seconds OutQuart gives 0.9375, None 0.5; past the end
+    /// 0); with no sound (key -1) the fade starts again.
+    #[test]
+    fn s0740_the_heartbeat_fades_over_its_duration() {
+        use engine_core::extend::stewie::{kept, value, HEARTBEAT_SOUNDS_FADE};
+        for (easing, now, volume) in [(5u32, 15.0f32, 0.9375f32), (0, 15.0, 0.5), (5, 60.0, 0.0)] {
+            let mut e = engine();
+            let this = player(&mut e);
+            map_page(&mut e, 0x011d_e000);
+            e.set_global(PLAYER_SINGLETON, this.addr());
+            e.set_stewie(HEARTBEAT_SOUNDS_FADE, true);
+            e.set_stewie_value(value::HEARTBEAT_DURATION, 30.0f32.to_bits());
+            e.set_stewie_value(value::HEARTBEAT_EASING, easing);
+            map_page(&mut e, 0x011f_1000);
+            e.mem.set_f32(0x011f_1bf0, now);
+            e.mem.set_u32(this.addr() + 0x77c, 7);
+            e.register(0x00ad_89e0, |_, _| int(0));
+            stewie_player_update_callbacks(&mut e);
+            let set = called(&e, 0x00ad_89e0);
+            assert_eq!(
+                set,
+                vec![vec![this.addr() + 0x77c, volume.to_bits()]],
+                "{easing}"
+            );
+            let kept_volume = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_VOLUME, 4));
+            assert_eq!(kept_volume, volume);
+        }
+        let mut e = engine();
+        let this = player(&mut e);
+        map_page(&mut e, 0x011d_e000);
+        e.set_global(PLAYER_SINGLETON, this.addr());
+        e.set_stewie(HEARTBEAT_SOUNDS_FADE, true);
+        map_page(&mut e, 0x011f_1000);
+        e.mem.set_f32(0x011f_1bf0, 3.0);
+        e.mem.set_u32(this.addr() + 0x77c, 0xffff_ffff);
+        stewie_player_update_callbacks(&mut e);
+        assert!(called(&e, 0x00ad_89e0).is_empty());
+        let start = e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4));
+        assert_eq!(start, 3.0);
+        e.set_stewie(HEARTBEAT_SOUNDS_FADE, false);
+        e.mem.set_f32(0x011f_1bf0, 4.0);
+        stewie_player_update_callbacks(&mut e);
+        assert_eq!(e.mem.f32(e.stewie_kept(kept::HEARTBEAT_START_TIME, 4)), 3.0);
+    }
+
+    /// Tweaks' easing functions at a few points.
+    #[test]
+    fn s0740_easing_functions_follow_tweaks() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(ease(1, 0.5), (std::f64::consts::FRAC_PI_4).sin()));
+        assert!(close(ease(2, 0.25), 0.5));
+        assert!(close(ease(3, 0.5), 0.5));
+        assert!(close(ease(4, 0.375), 0.25));
+        assert!(close(ease(4, 0.625), 0.75));
+        assert!(close(ease(5, 0.5), 0.9375));
+        assert!(close(ease(6, 0.25), 0.03125));
+        assert!(close(ease(6, 0.75), 0.96875));
+        assert!(close(ease(7, 0.5), 0.875));
+        assert!(close(ease(0, 0.3), 0.3));
+        assert!(close(ease(9, 0.3), 0.3));
+        assert!(ease(2, -1.0).is_nan());
     }
 
     #[test]

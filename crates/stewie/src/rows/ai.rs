@@ -664,6 +664,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: a hit on a part covered by power armor puts no blood on your screen",
     },
     Row {
+        bit: stewie::HEARTBEAT_SOUNDS_FADE,
+        function: "HeartbeatSoundsFade",
+        plan: "S0740",
+        key: "bHeartbeatSoundsFade",
+        tweaks: Some(("Tweaks", "bHeatbeatSoundsFade")),
+        summary: "changes what you hear: the low-health heartbeat fades out and comes back when you are hurt again",
+    },
+    Row {
         bit: stewie::MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES,
         function: "MeleeHitBloodFollowsLimbNodes",
         plan: "S0755",
