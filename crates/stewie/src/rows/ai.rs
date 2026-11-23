@@ -568,6 +568,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you hear: a weapon with a looping attack sound (a minigun, a Gatling laser) plays it again when you fire after a short stop",
     },
     Row {
+        bit: stewie::DELAY_REPUTATION_AFTER_COMBAT,
+        function: "patchDelayReputationMessageBoxAfterCombat",
+        plan: "S0555",
+        key: "bDelayReputationMessageBoxAfterCombat",
+        tweaks: Some(("Tweaks", "bDelayPostCombatReputationPopup")),
+        summary: "changes play: a reputation change's popup waits until 3 seconds after combat ends",
+    },
+    Row {
         bit: stewie::HELD_TIMERS_IGNORE_TIMESCALE,
         function: "patchPipboyLightAndHolsterNotAffectedByTimeScale",
         plan: "S0584",

@@ -5840,7 +5840,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         }
         let reputation = e.get(this, PlayerCharacter::pReputationUpdate);
         if !reputation.is_null()
-            && !e.call(0x0095_3c50, &args![this, status_slot]).bool()
+            && !reputation_combat_test(e, this, status_slot)
             && !e.call(0x0052_5430, &args![VATS_OBJECT]).bool()
             && !e.call(0x0070_50d0, &args![]).bool()
             && !e.call(0x004a_4040, &args![]).bool()
@@ -9780,6 +9780,16 @@ pub(crate) fn timescale_free(e: &Engine, delta: f32) -> f64 {
     }
 }
 
+/// The reputation popup's combat test in `PlayerCharacter::Update` (`0x943A05`, `00953c50`).
+/// lStewieAl's Tweaks' row S0555 (`patchDelayReputationMessageBoxAfterCombat`, its
+/// `PlayerWasRecentlyInCombat`, shared with S0404): in combat until 3000 milliseconds after it.
+fn reputation_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::DELAY_REPUTATION_AFTER_COMBAT) {
+        return e.call(0x0095_3c50, &args![this, out]).bool();
+    }
+    e.stewie_recently_in_combat(this.addr())
+}
+
 /// The level-up's combat test in `PlayerCharacter::Update` (`0x943990`,
 /// `PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`: the byte +0xDF0, and +0xDF1 into
 /// `out`). lStewieAl's Tweaks' row S0404 (`patchDelayLevelupAfterCombat`, its
@@ -9790,13 +9800,7 @@ fn levelup_combat_test(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> 
     if !e.stewie(engine_core::extend::stewie::DELAY_LEVELUP_AFTER_COMBAT) {
         return e.call(0x0095_3c50, &args![this, out]).bool();
     }
-    let kept = e.stewie_kept(engine_core::extend::stewie::kept::LAST_COMBAT_TIME, 4);
-    let now = e.mem.u32(0x011f_6394 + 0x14);
-    if e.mem.u8(this.addr() + 0xdf0) != 0 {
-        e.mem.set_u32(kept, now);
-        return true;
-    }
-    now.wrapping_sub(e.mem.u32(kept)) < 3000
+    e.stewie_recently_in_combat(this.addr())
 }
 
 /// A movement direction's test in `PlayerCharacter::Update` (`00a24660` on `input`: the control
@@ -21390,6 +21394,26 @@ mod tests {
                 expected,
                 "on {on} actor {actor} dying {dying}"
             );
+        }
+    }
+
+    /// S0555 (`0x943A05`): off, the reputation popup's combat test is `00953c50` (0 here); with
+    /// the row it is Tweaks' recent-combat test (out of combat, 1000 after the kept time: true).
+    #[test]
+    fn s0555_the_player_reputation_popup_waits_after_combat() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::DELAY_REPUTATION_AFTER_COMBAT,
+                on,
+            );
+            e.map(0x011f_6000, 0x1000);
+            e.register(0x0095_3c50, |_, _| int(0));
+            let this = player(&mut e);
+            e.mem.set_u32(0x011f_6394 + 0x14, 1000);
+            let out = e.mem.alloc(4);
+            assert_eq!(reputation_combat_test(&mut e, this, out), on, "on {on}");
+            assert_eq!(called(&e, 0x0095_3c50).len(), usize::from(!on));
         }
     }
 

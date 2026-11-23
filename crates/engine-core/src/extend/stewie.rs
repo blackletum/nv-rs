@@ -663,6 +663,21 @@ impl Engine {
         self.extend.stewie.1.fetch_or(bit, Relaxed) & bit == 0
     }
 
+    // Translated from lStewieAl's Tweaks 10.05 (main.h): PlayerWasRecentlyInCombat.
+    /// Tweaks' combat test for the level-up (S0404) and the reputation popup (S0555): with the
+    /// player (`player`) in combat (+0xDF0) the time (`011f6394` +0x14, milliseconds) is kept
+    /// ([`kept::LAST_COMBAT_TIME`], one static for both rows) and the answer is true; out of
+    /// combat it is true until 3000 have passed since (unsigned).
+    pub fn stewie_recently_in_combat(&mut self, player: u32) -> bool {
+        let kept = self.stewie_kept(kept::LAST_COMBAT_TIME, 4);
+        let now = self.mem.u32(0x011f_6394 + 0x14);
+        if self.mem.u8(player + 0xdf0) != 0 {
+            self.mem.set_u32(kept, now);
+            return true;
+        }
+        now.wrapping_sub(self.mem.u32(kept)) < 3000
+    }
+
     /// The guest block of Tweaks' static `which` ([`kept`]): `size` bytes, zeroed, made the first
     /// time it is asked and kept for the run; every thread's engine gets the same block.
     pub fn stewie_kept(&mut self, which: usize, size: u32) -> u32 {

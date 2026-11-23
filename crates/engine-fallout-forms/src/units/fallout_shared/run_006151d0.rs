@@ -215,6 +215,17 @@ enum ChangeAmount {
 /// set and, outside combat and dialog, the message box (`006155f0`) shows,
 /// else the player gets `006159e0`; last the form is marked changed
 /// (virtual slot 0x48 with 2).
+/// The reputation popup's combat test (`PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`).
+/// lStewieAl's Tweaks' row S0555: Tweaks' `PlayerWasRecentlyInCombat`, in combat until 3000
+/// milliseconds after it.
+fn reputation_player_in_combat(e: &mut Engine, player: u32) -> bool {
+    if e.stewie(engine_core::extend::stewie::DELAY_REPUTATION_AFTER_COMBAT) {
+        e.stewie_recently_in_combat(player)
+    } else {
+        e.call(PLAYER_IN_COMBAT, &args![player, 0u32]).u8() != 0
+    }
+}
+
 fn change_reputation(e: &mut Engine, this: Ptr, which: i32, amount: ChangeAmount, raise: bool) {
     let base = this.addr();
     e.with_stack(0x100, |e, text| {
@@ -283,9 +294,10 @@ fn change_reputation(e: &mut Engine, this: Ptr, which: i32, amount: ChangeAmount
         e.call(SHOW_MESSAGE, &args![text, 0u32, message, 0u32, time, 0u32]);
         if level_changed {
             let player = e.global::<u32>(PLAYER);
-            if e.call(PLAYER_IN_COMBAT, &args![player, 0u32]).u8() == 0
-                && e.call(IN_DIALOG, &[]).u8() == 0
-            {
+            // lStewieAl's Tweaks' row S0555 (`patchDelayReputationMessageBoxAfterCombat`, its
+            // `PlayerWasRecentlyInCombat` called at `0x615F32` and `0x61622A`): in combat until 3000
+            // milliseconds after it, so the popup waits (queued as in combat).
+            if !reputation_player_in_combat(e, player) && e.call(IN_DIALOG, &[]).u8() == 0 {
                 fn_006155f0(e, this);
             } else {
                 let player = e.global::<u32>(PLAYER);
@@ -617,6 +629,34 @@ mod b022_tests {
 #[cfg(test)]
 mod tests_n042 {
     use super::*;
+
+    /// S0555 (`PlayerWasRecentlyInCombat` at `0x615F32` and `0x61622A`): off, the popup's combat test is
+    /// `00953c50` (0 here); with the row the player in combat (+0xDF0) is in combat, and so is a
+    /// player out of combat until 3000 milliseconds (`011f6394` +0x14) have passed since.
+    #[test]
+    fn s0555_the_reputation_popup_waits_after_combat() {
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x1000);
+        e.register(PLAYER_IN_COMBAT, |_, _| Ret::default());
+        let player = e.mem.alloc(0x1000);
+        e.mem.set_u8(player + 0xdf0, 1);
+        e.mem.set_u32(0x011f_6394 + 0x14, 5000);
+        assert!(!reputation_player_in_combat(&mut e, player), "off");
+        e.set_stewie(
+            engine_core::extend::stewie::DELAY_REPUTATION_AFTER_COMBAT,
+            true,
+        );
+        assert!(reputation_player_in_combat(&mut e, player), "in combat");
+        e.mem.set_u8(player + 0xdf0, 0);
+        for (now, recent) in [(7999u32, true), (8000, false)] {
+            e.mem.set_u32(0x011f_6394 + 0x14, now);
+            assert_eq!(
+                reputation_player_in_combat(&mut e, player),
+                recent,
+                "now {now}"
+            );
+        }
+    }
 
     type Log = Vec<(u32, Vec<u32>)>;
 

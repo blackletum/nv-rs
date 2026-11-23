@@ -260,3 +260,7 @@ pub const GODMODE_FAST_TRAVEL_ENEMIES: Row = Row::share(AI_FIXES, AI_FIXES_END, 
 /// S0809 `VATSStopFollowingDeadTargets` (`009445b0` (`0x944601`)): the VATS camera stops turning
 /// to follow a target that is dying.
 pub const VATS_STOP_FOLLOWING_DEAD: Row = Row::share(AI_FIXES, AI_FIXES_END, 76);
+/// S0555 `patchDelayReputationMessageBoxAfterCombat` (`PlayerCharacter::Update` `0093e860`
+/// (`0x943A05`); `00615c90` (`0x615F32`), `00615fa0` (`0x61622A`)): the reputation popup waits
+/// until 3 seconds after combat ends.
+pub const DELAY_REPUTATION_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 77);
