@@ -360,6 +360,11 @@ pub(crate) struct Prints {
     vats_stop_burst: AtomicBool,
     /// `[Tweaks] bNoPlayerAnimMovement` (Tweaks' code default 0): with it Tweaks does not write S0549.
     no_player_anim_movement: AtomicBool,
+    /// S0022.45's `ConsoleManager_HandleControllerHotkeys` statics: `lastHeldKey` (an Xbox control
+    /// code, 0 for none), `nextKeyRepeatTime` and `nextThumbStickRepeatTime` (milliseconds).
+    pub(crate) console_pad_last_held: AtomicU32,
+    pub(crate) console_pad_next_repeat: AtomicU32,
+    pub(crate) console_stick_next_repeat: AtomicU32,
 }
 
 impl Default for Prints {
@@ -376,6 +381,9 @@ impl Default for Prints {
             run_and_gun_combat_only: AtomicBool::new(false),
             vats_stop_burst: AtomicBool::new(false),
             no_player_anim_movement: AtomicBool::new(false),
+            console_pad_last_held: AtomicU32::new(0),
+            console_pad_next_repeat: AtomicU32::new(0),
+            console_stick_next_repeat: AtomicU32::new(0),
         }
     }
 }
