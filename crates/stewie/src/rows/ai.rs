@@ -640,6 +640,14 @@ pub const ROWS: &[Row] = &[
         summary: "in god mode you can fast travel and wait with enemies nearby",
     },
     Row {
+        bit: stewie::POWER_ARMOR_PREVENTS_SCREEN_BLOOD,
+        function: "PowerArmorPreventsScreenBloodEffect",
+        plan: "S0702",
+        key: "bPowerArmorPreventsScreenBloodEffect",
+        tweaks: Some(("Tweaks", "bPowerArmorPreventsScreenBlood")),
+        summary: "changes play: a hit on a part covered by power armor puts no blood on your screen",
+    },
+    Row {
         bit: stewie::HIDDEN_FRAGS,
         function: "ShootableNonPlayableExplosives",
         plan: "S0782",

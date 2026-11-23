@@ -8173,7 +8173,12 @@ fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage:
     if !(damage as f64 > zero) {
         return;
     }
-    if this.addr() == player {
+    // lStewieAl's Tweaks' row S0702 (`PowerArmorPreventsScreenBloodEffect`, the call at `0x88E9D6`): the
+    // player's screen blood is left out when the hit part wears power armor (`material_flag`, the
+    // frame's byte at -0x23).
+    let power_armor_stops_blood =
+        e.stewie(engine_core::extend::stewie::POWER_ARMOR_PREVENTS_SCREEN_BLOOD) && material_flag;
+    if this.addr() == player && !power_armor_stops_blood {
         let hit_points = e.mem.f32(hit + 0x14);
         let points = e.call(DAMAGE_POINTS, &args![hit_points]).i32();
         if points > 0 {
@@ -16150,6 +16155,36 @@ mod tests {
         let step = record(&mut e, PLAYER_STATISTIC_STEP, Ret::default());
         fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
         assert_eq!(*step.borrow(), vec![vec![4, 0.0f32.to_bits(), 0]]);
+    }
+
+    /// S0702 (`PowerArmorPreventsScreenBloodEffect`, `0x88E9D6`): with the row, a player hit on a
+    /// part covered by power armor (the hit kind 3: `008ba410`; the head kinds 1 and 2:
+    /// `008ba470`) counts no screen blood points; uncovered, or without the row, it does.
+    #[test]
+    fn s0702_power_armor_stops_the_player_screen_blood() {
+        for (on, kind, head, body, steps) in [
+            (false, 3u32, 0u32, 1u32, 1usize),
+            (true, 3, 0, 1, 0),
+            (true, 3, 1, 0, 1),
+            (true, 1, 1, 0, 0),
+            (true, 2, 0, 1, 1),
+            (false, 1, 1, 0, 1),
+        ] {
+            let mut e = engine3();
+            let (actor, hit) = hit_world(&mut e);
+            e.set_stewie(
+                engine_core::extend::stewie::POWER_ARMOR_PREVENTS_SCREEN_BLOOD,
+                on,
+            );
+            e.mem.set_u32(PLAYER_CHARACTER, actor.addr());
+            e.mem.set_u32(hit + 0x10, kind);
+            double(&mut e, HIT_FLAG_MELEE, eax(head));
+            double(&mut e, IMPACT_SECONDARY_FLAG, eax(body));
+            e.register(DAMAGE_POINTS, |_, _| eax(4));
+            let step = record(&mut e, PLAYER_STATISTIC_STEP, Ret::default());
+            fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+            assert_eq!(step.borrow().len(), steps, "{on} {kind} {head} {body}");
+        }
     }
 
     fn visibility_world(e: &mut Engine) -> (Ptr<Actor>, u32, CallRecord) {

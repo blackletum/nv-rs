@@ -113,6 +113,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0584", "bPipboyLightAndHolsteringIgnoreTimescale"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
+        ("S0702", "bPowerArmorPreventsScreenBlood"),
         ("S0782", "bHiddenFragsFix"),
         ("S0809", "bVATSStopFollowingDeadTargets"),
     ] {
@@ -454,6 +455,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0693",
         "bGodmodeAllowsFastTravelEnemiesNearby",
         Row::at(AI_FIXES, 75),
+    ),
+    (
+        "S0702",
+        "bPowerArmorPreventsScreenBloodEffect",
+        Row::at(AI_FIXES, 82),
     ),
     (
         "S0782",
