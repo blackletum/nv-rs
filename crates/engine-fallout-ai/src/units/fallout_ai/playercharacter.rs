@@ -4497,7 +4497,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             PlayerCharacter::fAmmoSwapButtonTimer,
             (ammo_timer as f64 + delta as f64) as f32,
         );
-        if e.call(0x00a2_4660, &args![main_state, 0x12u32, 1u32]).u32() != 0 {
+        if ammo_swap_pressed(e, main_state) {
             // Seam (JIP LN NVSE's InitRockItLauncher, `PCAmmoSwitchHook` jumped to from
             // `0x940998` in place of the weapon entry test): no words; an answer of 1 skips the
             // ammo switch (the HUD's weapon is JIP's Rock-It Launcher), 0 goes on without the
@@ -9746,6 +9746,41 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The ammunition swap control's test in `PlayerCharacter::Update` (`0x94098B`, `00a24660` on
+/// `input` with 0x12, pressed). lStewieAl's Tweaks' row S0374 (`DoubleReloadChangesAmmoType`, its
+/// `AmmoSwapCheckReloadKey`): else, the reload control (7) pressed within `iAmmoSwapTimeMS` of the
+/// last press (`011f6394` +0x14, milliseconds, signed; the kept word `LAST_RELOAD_TIME`) counts as
+/// a swap; a swap keeps the press time with `bAllowMultipleQuickChanges`, else sets it so the next
+/// press is not quick; a slow press keeps its time.
+fn ammo_swap_pressed(e: &mut Engine, input: u32) -> bool {
+    if e.call(0x00a2_4660, &args![input, 0x12u32, 1u32]).u32() != 0 {
+        return true;
+    }
+    if !e.stewie(engine_core::extend::stewie::DOUBLE_RELOAD_SWAPS_AMMO)
+        || e.call(0x00a2_4660, &args![input, 7u32, 1u32]).u32() == 0
+    {
+        return false;
+    }
+    let kept = e.stewie_kept(engine_core::extend::stewie::kept::LAST_RELOAD_TIME, 4);
+    let window =
+        e.stewie_value(engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_TIME_MS) as i32;
+    let now = e.mem.u32(0x011f_6394 + 0x14) as i32;
+    let last = e.mem.u32(kept) as i32;
+    if now.wrapping_sub(last) < window {
+        let multiple =
+            e.stewie_value(engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_MULTIPLE) != 0;
+        let kept_time = if multiple {
+            now
+        } else {
+            now.wrapping_sub(window)
+        };
+        e.mem.set_u32(kept, kept_time as u32);
+        return true;
+    }
+    e.mem.set_u32(kept, now as u32);
+    false
+}
 
 /// lStewieAl's Tweaks' row S0549 (`patchDisableTurnLeftRightFlags`, `[Tweaks] bNoTurningAnim`), which
 /// Tweaks writes only without `[Tweaks] bNoPlayerAnimMovement`.
@@ -21478,6 +21513,43 @@ mod tests {
                 "on {on} no movement {no_movement}"
             );
         }
+    }
+
+    /// S0374 (`AmmoSwapCheckReloadKey`, `0x94098B`): the swap control swaps; with the row a reload
+    /// press within 200 milliseconds of the last one swaps too (1000 then 1150: swap; 1500: none;
+    /// 1650: swap again); without `bAllowMultipleQuickChanges` the press after a swap starts over.
+    #[test]
+    fn s0374_two_quick_reload_presses_swap_the_ammunition() {
+        for multiple in [1u32, 0] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::DOUBLE_RELOAD_SWAPS_AMMO, true);
+            e.set_stewie_value(
+                engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_TIME_MS,
+                200,
+            );
+            e.set_stewie_value(
+                engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_MULTIPLE,
+                multiple,
+            );
+            e.map(0x011f_6000, 0x1000);
+            only_button(&mut e, 7, 1);
+            let mut swaps = vec![];
+            for now in [1000u32, 1150, 1500, 1650, 1800] {
+                e.mem.set_u32(0x011f_6394 + 0x14, now);
+                swaps.push(ammo_swap_pressed(&mut e, 0x1000));
+            }
+            let expected = if multiple != 0 {
+                vec![false, true, false, true, true]
+            } else {
+                vec![false, true, false, true, false]
+            };
+            assert_eq!(swaps, expected, "multiple {multiple}");
+        }
+        let mut e = engine();
+        only_button(&mut e, 7, 1);
+        assert!(!ammo_swap_pressed(&mut e, 0x1000), "the row off");
+        only_button(&mut e, 0x12, 1);
+        assert!(ammo_swap_pressed(&mut e, 0x1000), "the swap control");
     }
 
     #[test]

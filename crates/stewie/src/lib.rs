@@ -200,6 +200,16 @@ pub fn install(e: &mut Engine) {
     e.set_stewie_fade_node_prints(settings.long("Tweaks", "bInvalidBSFadeNodePrints", 1) != 0);
     // Read by row S0059 (Tweaks' `g_bExtraConsoleDetailsMeshPath`, code default 0, VNV's 1).
     e.set_stewie_mesh_path(settings.long("Extra Console Details", "bMeshPath", 0) != 0);
+    // Read by row S0374 (Tweaks' `[Double Reload Swaps Ammo Type]` keys, code defaults 200 and 1).
+    let section = "Double Reload Swaps Ammo Type";
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_TIME_MS,
+        settings.long(section, "iAmmoSwapTimeMS", 200) as u32,
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_MULTIPLE,
+        settings.long(section, "bAllowMultipleQuickChanges", 1) as u32,
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).

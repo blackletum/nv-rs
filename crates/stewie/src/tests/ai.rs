@@ -103,6 +103,7 @@ fn s0549_obeys_tweaks_no_turning_anim() {
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
         ("S0329", "bLeftAndRightCancelEachOther"),
+        ("S0374", "bDoubleTapReloadToChangeAmmoType"),
         ("S0404", "bDelayPostCombatLevelUp"),
         ("S0410", "bGodmodePreventsLegCrippleSound"),
         ("S0489", "bSpinWeaponsSoundFix"),
@@ -408,6 +409,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0329",
         "bLeftRightMovementCancelsOut",
         Row::at(AI_FIXES, 72),
+    ),
+    (
+        "S0374",
+        "bDoubleReloadChangesAmmoType",
+        Row::at(AI_FIXES, 80),
     ),
     ("S0404", "bDelayLevelupAfterCombat", Row::at(AI_FIXES, 73)),
     (

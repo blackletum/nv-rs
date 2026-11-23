@@ -544,6 +544,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: holding two opposite movement keys (left and right, forward and back) moves neither way",
     },
     Row {
+        bit: stewie::DOUBLE_RELOAD_SWAPS_AMMO,
+        function: "DoubleReloadChangesAmmoType",
+        plan: "S0374",
+        key: "bDoubleReloadChangesAmmoType",
+        tweaks: Some(("Tweaks", "bDoubleTapReloadToChangeAmmoType")),
+        summary: "changes play: pressing reload twice quickly swaps your ammunition type",
+    },
+    Row {
         bit: stewie::DELAY_LEVELUP_AFTER_COMBAT,
         function: "patchDelayLevelupAfterCombat",
         plan: "S0404",

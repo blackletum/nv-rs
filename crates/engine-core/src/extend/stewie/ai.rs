@@ -270,3 +270,6 @@ pub const HOLSTER_WHILE_ANIMS_PLAY: Row = Row::share(AI_FIXES, AI_FIXES_END, 78)
 /// S0549 `patchDisableTurnLeftRightFlags` (`009445b0` (`0x945DD4`)): turning on the spot sets no
 /// turn flags, so no turning animation plays (only without `[Tweaks] bNoPlayerAnimMovement`).
 pub const NO_TURNING_ANIM: Row = Row::share(AI_FIXES, AI_FIXES_END, 79);
+/// S0374 `DoubleReloadChangesAmmoType` (`PlayerCharacter::Update` `0093e860` (`0x94098B`)):
+/// pressing reload twice quickly swaps the ammunition type.
+pub const DOUBLE_RELOAD_SWAPS_AMMO: Row = Row::share(AI_FIXES, AI_FIXES_END, 80);

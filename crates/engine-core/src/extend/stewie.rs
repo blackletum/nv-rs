@@ -323,8 +323,20 @@ pub mod kept {
     /// S0404's `static int lastCombatTime` (4 bytes): the time (milliseconds) the player was last in
     /// combat.
     pub const LAST_COMBAT_TIME: usize = 10;
+    /// S0374's `static int lastReloadTime` (4 bytes): the time (milliseconds) of the last reload press.
+    pub const LAST_RELOAD_TIME: usize = 11;
     /// How many.
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 12;
+}
+
+/// Tweaks' numeric settings a row reads inside its seam ([`Engine::stewie_value`]).
+pub mod value {
+    /// S0374's `[Double Reload Swaps Ammo Type] iAmmoSwapTimeMS` (code default 200).
+    pub const RELOAD_AMMO_SWAP_TIME_MS: usize = 0;
+    /// S0374's `[Double Reload Swaps Ammo Type] bAllowMultipleQuickChanges` (code default 1).
+    pub const RELOAD_AMMO_SWAP_MULTIPLE: usize = 1;
+    /// How many.
+    pub const COUNT: usize = 2;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and
@@ -360,6 +372,9 @@ pub(crate) struct Prints {
     vats_stop_burst: AtomicBool,
     /// `[Tweaks] bNoPlayerAnimMovement` (Tweaks' code default 0): with it Tweaks does not write S0549.
     no_player_anim_movement: AtomicBool,
+    /// Tweaks' numeric settings a row reads ([`value`]), as their bits; written by `crates/stewie`'s
+    /// install.
+    values: [AtomicU32; value::COUNT],
 }
 
 impl Default for Prints {
@@ -376,6 +391,7 @@ impl Default for Prints {
             run_and_gun_combat_only: AtomicBool::new(false),
             vats_stop_burst: AtomicBool::new(false),
             no_player_anim_movement: AtomicBool::new(false),
+            values: Default::default(),
         }
     }
 }
@@ -720,6 +736,16 @@ impl Engine {
     /// Whether the missing-data guard is on for Tweaks' rows ([`Engine::set_stewie_slip_guard`]).
     pub fn stewie_slip_guard(&self) -> bool {
         self.extend.stewie.3.slip_guard.load(Relaxed)
+    }
+
+    /// Sets Tweaks' numeric setting `which` ([`value`]) to `bits` (`crates/stewie`'s install).
+    pub fn set_stewie_value(&self, which: usize, bits: u32) {
+        self.extend.stewie.3.values[which].store(bits, Relaxed);
+    }
+
+    /// Tweaks' numeric setting `which` ([`value`]) as written by [`Engine::set_stewie_value`].
+    pub fn stewie_value(&self, which: usize) -> u32 {
+        self.extend.stewie.3.values[which].load(Relaxed)
     }
 
     /// `[Tweaks] bNoPlayerAnimMovement` (`crates/stewie`'s install): S0549 is written only without it.
