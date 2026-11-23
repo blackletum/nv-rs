@@ -335,8 +335,11 @@ pub mod value {
     pub const RELOAD_AMMO_SWAP_TIME_MS: usize = 0;
     /// S0374's `[Double Reload Swaps Ammo Type] bAllowMultipleQuickChanges` (code default 1).
     pub const RELOAD_AMMO_SWAP_MULTIPLE: usize = 1;
+    /// S0694's `[Improved Weather] fFastTravelWeatherChangeDistanceThreshold` (code default 30000.0), the
+    /// `float`'s bits.
+    pub const FAST_TRAVEL_WEATHER_DISTANCE: usize = 2;
     /// How many.
-    pub const COUNT: usize = 2;
+    pub const COUNT: usize = 3;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

@@ -205,6 +205,24 @@ impl Settings {
         self.base_long(&k, default)
     }
 
+    /// A float setting as `ModifyTweakIfPresent(float*)` reads it (`GetDoubleValue` with
+    /// [`MISSING`] as its default): the last file whose value reads as a number other than
+    /// [`MISSING`], else the default's, else `default`. The caller narrows it to the `float`.
+    pub fn double(&self, section: &str, name: &str, default: f64) -> f64 {
+        let k = key(section, name);
+        let missing = f64::from(MISSING);
+        for (_, f) in self.files.iter().rev() {
+            let n = ini::double_value(f.get(&k).map(Vec::as_slice), missing);
+            if n != missing {
+                return n;
+            }
+        }
+        match ini::double_value(self.base.get(&k).map(|v| v.as_bytes()), missing) {
+            n if n == missing => default,
+            n => n,
+        }
+    }
+
     /// A `GET_TWEAKH` key: the main INI's value (read as `GetLongValue(.., 0)`, so one that is no
     /// number counts 0) when it has the key, else the default's; then each overlay file's value
     /// ORed in.

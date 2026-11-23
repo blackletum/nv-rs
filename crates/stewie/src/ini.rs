@@ -205,3 +205,156 @@ pub fn strtol(s: &[u8], base: u32) -> (i32, usize) {
     };
     (n, at)
 }
+
+/// `GetDoubleValue(section, key, default)` on a value (`None`: the key is missing): `strtod` over
+/// the whole value (its 64-byte buffer as in [`long_value`]), the default for an empty value or
+/// anything left over.
+pub fn double_value(value: Option<&[u8]>, default: f64) -> f64 {
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return default;
+    };
+    if value.len() + 1 > 64 {
+        return default;
+    }
+    match strtod(value) {
+        (n, used) if used == value.len() => n,
+        _ => default,
+    }
+}
+
+/// The C runtime's `strtod`: the number and how many bytes it used (0 when none was read). White
+/// space and a sign first, then `inf` / `infinity`, `nan` (with a `(...)` of letters, digits and
+/// `_`), a `0x` hexadecimal number with a `p` power of two, or a decimal number with an `e` power
+/// of ten (rounded to the nearest double).
+pub fn strtod(s: &[u8]) -> (f64, usize) {
+    let mut at = 0;
+    while at < s.len() && matches!(s[at], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        at += 1;
+    }
+    let sign_at = at;
+    let negative = match s.get(at) {
+        Some(b'-') => {
+            at += 1;
+            true
+        }
+        Some(b'+') => {
+            at += 1;
+            false
+        }
+        _ => false,
+    };
+    let signed = |n: f64| if negative { -n } else { n };
+    let rest = &s[at..];
+    let starts =
+        |word: &[u8]| rest.len() >= word.len() && rest[..word.len()].eq_ignore_ascii_case(word);
+    if starts(b"infinity") {
+        return (signed(f64::INFINITY), at + 8);
+    }
+    if starts(b"inf") {
+        return (signed(f64::INFINITY), at + 3);
+    }
+    if starts(b"nan") {
+        let mut end = at + 3;
+        if s.get(end) == Some(&b'(') {
+            let mut close = end + 1;
+            while s
+                .get(close)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            {
+                close += 1;
+            }
+            if s.get(close) == Some(&b')') {
+                end = close + 1;
+            }
+        }
+        return (signed(f64::NAN), end);
+    }
+    let digits = |from: usize, hex: bool| {
+        let mut end = from;
+        while s.get(end).is_some_and(|b| {
+            if hex {
+                b.is_ascii_hexdigit()
+            } else {
+                b.is_ascii_digit()
+            }
+        }) {
+            end += 1;
+        }
+        end
+    };
+    // A power after the number (`e` or `p`, a sign, digits): where it ends, or `from` without one.
+    let power = |from: usize, letter: u8| {
+        if !s
+            .get(from)
+            .is_some_and(|b| b.to_ascii_lowercase() == letter)
+        {
+            return from;
+        }
+        let mut at = from + 1;
+        if matches!(s.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        let end = digits(at, false);
+        if end == at {
+            from
+        } else {
+            end
+        }
+    };
+    if s.get(at) == Some(&b'0') && matches!(s.get(at + 1), Some(b'x' | b'X')) {
+        let whole_end = digits(at + 2, true);
+        let (fraction_start, fraction_end) = if s.get(whole_end) == Some(&b'.') {
+            (whole_end + 1, digits(whole_end + 1, true))
+        } else {
+            (whole_end, whole_end)
+        };
+        if whole_end > at + 2 || fraction_end > fraction_start {
+            let end = power(fraction_end, b'p');
+            let mut mantissa = 0u64;
+            let mut shift = 0i32;
+            let mut sticky = false;
+            let hex_digits = s[at + 2..whole_end]
+                .iter()
+                .map(|b| (b, false))
+                .chain(s[fraction_start..fraction_end].iter().map(|b| (b, true)));
+            for (b, in_fraction) in hex_digits {
+                let d = (*b as char).to_digit(16).unwrap_or(0) as u64;
+                if mantissa >> 56 == 0 {
+                    mantissa = mantissa << 4 | d;
+                    if in_fraction {
+                        shift -= 4;
+                    }
+                } else {
+                    sticky |= d != 0;
+                    if !in_fraction {
+                        shift += 4;
+                    }
+                }
+            }
+            if end > fraction_end {
+                let text = std::str::from_utf8(&s[fraction_end + 1..end]).unwrap_or("0");
+                let exponent = text.parse::<i32>().unwrap_or(if text.starts_with('-') {
+                    i32::MIN / 2
+                } else {
+                    i32::MAX / 2
+                });
+                shift = shift.saturating_add(exponent.clamp(i32::MIN / 2, i32::MAX / 2));
+            }
+            let mantissa = mantissa | u64::from(sticky);
+            let n = mantissa as f64 * 2f64.powi(shift.clamp(-1100, 1100));
+            return (signed(n), end);
+        }
+    }
+    let whole_end = digits(at, false);
+    let (fraction_start, fraction_end) = if s.get(whole_end) == Some(&b'.') {
+        (whole_end + 1, digits(whole_end + 1, false))
+    } else {
+        (whole_end, whole_end)
+    };
+    if whole_end == at && fraction_end == fraction_start {
+        return (0.0, 0);
+    }
+    let end = power(fraction_end, b'e');
+    let text = std::str::from_utf8(&s[sign_at..end]).unwrap_or("0");
+    (text.parse::<f64>().unwrap_or(0.0), end)
+}

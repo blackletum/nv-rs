@@ -210,6 +210,16 @@ pub fn install(e: &mut Engine) {
         engine_core::extend::stewie::value::RELOAD_AMMO_SWAP_MULTIPLE,
         settings.long(section, "bAllowMultipleQuickChanges", 1) as u32,
     );
+    // Read by row S0694 (Tweaks' `g_fFastTravelWeatherTransitionDistance`, a `float`, code default 30000).
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::FAST_TRAVEL_WEATHER_DISTANCE,
+        (settings.double(
+            "Improved Weather",
+            "fFastTravelWeatherChangeDistanceThreshold",
+            30000.0,
+        ) as f32)
+            .to_bits(),
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).

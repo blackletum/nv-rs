@@ -2591,6 +2591,8 @@ pub fn player_character_fast_travel(e: &mut Engine, this: Ptr<PlayerCharacter>, 
     e.call(0x0088_b0a0, &args![controller, 0u32]);
     e.call(0x0088_d640, &args![this]);
 
+    // The path length as the frame keeps it (`[ebp-0x34]`), for S0694 at the placement.
+    let mut travel_length = 0.0f32;
     // Frame: the path length (+0), the lock data (+0x10), two pathing
     // locations (+0x20, +0x50), a string (+0x80) and the message (+0x90).
     e.with_stack(0x490, |e, frame| {
@@ -2648,6 +2650,7 @@ pub fn player_character_fast_travel(e: &mut Engine, this: Ptr<PlayerCharacter>, 
             length = 0.0;
             e.call(0x005b_5e40, &args![message]);
         }
+        travel_length = length;
         let setting = e.call(0x0048_39c0, &args![0x3au32]).u32();
         let speed = e.call(0x0088_4eb0, &args![player]).f32();
         let per_second = (length as f64 / speed as f64) as f32;
@@ -2722,7 +2725,7 @@ pub fn player_character_fast_travel(e: &mut Engine, this: Ptr<PlayerCharacter>, 
         rotation[1],
         rotation[2],
         Ptr::new(world_space),
-        true,
+        reset_weather_after(e, travel_length),
     );
     e.set_global::<u8>(FAST_TRAVELLING, 0);
     e.set(this, PlayerCharacter::iSleepTime, 0);
@@ -9768,6 +9771,24 @@ fn ufo_stick_divisor(e: &Engine, global: u32) -> f64 {
     }
 }
 
+/// Whether a fast travel of `length` (the path length `PlayerCharacter::FastTravel` keeps at
+/// `[ebp-0x34]`) resets the weather (`0093cce0`'s last argument, the exe's 1). lStewieAl's Tweaks'
+/// row S0694 (`ImprovedWeather`, its `OnFastTravel`, the call at `0x93D418`): not when
+/// `[Improved Weather] fFastTravelWeatherChangeDistanceThreshold` is 0 or the length is below it.
+fn reset_weather_after(e: &Engine, length: f32) -> bool {
+    if !e.stewie(engine_core::extend::stewie::IMPROVED_WEATHER) {
+        return true;
+    }
+    let threshold = f32::from_bits(
+        e.stewie_value(engine_core::extend::stewie::value::FAST_TRAVEL_WEATHER_DISTANCE),
+    );
+    // Tweaks: `if (!threshold || distance < threshold) bResetWeather = false;` (a NaN length resets).
+    if threshold == 0.0 || length < threshold {
+        return false;
+    }
+    true
+}
+
 /// The ammunition swap control's test in `PlayerCharacter::Update` (`0x94098B`, `00a24660` on
 /// `input` with 0x12, pressed). lStewieAl's Tweaks' row S0374 (`DoubleReloadChangesAmmoType`, its
 /// `AmmoSwapCheckReloadKey`): else, the reload control (7) pressed within `iAmmoSwapTimeMS` of the
@@ -15352,6 +15373,36 @@ mod tests {
         assert_eq!(e.mem.u8(this.addr() + 0x20c), 0);
         assert_eq!(e.mem.u8(this.addr() + 0x204), 0);
         assert_eq!(called(&e, 0x0045_7d70)[0], vec![0x5000, 1, destination, 0]);
+    }
+
+    /// S0694 (`ImprovedWeather`, `0x93D418`): a trip of 36000 resets the weather (the sky's
+    /// `0063d060`) without the row and with a threshold of 30000; not with 40000, not with 0, and
+    /// not for a trip with no path (its length counts 0).
+    #[test]
+    fn s0694_a_short_fast_travel_keeps_the_weather() {
+        for (on, threshold, length, resets) in [
+            (false, 40000.0f32, 36000.0f32, 1usize),
+            (true, 30000.0, 36000.0, 1),
+            (true, 36000.0, 36000.0, 1),
+            (true, 40000.0, 36000.0, 0),
+            (true, 0.0, 36000.0, 0),
+            (true, 30000.0, f32::MAX, 0),
+        ] {
+            let mut e = engine();
+            run_fast_travel_with(&mut e, length, 10.0, |e| {
+                e.set_stewie(engine_core::extend::stewie::IMPROVED_WEATHER, on);
+                e.set_stewie_value(
+                    engine_core::extend::stewie::value::FAST_TRAVEL_WEATHER_DISTANCE,
+                    threshold.to_bits(),
+                );
+                e.register(0x0046_dd00, |_, _| int(0xaa00));
+            });
+            assert_eq!(
+                called(&e, 0x0063_d060).len(),
+                resets,
+                "{on} {threshold} {length}"
+            );
+        }
     }
 
     #[test]

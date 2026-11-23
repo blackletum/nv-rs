@@ -283,3 +283,6 @@ pub const POWER_ARMOR_PREVENTS_SCREEN_BLOOD: Row = Row::share(AI_FIXES, AI_FIXES
 /// S0755 `MeleeHitBloodFollowsLimbNodes` (`0088e8d0` (`0x88F150`)): melee blood follows the hit
 /// limb.
 pub const MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES: Row = Row::share(AI_FIXES, AI_FIXES_END, 83);
+/// S0694 `ImprovedWeather` (`PlayerCharacter::FastTravel` `0093cdf0` (`0x93D418`)): a short fast travel
+/// keeps the weather.
+pub const IMPROVED_WEATHER: Row = Row::share(AI_FIXES, AI_FIXES_END, 84);

@@ -640,6 +640,14 @@ pub const ROWS: &[Row] = &[
         summary: "in god mode you can fast travel and wait with enemies nearby",
     },
     Row {
+        bit: stewie::IMPROVED_WEATHER,
+        function: "ImprovedWeather",
+        plan: "S0694",
+        key: "bImprovedWeather",
+        tweaks: Some(("Tweaks", "bImprovedWeather")),
+        summary: "changes play: a short fast travel keeps the current weather",
+    },
+    Row {
         bit: stewie::POWER_ARMOR_PREVENTS_SCREEN_BLOOD,
         function: "PowerArmorPreventsScreenBloodEffect",
         plan: "S0702",

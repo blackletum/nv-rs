@@ -1,7 +1,7 @@
 //! The reader's forms, the override rule in each case, the rows' keys and the install.
 
 use super::*;
-use crate::ini::{entries, long_value, strtol, values, Entry};
+use crate::ini::{double_value, entries, long_value, strtod, strtol, values, Entry};
 use crate::settings::{table, Settings, MISSING};
 use engine_core::extend::stewie as bits;
 
@@ -88,6 +88,93 @@ fn numbers_read_as_get_long_value() {
     assert_eq!(long_value(None, -7), -7);
     assert_eq!(strtol(b"  12x", 10), (12, 4));
     assert_eq!(strtol(b"x", 10), (0, 0));
+}
+
+/// `GetDoubleValue`: `strtod` over the whole value (decimal, `e` powers, `0x` with `p` powers,
+/// `inf`, `nan`), the default for anything left over, an empty value or one past 64 bytes.
+#[test]
+fn numbers_read_as_get_double_value() {
+    let read = |v: &str| double_value(Some(v.as_bytes()), -7.0);
+    assert_eq!(read("30000.0"), 30000.0);
+    assert_eq!(read("30000.000000"), 30000.0);
+    assert_eq!(read("1"), 1.0);
+    assert_eq!(read("-1.5"), -1.5);
+    assert_eq!(read("+.5"), 0.5);
+    assert_eq!(read("2."), 2.0);
+    assert_eq!(read(" \t12.5"), 12.5);
+    assert_eq!(read("1e3"), 1000.0);
+    assert_eq!(read("1E+03"), 1000.0);
+    assert_eq!(read("2.5e-1"), 0.25);
+    assert_eq!(read("0x10"), 16.0);
+    assert_eq!(read("0x1.8p1"), 3.0);
+    assert_eq!(read("-0X.8"), -0.5);
+    assert_eq!(read("inf"), f64::INFINITY);
+    assert_eq!(read("-Infinity"), f64::NEG_INFINITY);
+    assert!(read("nan").is_nan());
+    assert!(read("NaN(123)").is_nan());
+    assert_eq!(read("1e"), -7.0, "an e without digits is left over");
+    assert_eq!(read("0x"), -7.0, "strtod reads the 0 and leaves the x");
+    assert_eq!(read("1.5 ; note"), -7.0);
+    assert_eq!(read("12 "), -7.0);
+    assert_eq!(read("."), -7.0);
+    assert_eq!(read(""), -7.0);
+    assert_eq!(read("abc"), -7.0);
+    assert_eq!(read("infinit"), -7.0, "inf read, the rest left over");
+    assert_eq!(read(&"0".repeat(63)), 0.0);
+    assert_eq!(read(&"0".repeat(64)), -7.0);
+    assert_eq!(double_value(None, -7.0), -7.0);
+    assert_eq!(strtod(b"  1.5x"), (1.5, 5));
+    assert_eq!(strtod(b"x"), (0.0, 0));
+}
+
+/// A float setting: the last file with a number wins, a value that reads as `MISSING` or as
+/// nothing is skipped, then the default's text, then the caller's default.
+#[test]
+fn float_settings_read_as_modify_tweak_if_present() {
+    let section = "Improved Weather";
+    let name = "fFastTravelWeatherChangeDistanceThreshold";
+    let s = Settings::new(&[], false);
+    assert_eq!(s.double(section, name, 1.0), 30000.0);
+    let s = Settings::new(
+        &[
+            (
+                "main",
+                b"[Improved Weather]\nfFastTravelWeatherChangeDistanceThreshold=500.5\n",
+            ),
+            (
+                "overlay",
+                b"[Improved Weather]\nfFastTravelWeatherChangeDistanceThreshold=-19997\n",
+            ),
+        ],
+        false,
+    );
+    assert_eq!(s.double(section, name, 1.0), 500.5);
+    let s = Settings::new(
+        &[(
+            "main",
+            b"[Improved Weather]\nfFastTravelWeatherChangeDistanceThreshold=x\n",
+        )],
+        false,
+    );
+    assert_eq!(s.double(section, name, 1.0), 30000.0);
+    assert_eq!(s.double("No Such", "fKey", 1.0), 1.0);
+}
+
+/// S0694's threshold reaches the engine as its `float` bits: 30000 without a file, the file's
+/// value with one.
+#[test]
+fn the_install_sets_the_fast_travel_weather_distance() {
+    let which = bits::value::FAST_TRAVEL_WEATHER_DISTANCE;
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(f32::from_bits(e.stewie_value(which)), 30000.0);
+    let mut e = engine(Some(
+        b"[Improved Weather]\r\nfFastTravelWeatherChangeDistanceThreshold=0.1\r\n",
+    ));
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(e.stewie_value(which), 0.1f32.to_bits());
 }
 
 #[test]
