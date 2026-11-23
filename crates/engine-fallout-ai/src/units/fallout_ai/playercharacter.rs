@@ -8094,7 +8094,7 @@ pub fn fn_009445b0(
 fn look_at_vats_action_target(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: Ptr) -> u8 {
     let mut target = 0u32;
     let mut body_part = 0xffff_ffffu32;
-    if e.call(0x009c_71c0, &args![VATS_OBJECT]).u32() != 0 {
+    if vats_first_target(e) != 0 {
         let action = e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
         target = e.mem.u32(action + 0xc);
         let action = e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
@@ -9746,6 +9746,28 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The VATS camera's first test of the current action (`009445b0`, `0x944601`, `009c71c0` on the
+/// VATS object). lStewieAl's Tweaks' row S0809 (`VATSStopFollowingDeadTargets`, its
+/// `VATSCameraData__GetFirstTarget`): the first queued action (the list's first data, +0) counts as
+/// none when its target (+0xC) is an actor (its vtable's slot `0x100` is `ReturnTrue`, `008d0360`)
+/// that is dying (slot `0x22c` with 1).
+fn vats_first_target(e: &mut Engine) -> u32 {
+    if !e.stewie(engine_core::extend::stewie::VATS_STOP_FOLLOWING_DEAD) {
+        return e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
+    }
+    let action = e.mem.u32(VATS_OBJECT);
+    if action != 0 {
+        let target = e.mem.u32(action + 0xc);
+        if target != 0
+            && e.mem.u32(e.mem.u32(target) + 0x100) == 0x008d_0360
+            && e.vcall(target, 0x22c, &args![1u32]).bool()
+        {
+            return 0;
+        }
+    }
+    action
+}
 
 /// A frame's time added to the player's held-control timers (`delta`). lStewieAl's Tweaks' row S0584
 /// (`patchPipboyLightAndHolsterNotAffectedByTimeScale`): divided by the timescale (`011ac3a0`, `FDIV`
@@ -21332,6 +21354,42 @@ mod tests {
             e.map(0x011a_c000, 0x1000);
             e.set_global(0x011a_c3a0, 0.5f32);
             assert_eq!(timescale_free(&e, 0.25), step, "on {on}");
+        }
+    }
+
+    /// S0809 (`VATSCameraData__GetFirstTarget`, `0x944601`): the first queued action (+0 of the
+    /// VATS object) is kept unless, with the row, its target (+0xC) is an actor (`IsActor` slot
+    /// `0x100` is `ReturnTrue`, `008d0360`) that is dying (slot `0x22c` with 1).
+    #[test]
+    fn s0809_vats_stops_following_a_dying_target() {
+        // (row, the target an actor, dying, the action kept)
+        for (on, actor, dying, kept) in [
+            (false, true, true, true),
+            (true, true, true, false),
+            (true, true, false, true),
+            (true, false, true, true),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::VATS_STOP_FOLLOWING_DEAD, on);
+            e.map(0x011f_2000, 0x1000);
+            let table = e.mem.alloc(0x400);
+            e.mem
+                .set_u32(table + 0x100, if actor { 0x008d_0360 } else { 0x008d_0370 });
+            let dying_slot = e.mem.alloc(8);
+            e.register_double(dying_slot, move |_, _| int(u32::from(dying)));
+            e.mem.set_u32(table + 0x22c, dying_slot);
+            let target = e.mem.alloc(0x40);
+            e.mem.set_u32(target, table);
+            let action = e.mem.alloc(0x20);
+            e.mem.set_u32(action + 0xc, target);
+            e.mem.set_u32(VATS_OBJECT, action);
+            e.register(0x009c_71c0, |e, a| int(e.mem.u32(a[0])));
+            let expected = if kept { action } else { 0 };
+            assert_eq!(
+                vats_first_target(&mut e),
+                expected,
+                "on {on} actor {actor} dying {dying}"
+            );
         }
     }
 

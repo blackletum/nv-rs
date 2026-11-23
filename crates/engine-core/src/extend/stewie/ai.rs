@@ -257,3 +257,6 @@ pub const HELD_TIMERS_IGNORE_TIMESCALE: Row = Row::share(AI_FIXES, AI_FIXES_END,
 /// S0693 `patchGodmodeAllowsFastTravelEnemiesNearby` (`009764a0`, a jump at its entry): in god
 /// mode no hostiles count as near the player.
 pub const GODMODE_FAST_TRAVEL_ENEMIES: Row = Row::share(AI_FIXES, AI_FIXES_END, 75);
+/// S0809 `VATSStopFollowingDeadTargets` (`009445b0` (`0x944601`)): the VATS camera stops turning
+/// to follow a target that is dying.
+pub const VATS_STOP_FOLLOWING_DEAD: Row = Row::share(AI_FIXES, AI_FIXES_END, 76);

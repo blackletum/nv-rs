@@ -608,6 +608,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: an unplayable explosive an NPC carries (a Ghost People's gas tank) can be shot and set off, as the playable ones can",
     },
     Row {
+        bit: stewie::VATS_STOP_FOLLOWING_DEAD,
+        function: "VATSStopFollowingDeadTargets",
+        plan: "S0809",
+        key: "bVATSStopFollowingDeadTargets",
+        tweaks: Some(("Tweaks", "bVATSStopFollowingDeadTargets")),
+        summary: "changes what you see: the VATS camera stops turning to follow a target that is dying",
+    },
+    Row {
         bit: stewie::COMBAT_SOUND_COOLDOWN,
         function: "CombatSoundCooldownFix",
         plan: "S0926",

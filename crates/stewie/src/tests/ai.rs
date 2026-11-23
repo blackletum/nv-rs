@@ -84,8 +84,8 @@ fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
     assert!(!rows::on(row, &keys, &off));
 }
 
-/// S0329, S0404, S0410, S0489, S0584, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys
-/// (code default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the
+/// S0329, S0404, S0410, S0489, S0584, S0660, S0664, S0782 and S0809 follow Tweaks' own `[Tweaks]`
+/// keys (code default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the
 /// player's Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks` (Tweaks'
 /// code default), and off by their own keys.
 #[test]
@@ -99,6 +99,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
         ("S0782", "bHiddenFragsFix"),
+        ("S0809", "bVATSStopFollowingDeadTargets"),
     ] {
         let row = rows::all().find(|r| r.plan == plan).unwrap();
         assert_eq!(row.tweaks, Some(("Tweaks", key)), "{plan}");
@@ -426,6 +427,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0782",
         "bShootableNonPlayableExplosives",
         Row::at(AI_FIXES, 41),
+    ),
+    (
+        "S0809",
+        "bVATSStopFollowingDeadTargets",
+        Row::at(AI_FIXES, 76),
     ),
     ("S0926", "bCombatSoundCooldownFix", Row::at(AI_FIXES, 58)),
 ];
