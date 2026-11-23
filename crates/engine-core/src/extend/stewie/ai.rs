@@ -280,3 +280,6 @@ pub const FASTER_CONTROLLER_POV_ROTATE: Row = Row::share(AI_FIXES, AI_FIXES_END,
 /// S0702 `PowerArmorPreventsScreenBloodEffect` (`0088e8d0` (`0x88E9D6`)): no screen blood from a
 /// hit on a part covered by power armor.
 pub const POWER_ARMOR_PREVENTS_SCREEN_BLOOD: Row = Row::share(AI_FIXES, AI_FIXES_END, 82);
+/// S0755 `MeleeHitBloodFollowsLimbNodes` (`0088e8d0` (`0x88F150`)): melee blood follows the hit
+/// limb.
+pub const MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES: Row = Row::share(AI_FIXES, AI_FIXES_END, 83);

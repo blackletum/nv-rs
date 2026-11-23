@@ -648,6 +648,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: a hit on a part covered by power armor puts no blood on your screen",
     },
     Row {
+        bit: stewie::MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES,
+        function: "MeleeHitBloodFollowsLimbNodes",
+        plan: "S0755",
+        key: "bMeleeHitBloodFollowsLimbNodes",
+        tweaks: Some(("Tweaks", "bMeleeImpactEffectsFollowTarget")),
+        summary: "changes what you see: melee blood follows the limb that was hit instead of floating in the air",
+    },
+    Row {
         bit: stewie::HIDDEN_FRAGS,
         function: "ShootableNonPlayableExplosives",
         plan: "S0782",

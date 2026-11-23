@@ -8152,6 +8152,26 @@ fn hit_blood_impact(e: &mut Engine, hit: u32, material: u32) -> Option<u32> {
     None
 }
 
+/// The node the blood spurt follows for a hit without a projectile or explosion (`hit + 8` 0).
+/// lStewieAl's Tweaks' row S0755 (`MeleeHitBloodFollowsLimbNodes`, its `GetNodeToFollow`, the jump at
+/// `0x88F150`): the hit's target (`+4`), its process (`+0x68`) and, unless the hit location (`+0x10`) is
+/// -1, the process's `GetNthLimbNode` (slot 0x6D0) for it; else none.
+fn melee_blood_limb_node(e: &mut Engine, hit: u32) -> u32 {
+    let target = e.mem.u32(hit + 4);
+    if target == 0 {
+        return 0;
+    }
+    let process = e.mem.u32(target + 0x68);
+    if process == 0 {
+        return 0;
+    }
+    let location = e.mem.u32(hit + 0x10);
+    if location as i32 == -1 {
+        return 0;
+    }
+    e.vcall(process, 0x6d0, &args![location]).u32()
+}
+
 fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage: f32, hit: u32) {
     let under = |distance: u32| frame_pointer - distance;
     let player = e.mem.u32(PLAYER_CHARACTER);
@@ -8356,7 +8376,12 @@ fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage:
                 spurt = true;
                 let mut collidable_3d = 0u32;
                 let second = e.mem.u32(hit + 8);
-                if second != 0 && e.vcall(second, HIT_OBJECT_VSLOT_0X224, &args![]).bool() {
+                if second == 0
+                    && hit != 0
+                    && e.stewie(engine_core::extend::stewie::MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES)
+                {
+                    collidable_3d = melee_blood_limb_node(e, hit);
+                } else if second != 0 && e.vcall(second, HIT_OBJECT_VSLOT_0X224, &args![]).bool() {
                     let record = e.call(OBJECT_COLLISION_RECORD, &args![second, this]).u32();
                     if record != 0 && e.mem.u32(record + 0x1c) != 0 {
                         let inner = e.mem.u32(record + 0x1c);
@@ -16378,6 +16403,58 @@ mod tests {
         // the point; 1.0, 7 and the collidable's 3D object (none).
         assert_eq!(call[6], 100.0f32.to_bits());
         assert_eq!(call[9..], [1.0f32.to_bits(), 7, 0]);
+    }
+
+    /// S0755 (`MeleeHitBloodFollowsLimbNodes`, `0x88F150`): a hit without a projectile follows,
+    /// with the row, the hit target's limb node (its process's slot 0x6D0 for the hit location
+    /// 3); without the row, with the location -1 or without a process, nothing.
+    #[test]
+    fn s0755_melee_blood_follows_the_hit_limb() {
+        for (on, location, has_process, node) in [
+            (true, 3u32, true, 0x9900u32),
+            (false, 3, true, 0),
+            (true, 0xffff_ffff, true, 0),
+            (true, 3, false, 0),
+        ] {
+            let mut e = engine3();
+            let (actor, hit) = hit_world(&mut e);
+            e.set_stewie(
+                engine_core::extend::stewie::MELEE_HIT_BLOOD_FOLLOWS_LIMB_NODES,
+                on,
+            );
+            e.register(WEIGHT_OVERRIDE_FLAG, |_, _| eax(1));
+            armed_target(&mut e, hit);
+            slot(&mut e, ACTOR_TABLE, VSLOT_GET_3D, eax(0));
+            let name = e.mem.alloc(0x10);
+            e.mem.set_u8(name, b'b');
+            let member_table = 0x0200_a000;
+            let member = 0x7518u32;
+            e.mem.set_u32(member, member_table);
+            e.mem
+                .set_u32(member_table + 0x14, slot_target(member_table, 0x14));
+            e.register_double(slot_target(member_table, 0x14), move |_, _| eax(name));
+            let victim = e.mem.alloc(0x100);
+            let process = e.mem.alloc(0x10);
+            e.mem.set_u32(process, PROCESS_TABLE);
+            if has_process {
+                e.mem.set_u32(victim + 0x68, process);
+            }
+            e.mem.set_u32(hit + 4, victim);
+            e.mem.set_u32(hit + 0x10, location);
+            let limb = slot_target(PROCESS_TABLE, 0x6d0);
+            e.mem.set_u32(PROCESS_TABLE + 0x6d0, limb);
+            let asked = record(&mut e, limb, eax(0x9900));
+            let played = record(&mut e, PLAY_HIT_SPURT, Ret::default());
+            double(&mut e, HIT_SECOND_DISTANCE, st0(1000.0));
+            e.register(SETTING_VALUE_ADDRESS, |_, _| eax(0x011c_e270));
+            e.mem.set_f32(0x011c_e270, 1.0);
+            fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+            let call = played.borrow()[0].clone();
+            assert_eq!(call[11], node, "{on} {location:x} {has_process}");
+            if node != 0 {
+                assert_eq!(asked.borrow()[0].last(), Some(&location));
+            }
+        }
     }
 
     /// The hit records the second decal added (kind 1), not the first (kind 2).
