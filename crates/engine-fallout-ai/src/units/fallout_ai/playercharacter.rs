@@ -21450,7 +21450,7 @@ mod tests {
         ] {
             let mut e = engine();
             e.set_stewie(engine_core::extend::stewie::HOLSTER_WHILE_ANIMS_PLAY, on);
-            e.register(0x008a_7570, move |_, _| int(action));
+            e.register_double(0x008a_7570, move |_, _| int(action));
             let this = player(&mut e);
             assert_eq!(
                 holster_action_allows(&mut e, this),
