@@ -2300,7 +2300,15 @@ fn position_player_in_frame(
         e.call(0x0045_4450, &args![tes, position]);
     }
     let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
-    e.call(SOUND_HANDLE_DESTRUCT, &args![audio]);
+    if e.stewie(engine_core::extend::stewie::NO_GIB_SOUND_WHEN_ENTERING_CELLS) {
+        // lStewieAl's Tweaks' `CellChangeCallbacks::PostCellChange` in place of this (empty) call at
+        // `0x93C507`: row S0722's `SetLastCellChangeTime` keeps the total unpaused time.
+        let now = e.mem.f32(0x011f_1bf0);
+        let last = e.stewie_kept(engine_core::extend::stewie::kept::LAST_CELL_CHANGE_TIME, 4);
+        e.mem.set_f32(last, now);
+    } else {
+        e.call(SOUND_HANDLE_DESTRUCT, &args![audio]);
+    }
     let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
     e.call(0x00ad_8780, &args![audio, 0x1000u32]);
     if reset_weather {

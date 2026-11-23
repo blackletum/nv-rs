@@ -1638,12 +1638,41 @@ pub fn fn_009b12d0(e: &mut Engine, this: Ptr) {
         e.call(0x0066_b0d0, &args![member, 0u32]);
     }
 }
+/// lStewieAl's Tweaks' row S0722 (`NoGibSoundWhenEnteringCells::ShouldPreventSound`): on, and less than
+/// 0.2 seconds of total unpaused time (`011f1bf0`) since the last cell change (the `float`
+/// difference compared as a `double`).
+pub(crate) fn gib_sound_muted(e: &mut Engine) -> bool {
+    use engine_core::extend::stewie;
+    if !e.stewie(stewie::NO_GIB_SOUND_WHEN_ENTERING_CELLS) {
+        return false;
+    }
+    let now = e.mem.f32(0x011f_1bf0);
+    let last_at = e.stewie_kept(stewie::kept::LAST_CELL_CHANGE_TIME, 4);
+    let last = e.mem.f32(last_at);
+    f64::from(now - last) < 0.2
+}
+
+/// S0722's write over [`explosion_start_sounds`]' first byte (`0x9B1090`): `ret` while `off`, `push ebp`
+/// back after. Run-wide, as the code write is.
+pub(crate) fn set_explosion_sounds_off(e: &mut Engine, off: bool) {
+    let at = e.stewie_kept(engine_core::extend::stewie::kept::EXPLOSION_SOUNDS_OFF, 1);
+    e.mem.set_u8(at, u8::from(off));
+}
+
 // Translated from 009b1090 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Explosion::StartSounds` (Xbox PDB): replaces the two sound handles from
 /// their base-form records.
 // open: compiler SEH cleanup after sound-handle construction failure is not modeled.
 // Translation incomplete: 009b1090 - compiler SEH cleanup after sound-handle construction failure
 pub fn explosion_start_sounds(e: &mut Engine, this: Ptr) {
+    // lStewieAl's Tweaks' row S0722 writes `ret` over this function's first byte while a gib's node is
+    // made right after a cell change ([`set_explosion_sounds_off`]).
+    if e.stewie(engine_core::extend::stewie::NO_GIB_SOUND_WHEN_ENTERING_CELLS) {
+        let off = e.stewie_kept(engine_core::extend::stewie::kept::EXPLOSION_SOUNDS_OFF, 1);
+        if e.mem.u8(off) != 0 {
+            return;
+        }
+    }
     explosion_stop_sounds(e, this);
     for (getter, offset) in [(0x004f_d3c0, 0xac), (0x0091_85e0, 0xb8)] {
         let base = e.call(0x0041_81e0, &args![this]).u32();
@@ -4091,6 +4120,29 @@ fn explosion_los_debug(e: &mut Engine, ebp: u32, position: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S0722: with the row and the write over `StartSounds` in place, it returns before anything (here a
+    /// read of the unmapped explosion would stop it); the mute follows 0.2 seconds of unpaused time.
+    #[test]
+    fn s0722_start_sounds_returns_while_written_over() {
+        use engine_core::extend::stewie::{kept, NO_GIB_SOUND_WHEN_ENTERING_CELLS};
+        let mut e = Engine::new();
+        e.set_stewie(NO_GIB_SOUND_WHEN_ENTERING_CELLS, true);
+        set_explosion_sounds_off(&mut e, true);
+        e.call_log = Some(vec![]);
+        explosion_start_sounds(&mut e, Ptr::new(0x1234));
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        e.map(0x011f_1000, 0x1000);
+        let last = e.stewie_kept(kept::LAST_CELL_CHANGE_TIME, 4);
+        e.mem.set_f32(last, 3.0);
+        for (now, muted) in [(3.1f32, true), (3.25, false), (2.0, true)] {
+            e.mem.set_f32(0x011f_1bf0, now);
+            assert_eq!(gib_sound_muted(&mut e), muted, "{now}");
+        }
+        e.set_stewie(NO_GIB_SOUND_WHEN_ENTERING_CELLS, false);
+        e.mem.set_f32(0x011f_1bf0, 3.1);
+        assert!(!gib_sound_muted(&mut e));
+    }
     use std::cell::Cell;
     use std::rc::Rc;
 

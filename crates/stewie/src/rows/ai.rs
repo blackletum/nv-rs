@@ -672,6 +672,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: a hit on a part covered by power armor puts no blood on your screen",
     },
     Row {
+        bit: stewie::NO_GIB_SOUND_WHEN_ENTERING_CELLS,
+        function: "NoGibSoundWhenEnteringCells",
+        plan: "S0722",
+        key: "bNoGibSoundWhenEnteringCells",
+        tweaks: Some(("Tweaks", "bNoGibSoundWhenEnteringCells")),
+        summary: "changes what you hear: no body part explosion sounds as you enter a cell",
+    },
+    Row {
         bit: stewie::HEARTBEAT_SOUNDS_FADE,
         function: "HeartbeatSoundsFade",
         plan: "S0740",

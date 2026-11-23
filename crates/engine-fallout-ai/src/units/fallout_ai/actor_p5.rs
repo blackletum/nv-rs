@@ -3444,7 +3444,16 @@ fn limb_piece(
             }
             e.call(0x004a_d270, &args![cloning]);
         } else {
+            // lStewieAl's Tweaks' row S0722 (`sub_8B3FE0`, the call at `0x8B5A74`): right after a cell
+            // change `Explosion::StartSounds` returns at once while the node is made.
+            let muted = super::explosion::gib_sound_muted(e);
+            if muted {
+                super::explosion::set_explosion_sounds_off(e, true);
+            }
             clone = fn_008b3fe0(e, this, part_index, parent, transform_b, flag_18 != 0);
+            if muted {
+                super::explosion::set_explosion_sounds_off(e, false);
+            }
         }
     }
     if clone == 0 {
@@ -3543,7 +3552,11 @@ fn limb_piece(
                 words.push(target);
                 let created = e.call(0x0068_9210, &words).u32();
                 if e.call(0x0067_33e0, &args![sound]).u32() != 0 {
-                    e.call(0x0068_a8d0, &args![created, sound]);
+                    // S0722 (`PlayGibImpactDataSounds`, the calls at `0x8B5EB6` and `0x8B5FE2`): not
+                    // right after a cell change.
+                    if !super::explosion::gib_sound_muted(e) {
+                        e.call(0x0068_a8d0, &args![created, sound]);
+                    }
                     let block = e.call(0x0040_1000, &args![0x10u32]).u32();
                     let object = if block != 0 {
                         let extra = fn_008b6240(e, Ptr::new(part_data));
@@ -9769,6 +9782,56 @@ mod tests {
         let log = limb_piece_run(&mut w, 0, 0, 0, 0);
         // The parent's transform (46 1130 of the node found by name) is the composing side.
         assert_eq!(args_of(&log, 0x0046_1130)[0], vec![0x9a9a]);
+    }
+
+    /// S0722 (`NoGibSoundWhenEnteringCells`, `0x8B5EB6` / `0x8B5FE2`): less than 0.2 seconds of
+    /// unpaused time after a cell change the two gib impact sounds are not played; at 0.25, or
+    /// without the row, they are. The write over `StartSounds` (`0x8B5A74`) is undone after.
+    #[test]
+    fn s0722_no_gib_sounds_right_after_a_cell_change() {
+        use engine_core::extend::stewie::{kept, NO_GIB_SOUND_WHEN_ENTERING_CELLS};
+        for (on, since, plays) in [
+            (false, 0.1f32, 2usize),
+            (true, 0.1, 0),
+            (true, 0.25, 2),
+            (true, 5.0, 2),
+        ] {
+            let mut w = limb_stage();
+            w.s.e.mem.set_u8(w.part + 0x78, 3);
+            w.s.e.mem.set_u8(w.part + 0xa8, 5);
+            w.s.e.register(0x004f_b070, |_, _| int(0xef));
+            w.s.e.register(0x0040_7840, |_, _| int(0xb1));
+            w.s.e.register(0x0056_7400, |_, _| float(1.5));
+            w.s.e.register(0x0064_47b0, |_, _| float(2.0));
+            let sound = w.s.object(0x40);
+            let vtable = w.s.vtable;
+            w.s.e.mem.set_u32(sound + 0x18, vtable);
+            w.s.answer(sound + 0x18, 0x14, 0x7a7a);
+            w.s.e.register(0x004f_d400, |_, _| int(0x77));
+            w.s.e.register_double(0x0058_e9d0, move |_, _| int(sound));
+            w.s.e.register(0x0048_cee0, |_, _| int(1));
+            w.s.e.register(0x0067_33e0, |_, _| int(1));
+            w.s.e.register(0x0068_9210, |_, _| int(0xc4c4));
+            w.s.e.register(0x0040_1000, |_, _| int(0xb10c));
+            w.s.e.register(0x004a_2c70, |_, _| int(0x0b1e));
+            w.s.e.register(0x004b_45b0, |e, a| {
+                for word in 0..9 {
+                    e.mem.set_u32(a[1] + 4 * word, 0x2000 + word);
+                }
+                int(a[1])
+            });
+            w.s.e.set_stewie(NO_GIB_SOUND_WHEN_ENTERING_CELLS, on);
+            if !w.s.e.mem.is_mapped(0x011f_1000) {
+                w.s.e.map(0x011f_1000, 0x1000);
+            }
+            let last = w.s.e.stewie_kept(kept::LAST_CELL_CHANGE_TIME, 4);
+            w.s.e.mem.set_f32(last, 10.0);
+            w.s.e.mem.set_f32(0x011f_1bf0, 10.0 + since);
+            let log = limb_piece_run(&mut w, 0, 1, 1, 0);
+            assert_eq!(args_of(&log, 0x0068_a8d0).len(), plays, "{on} {since}");
+            let off = w.s.e.stewie_kept(kept::EXPLOSION_SOUNDS_OFF, 1);
+            assert_eq!(w.s.e.mem.u8(off), 0);
+        }
     }
 
     #[test]

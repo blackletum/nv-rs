@@ -301,3 +301,6 @@ pub const ARMOR_BLOCKING_PREVENTS_BLOOD: Row = Row::share(AI_FIXES, AI_FIXES_END
 /// S0185 `InvalidRewardXPSafeGuard` (`0094fd10` (`0x94FD24`)): an unusually large XP award asks
 /// first.
 pub const INVALID_REWARD_XP_SAFEGUARD: Row = Row::share(AI_FIXES, AI_FIXES_END, 89);
+/// S0722 `NoGibSoundWhenEnteringCells` (`008b52a0` (`0x8B5A74`, `0x8B5EB6`, `0x8B5FE2`),
+/// `PositionPlayer` `0093c200` (`0x93C507`)): no gib sounds right after entering a cell.
+pub const NO_GIB_SOUND_WHEN_ENTERING_CELLS: Row = Row::share(AI_FIXES, AI_FIXES_END, 90);

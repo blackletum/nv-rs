@@ -343,8 +343,13 @@ pub mod kept {
     pub const XP_REJECT_ALL: usize = 18;
     /// S0185's `static bool bCallbackRegistered` (1 byte): its player update callback is in the list.
     pub const XP_CALLBACK_REGISTERED: usize = 19;
+    /// S0722's `float lastCellChangeTime` (4 bytes): the total unpaused time of the last cell change.
+    pub const LAST_CELL_CHANGE_TIME: usize = 20;
+    /// S0722's write of `ret` over `Explosion::StartSounds` (`0x9B1090`) while a gib's node is made (1
+    /// byte, 1 while it is there): run-wide, as the code write is.
+    pub const EXPLOSION_SOUNDS_OFF: usize = 21;
     /// How many.
-    pub const COUNT: usize = 20;
+    pub const COUNT: usize = 22;
 }
 
 /// Tweaks' numeric settings a row reads inside its seam ([`Engine::stewie_value`]).

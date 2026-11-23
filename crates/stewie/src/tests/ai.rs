@@ -116,6 +116,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0664", "bFixKillChallengeSourceWeapon"),
         ("S0694", "bImprovedWeather"),
         ("S0702", "bPowerArmorPreventsScreenBlood"),
+        ("S0722", "bNoGibSoundWhenEnteringCells"),
         ("S0740", "bHeatbeatSoundsFade"),
         ("S0755", "bMeleeImpactEffectsFollowTarget"),
         ("S0782", "bHiddenFragsFix"),
@@ -468,6 +469,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0702",
         "bPowerArmorPreventsScreenBloodEffect",
         Row::at(AI_FIXES, 82),
+    ),
+    (
+        "S0722",
+        "bNoGibSoundWhenEnteringCells",
+        Row::at(AI_FIXES, 90),
     ),
     ("S0740", "bHeartbeatSoundsFade", Row::at(AI_FIXES, 87)),
     (
