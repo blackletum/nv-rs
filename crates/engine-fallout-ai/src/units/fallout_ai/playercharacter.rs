@@ -20748,8 +20748,8 @@ mod tests {
             e.set_stewie(engine_core::extend::stewie::AUTOMATIC_FIRING_CLEARS, on);
             let this = attack_world(&mut e, 0x0265_0000, &[(0x6e0, 0)]);
             e.set_global(0x011d_ea3c, this.addr());
-            e.register(0x0043_01b0, move |_, _| int(group));
-            e.register(0x005f_2540, move |_, _| int(attack));
+            e.register_double(0x0043_01b0, move |_, _| int(group));
+            e.register_double(0x005f_2540, move |_, _| int(attack));
             e.register(0x005f_25d0, |_, _| int(0));
             e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(
@@ -20885,7 +20885,7 @@ mod tests {
         ] {
             let mut e = engine();
             e.set_stewie(engine_core::extend::stewie::WORKBENCH_NO_ACTIVATE_SOUND, on);
-            e.register(0x0057_3170, move |_, _| int(u32::from(accepted)));
+            e.register_double(0x0057_3170, move |_, _| int(u32::from(accepted)));
             let this = player(&mut e);
             let base = e.mem.alloc(0x40);
             e.mem.set_u32(base + 0xc, id);
@@ -21149,7 +21149,7 @@ mod tests {
             let this = player(&mut e);
             let actor = e.mem.alloc(0x200);
             e.mem.set_u8(actor + 0x18d, u8::from(teammate));
-            e.register(0x0096_7a00, move |_, _| int(actor));
+            e.register_double(0x0096_7a00, move |_, _| int(actor));
             let expected = if none { 0 } else { actor };
             assert_eq!(
                 bumped_actor(&mut e, this),
@@ -21199,7 +21199,7 @@ mod tests {
             e.register_double(target, |_, _| float(100.0));
             e.mem.set_u32(table + 0xc, target);
             e.mem.set_u32(this.addr() + 0xa4, table);
-            e.register(0x00a2_4660, move |_, a| {
+            e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(
                     held && a[0] == 0x4400 && a[1] == 0xc && a[2] == 0,
                 ))
@@ -21254,7 +21254,7 @@ mod tests {
             e.mem.set_u32(this.addr(), table);
             e.register(0x0052_5430, |e, a| int(u32::from(e.mem.u32(a[0] + 8) != 0)));
             e.register(0x0066_dca0, |_, _| float(30.0));
-            e.register(0x0066_ef50, move |_, _| float(points as f64));
+            e.register_double(0x0066_ef50, move |_, _| float(points as f64));
             fn_0093ab30(&mut e, this, 9);
             let calls = called(&e, target);
             match spent {
@@ -21354,7 +21354,7 @@ mod tests {
             (true, false, true, true, false),
         ] {
             let mut e = engine();
-            e.register(0x00a2_4660, move |_, a| {
+            e.register_double(0x00a2_4660, move |_, a| {
                 int(u32::from(match (a[1], a[2]) {
                     (2, 1) => pressed,
                     (2, 0) => held,
@@ -21485,7 +21485,7 @@ mod tests {
         ] {
             let mut e = engine();
             e.set_stewie(engine_core::extend::stewie::HOLSTER_WHILE_ANIMS_PLAY, on);
-            e.register(0x008a_7570, move |_, _| int(action));
+            e.register_double(0x008a_7570, move |_, _| int(action));
             let this = player(&mut e);
             assert_eq!(
                 holster_action_allows(&mut e, this),
