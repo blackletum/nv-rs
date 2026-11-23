@@ -568,6 +568,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you hear: a weapon with a looping attack sound (a minigun, a Gatling laser) plays it again when you fire after a short stop",
     },
     Row {
+        bit: stewie::HOLSTER_WHILE_ANIMS_PLAY,
+        function: "patchHolsterWeaponWhileAnimsPlay",
+        plan: "S0553",
+        key: "bHolsterWeaponWhileAnimsPlay",
+        tweaks: Some(("Tweaks", "bQueueWeaponHolsteringWhileAnimsPlay")),
+        summary: "changes play: holding the ready-weapon control holsters your weapon even while another animation plays",
+    },
+    Row {
         bit: stewie::DELAY_REPUTATION_AFTER_COMBAT,
         function: "patchDelayReputationMessageBoxAfterCombat",
         plan: "S0555",

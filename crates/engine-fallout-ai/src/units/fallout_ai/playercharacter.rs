@@ -4541,8 +4541,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 // at `0x940B64`): the time added is divided by the timescale (`011ac3a0`).
                 let step = timescale_free(e, delta);
                 e.set_global(HELD_TIMER_011E07E0, (held as f64 + step) as f32);
-                if e.call(0x0088_43a0, &args![this]).bool()
-                    && e.call(0x008a_7570, &args![this]).u32() == u32::MAX
+                if e.call(0x0088_43a0, &args![this]).bool() && holster_action_allows(e, this) {
                 {
                     let mut handled = false;
                     if e.global::<u8>(HELD_FLAG_011E0BC1) == 0 {
@@ -9746,6 +9745,19 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The held ready-weapon control's animation test in `PlayerCharacter::Update` (`0x940B8E`: the
+/// animation action, `008a7570`, is none, -1). lStewieAl's Tweaks' row S0553
+/// (`patchHolsterWeaponWhileAnimsPlay`, the bytes at `0x940B90`): any action but a forced scripted
+/// animation (0xE), so holstering is taken while other animations play.
+fn holster_action_allows(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    let action = e.call(0x008a_7570, &args![this]).u32();
+    if e.stewie(engine_core::extend::stewie::HOLSTER_WHILE_ANIMS_PLAY) {
+        action != 0xe
+    } else {
+        action == u32::MAX
+    }
+}
 
 /// The VATS camera's first test of the current action (`009445b0`, `0x944601`, `009c71c0` on the
 /// VATS object). lStewieAl's Tweaks' row S0809 (`VATSStopFollowingDeadTargets`, its
@@ -21415,6 +21427,25 @@ mod tests {
             let out = e.mem.alloc(4);
             assert_eq!(reputation_combat_test(&mut e, this, out), on, "on {on}");
             assert_eq!(called(&e, 0x0095_3c50).len(), usize::from(!on));
+        }
+    }
+
+    /// S0553 (`patchHolsterWeaponWhileAnimsPlay`, `0x940B90`): off, the held ready-weapon control
+    /// acts only with no animation action (-1); with the row with any action but 0xE.
+    #[test]
+    fn s0553_holstering_waits_only_for_a_scripted_animation() {
+        for (on, action, allows) in [
+            (false, u32::MAX, true),
+            (false, 3u32, false),
+            (true, 3, true),
+            (true, u32::MAX, true),
+            (true, 0xe, false),
+        ] {
+            let mut e = engine();
+            e.set_stewie(engine_core::extend::stewie::HOLSTER_WHILE_ANIMS_PLAY, on);
+            e.register(0x008a_7570, move |_, _| int(action));
+            let this = player(&mut e);
+            assert_eq!(holster_action_allows(&mut e, this), allows, "on {on} {action:#x}");
         }
     }
 

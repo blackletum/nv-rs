@@ -264,3 +264,6 @@ pub const VATS_STOP_FOLLOWING_DEAD: Row = Row::share(AI_FIXES, AI_FIXES_END, 76)
 /// (`0x943A05`); `00615c90` (`0x615F32`), `00615fa0` (`0x61622A`)): the reputation popup waits
 /// until 3 seconds after combat ends.
 pub const DELAY_REPUTATION_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 77);
+/// S0553 `patchHolsterWeaponWhileAnimsPlay` (`PlayerCharacter::Update` `0093e860` (`0x940B90`)):
+/// holding the ready-weapon control holsters while animations play.
+pub const HOLSTER_WHILE_ANIMS_PLAY: Row = Row::share(AI_FIXES, AI_FIXES_END, 78);

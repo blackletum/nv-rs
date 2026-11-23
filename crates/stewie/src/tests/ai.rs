@@ -84,10 +84,9 @@ fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
     assert!(!rows::on(row, &keys, &off));
 }
 
-/// S0329, S0404, S0410, S0489, S0555, S0584, S0660, S0664, S0782 and S0809 follow Tweaks' own
-/// `[Tweaks]` keys (code default 0, VNV's 1): on with no file (the port's defaults are VNV's), off
-/// when the player's Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks`
-/// (Tweaks' code default), and off by their own keys.
+/// These rows follow Tweaks' own `[Tweaks]` keys (code default 0, VNV's 1): on with no file (the
+/// port's defaults are VNV's), off when the player's Tweaks INI sets the key to 0, off with no file
+/// under `bMissingKeysAsTweaks` (Tweaks' code default), and off by their own keys.
 #[test]
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
@@ -95,6 +94,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0404", "bDelayPostCombatLevelUp"),
         ("S0410", "bGodmodePreventsLegCrippleSound"),
         ("S0489", "bSpinWeaponsSoundFix"),
+        ("S0553", "bQueueWeaponHolsteringWhileAnimsPlay"),
         ("S0555", "bDelayPostCombatReputationPopup"),
         ("S0584", "bPipboyLightAndHolsteringIgnoreTimescale"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
@@ -407,6 +407,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0489",
         "bSpinWeaponsAlwaysPlaySound",
         Row::at(AI_FIXES, 57),
+    ),
+    (
+        "S0553",
+        "bHolsterWeaponWhileAnimsPlay",
+        Row::at(AI_FIXES, 78),
     ),
     (
         "S0555",
