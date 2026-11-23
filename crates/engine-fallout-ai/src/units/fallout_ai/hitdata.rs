@@ -398,11 +398,17 @@ pub fn hit_data_initialize_explosion_data(
 /// The minimum damage store in [`hit_data_reduce_damage`] (`0x9B6335`). JIP LN NVSE's G77 (JIP's own:
 /// in whenever JIP is installed) does the same compare and store in SSE and marks the hit
 /// armour-penetrated (`uiFlags` bit 31): the seam is asked with the hit where the store happens.
-/// With the word's `INSTALLED` bit clear: one load, nothing asked.
+/// With the word's `INSTALLED` bit clear: nothing asked; lStewieAl's Tweaks' row S0940 then sets the mark
+/// itself.
 #[inline]
 fn armor_penetrated_seam(e: &mut Engine, this: Ptr<HitData>) {
     if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
         e.site(0x009b_6335, &[this.addr()]);
+    } else if e.stewie(engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD) {
+        // lStewieAl's Tweaks' row S0940 writes JIP's same bytes when JIP is not loaded (its
+        // `isJipLoaded`; here: JIP's word without `INSTALLED`): the mark is set.
+        let flags = e.get(this, HitData::uiFlags);
+        e.set(this, HitData::uiFlags, flags | 0x8000_0000);
     }
 }
 

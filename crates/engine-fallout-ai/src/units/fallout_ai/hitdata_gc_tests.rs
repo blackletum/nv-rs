@@ -37,6 +37,34 @@ fn g77_seam_asks_whenever_jip_is_installed() {
     }
 }
 
+/// S0940 (`ArmorBlockingPreventsBlood`): Tweaks writes JIP's bytes itself when JIP is not loaded, so
+/// with the row and no `INSTALLED` the store marks the hit (bit 31) and the seam is not asked;
+/// with JIP installed the seam alone, as before.
+#[test]
+fn s0940_marks_the_hit_without_jip() {
+    let mut e = world();
+    e.set_stewie(
+        engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD,
+        true,
+    );
+    e.mem.set_u32(HIT.addr() + 0x58, 4);
+    armor_penetrated_seam(&mut e, HIT);
+    assert_eq!(e.mem.u32(HIT.addr() + 0x58), 0x8000_0004);
+    assert_eq!(e.mem.u32(BASE), 0);
+    let mut e = world();
+    e.set_stewie(
+        engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD,
+        true,
+    );
+    e.set_jip_patches(jip_patches::INSTALLED);
+    armor_penetrated_seam(&mut e, HIT);
+    assert_eq!(e.mem.u32(HIT.addr() + 0x58), 0);
+    assert_eq!(e.mem.u32(BASE), HIT.addr());
+    let mut e = world();
+    armor_penetrated_seam(&mut e, HIT);
+    assert_eq!(e.mem.u32(HIT.addr() + 0x58), 0);
+}
+
 /// Where G77's call-site handler counts its asks, the hit, the player and the setting cell.
 const ASKS: u32 = BASE + 4;
 const HIT2: Ptr<HitData> = Ptr::new(BASE + 0x200);

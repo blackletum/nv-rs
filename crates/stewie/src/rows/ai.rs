@@ -711,4 +711,12 @@ pub const ROWS: &[Row] = &[
         tweaks: Some(("INI", "bCombatDialogueCooldownFix")),
         summary: "changes what you hear: the wait between combat lines and pain sounds starts only when a line was said, so a hit that said nothing no longer silences the next one",
     },
+    Row {
+        bit: stewie::ARMOR_BLOCKING_PREVENTS_BLOOD,
+        function: "ArmorBlockingPreventsBlood",
+        plan: "S0940",
+        key: "bArmorBlockingPreventsBlood",
+        tweaks: Some(("Tweaks", "bArmorPreventsBloodDecals")),
+        summary: "changes what you see: as with Tweaks and JIP, organic blood shows only on hits whose damage was raised to the minimum",
+    },
 ];

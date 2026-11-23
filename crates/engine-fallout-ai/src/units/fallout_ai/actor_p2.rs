@@ -8152,6 +8152,23 @@ fn hit_blood_impact(e: &mut Engine, hit: u32, material: u32) -> Option<u32> {
     None
 }
 
+/// The organic impact material (Tweaks' `kMaterialType_Organic`).
+const ORGANIC_MATERIAL: u32 = 6;
+
+/// JIP LN NVSE's armour-penetrated mark on a hit (`uiFlags` bit 31, `kFlag_ArmorPenetrated`): set by
+/// the minimum damage store in `HitData::ReduceDamage` (`0x9B6335`) when the damage is raised to the
+/// minimum (JIP's patch, or lStewieAl's Tweaks' copy of it without JIP: S0940).
+fn armor_penetrated(e: &Engine, hit: u32) -> bool {
+    (e.mem.u32(hit + 0x58) as i32) < 0
+}
+
+/// lStewieAl's Tweaks' row S0940 (`ArmorBlockingPreventsBlood`): on, and the hit lacks JIP's mark
+/// ([`armor_penetrated`]): no blood.
+fn armor_stops_blood(e: &Engine, hit: u32) -> bool {
+    e.stewie(engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD)
+        && !armor_penetrated(e, hit)
+}
+
 /// The node the blood spurt follows for a hit without a projectile or explosion (`hit + 8` 0).
 /// lStewieAl's Tweaks' row S0755 (`MeleeHitBloodFollowsLimbNodes`, its `GetNodeToFollow`, the jump at
 /// `0x88F150`): the hit's target (`+4`), its process (`+0x68`) and, unless the hit location (`+0x10`) is
@@ -8302,8 +8319,17 @@ fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage:
             0
         };
     }
+    // lStewieAl's Tweaks' row S0940 (`ArmorBlockingPreventsBlood`, its `OnShouldCreateActorBloodHook`, the
+    // call at `0x88EDC2`): with a 3D root, the organic material and a hit without JIP's mark, the
+    // impact data set is cleared (no blood spurt below) and no decal is made.
+    let armor_stopped_blood =
+        root != 0 && material == ORGANIC_MATERIAL && armor_stops_blood(e, hit);
+    if armor_stopped_blood {
+        entry = 0;
+    }
     let mut decal_made = false;
     if root != 0
+        && !armor_stopped_blood
         && hit_sound != 0
         && !((hit_kind == 1 || hit_kind == 2)
             && e.vcall(this.addr(), VSLOT_TEST_0X218, &args![]).bool())
@@ -8522,7 +8548,14 @@ fn second_hit_decal(
     if material_flag || entry == 0 {
         return;
     }
-    let distance = e.call(HIT_SECOND_DISTANCE, &args![]).f64();
+    // S0940 (`OnShouldCreateActorEnvironmentBloodHook`, the call at `0x88F37D`): for a hit without
+    // JIP's mark the draw is not made and the stored value is the x87 indefinite NaN (Tweaks returns
+    // with nothing on the x87 stack), so no second decal follows.
+    let distance = if armor_stops_blood(e, hit) {
+        f64::from_bits(0xfff8_0000_0000_0000)
+    } else {
+        e.call(HIT_SECOND_DISTANCE, &args![]).f64()
+    };
     let limit_address = e
         .call(SETTING_VALUE_ADDRESS, &args![HIT_SECOND_RANGE_OBJECT])
         .u32();
@@ -8829,10 +8862,18 @@ fn weapon_hit_effects(
     } else {
         0
     };
-    let entry = if source != 0 {
-        e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
-    } else {
+    // S0940 (`OnGetWeaponBloodImpactDataset`, the call at `0x88FD54`): the organic material on a hit
+    // without JIP's mark finds no data (no blood on the weapon). Tweaks reads the hit without a test;
+    // none counts as unmarked.
+    let entry = if source == 0 {
         0
+    } else if material == ORGANIC_MATERIAL
+        && e.stewie(engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD)
+        && (hit == 0 || !armor_penetrated(e, hit))
+    {
+        0
+    } else {
+        e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
     };
     let hit_sound = if entry != 0 {
         e.call(SOUND_SET_ENTRY_SOUND, &args![entry]).u32()
@@ -16662,6 +16703,63 @@ mod tests {
 
     fn weapon_hit(e: &mut Engine, actor: Ptr<Actor>, damage: f32, hit: u32, attacker: u32) {
         fn_0088fb00(e, actor, damage, Ptr::new(hit), Ptr::new(attacker));
+    }
+
+    /// S0940 (`ArmorBlockingPreventsBlood`): on a hit without JIP's armour mark (`uiFlags` bit 31)
+    /// the organic material (6) makes no blood decal on the actor (`0x88EDC2`), no hit makes the
+    /// second decal (`0x88F37D`: its distance is not drawn) and the weapon's blood finds no data
+    /// for the organic material (`0x88FD54`); a marked hit, another material or no row: as before.
+    #[test]
+    fn s0940_blood_follows_jips_armour_mark() {
+        use engine_core::extend::stewie::ARMOR_BLOCKING_PREVENTS_BLOOD;
+        let decals = |on: bool, material: u32, marked: bool| {
+            let mut e = engine3();
+            let (actor, hit) = second_decal_world(&mut e);
+            e.set_stewie(ARMOR_BLOCKING_PREVENTS_BLOOD, on);
+            slot_at(
+                &mut e,
+                FORM_TABLE,
+                BASE_FORM_PART_VSLOT_MATERIAL,
+                eax(material),
+            );
+            if marked {
+                e.mem.set_u32(hit + 0x58, 0x8000_0000);
+            }
+            let seen = snapshot_hits(&mut e);
+            slot(&mut e, OTHER_TABLE, OWNER_VSLOT_0X08, eax(0));
+            e.call_log = Some(vec![]);
+            fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+            let first = seen.borrow().iter().filter(|entry| entry.0[2] == 2).count();
+            let drawn = logged_addresses(&e).contains(&HIT_SECOND_DISTANCE);
+            (first, second_only(&seen).len(), drawn)
+        };
+        let (first, second, drawn) = decals(false, 6, false);
+        assert!(first >= 1 && second == 1 && drawn);
+        assert_eq!(decals(true, 6, false), (0, 0, false));
+        assert_eq!(decals(true, 6, true), (first, second, true));
+        assert_eq!(decals(true, 7, false), (first, 0, false));
+        for (on, material, marked, placed) in [
+            (false, 6u32, false, 2usize),
+            (true, 6, false, 0),
+            (true, 6, true, 2),
+            (true, 7, false, 2),
+        ] {
+            let mut e = engine3();
+            let (actor, hit, attacker, _) = weapon_hit_world(&mut e);
+            e.set_stewie(ARMOR_BLOCKING_PREVENTS_BLOOD, on);
+            slot_at(
+                &mut e,
+                FORM_TABLE,
+                BASE_FORM_PART_VSLOT_MATERIAL,
+                eax(material),
+            );
+            if marked {
+                e.mem.set_u32(hit + 0x58, 0x8000_0000);
+            }
+            let seen = snapshot_hits(&mut e);
+            weapon_hit(&mut e, actor, 60.0, hit, attacker);
+            assert_eq!(seen.borrow().len(), placed, "{on} {material} {marked}");
+        }
     }
 
     #[test]

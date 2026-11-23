@@ -120,6 +120,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0755", "bMeleeImpactEffectsFollowTarget"),
         ("S0782", "bHiddenFragsFix"),
         ("S0809", "bVATSStopFollowingDeadTargets"),
+        ("S0940", "bArmorPreventsBloodDecals"),
     ] {
         let row = rows::all().find(|r| r.plan == plan).unwrap();
         assert_eq!(row.tweaks, Some(("Tweaks", key)), "{plan}");
@@ -485,4 +486,9 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ),
     ("S0903", "bHideHudInKillcams", Row::at(AI_FIXES, 86)),
     ("S0926", "bCombatSoundCooldownFix", Row::at(AI_FIXES, 58)),
+    (
+        "S0940",
+        "bArmorBlockingPreventsBlood",
+        Row::at(AI_FIXES, 88),
+    ),
 ];
