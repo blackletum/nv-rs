@@ -356,6 +356,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bInventoryCalcWeaponDamageUseAmmoFixProjectile",
         Row::at(AI_FIXES, 24),
     ),
+    ("S0185", "bInvalidRewardXPSafeGuard", Row::at(AI_FIXES, 89)),
     (
         "S0192",
         "bStoreWeaponModFlagsOnProjectiles",

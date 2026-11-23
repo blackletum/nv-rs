@@ -177,6 +177,104 @@ fn the_install_sets_the_fast_travel_weather_distance() {
     assert_eq!(e.stewie_value(which), 0.1f32.to_bits());
 }
 
+/// Maps the page at `page` unless it is mapped.
+fn map_page(e: &mut Engine, page: u32) {
+    if !e.mem.is_mapped(page) {
+        e.map(page, 0x1000);
+    }
+}
+
+/// S0185's three parts as the game reaches them (the award's seam, the player update's seam and the
+/// message box's callback): a small award goes through; one of 20000 waits, a second one while it
+/// waits is dropped with a console line, the next update shows the box once, "Yes" awards it (given
+/// the word at the player's `+0x878`); after "No" every large award is dropped; the record's
+/// `+8` byte (Tweaks' `bInSetLevelCommand`) lets a large one through.
+#[test]
+fn the_xp_safeguard_asks_before_a_large_award() {
+    use std::{cell::RefCell, rc::Rc};
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(e.stewie_value(bits::value::XP_SAFEGUARD_THRESHOLD), 20000);
+    map_page(&mut e, 0x011d_8000);
+    map_page(&mut e, 0x011d_e000);
+    let interface = e.mem.alloc(0x100);
+    e.mem.set_u32(0x011d_8a80, interface);
+    let player = e.mem.alloc(0x1000);
+    e.mem.set_u32(player + 0x878, 0x55);
+    e.mem.set_u32(0x011d_ea3c, player);
+    let levelup = e.mem.alloc(0x10);
+    let awards: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+    let seen = awards.clone();
+    e.register_double(0x008d_5100, move |_, a| {
+        seen.borrow_mut().push(a[..2].to_vec());
+        Ret::default()
+    });
+    let boxes: Rc<RefCell<Vec<(Vec<u8>, Vec<u32>)>>> = Rc::default();
+    let seen = boxes.clone();
+    e.register_double(0x0070_3e80, move |e, a| {
+        seen.borrow_mut()
+            .push((e.mem.cstr(a[0]), a[1..11].to_vec()));
+        Ret::default()
+    });
+    let lines: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let seen = lines.clone();
+    e.register(0x0071_b160, |_, _| ret(0x4000));
+    e.register_double(0x0071_d0a0, move |e, a| {
+        seen.borrow_mut().push(e.mem.u32(a[2]));
+        Ret::default()
+    });
+    let award = |e: &mut Engine, amount: u32| e.site(0x0094_fd24, &[levelup, amount]);
+    assert_eq!(award(&mut e, 100), Some(0));
+    assert_eq!(*awards.borrow(), vec![vec![levelup, 100]]);
+    assert_eq!(award(&mut e, 20000), Some(0));
+    assert_eq!(award(&mut e, 30000), Some(0));
+    assert_eq!(awards.borrow().len(), 1);
+    assert_eq!(*lines.borrow(), vec![30000]);
+    assert_eq!(e.site(0x0094_0c78, &[]), None);
+    assert_eq!(e.site(0x0094_0c78, &[]), None);
+    assert_eq!(boxes.borrow().len(), 1);
+    let (text, words) = boxes.borrow()[0].clone();
+    assert_eq!(
+        text,
+        b"The game is attempting to award you an unusually large amount of XP (20000). This is likely due to a bug in some mod's scripts.\nWould you like to accept the XP anyway?".to_vec()
+    );
+    assert_eq!(
+        (words[0], e.mem.cstr(words[1]), words[2], words[4]),
+        (
+            0,
+            b"Stewie Tweaks XP Safeguard".to_vec(),
+            xp_safeguard::WARNING_CALLBACK,
+            0x17
+        )
+    );
+    assert_eq!(
+        (e.mem.cstr(words[7]), e.mem.cstr(words[8]), words[9]),
+        (b"Yes".to_vec(), b"No".to_vec(), 0)
+    );
+    // "Yes".
+    e.mem.set_u8(interface + 0xe4, 0);
+    e.call(xp_safeguard::WARNING_CALLBACK, &[]);
+    assert_eq!(e.mem.u8(interface + 0xe4), 0xff);
+    assert_eq!(awards.borrow()[1], vec![0x55, 20000]);
+    // Waiting again; "No": this one and every later large award dropped.
+    assert_eq!(award(&mut e, 25000), Some(0));
+    assert_eq!(e.site(0x0094_0c78, &[]), None);
+    e.mem.set_u8(interface + 0xe4, 1);
+    e.call(xp_safeguard::WARNING_CALLBACK, &[]);
+    assert_eq!(award(&mut e, 40000), Some(0));
+    assert_eq!(e.site(0x0094_0c78, &[]), None);
+    assert_eq!(awards.borrow().len(), 2);
+    assert_eq!(boxes.borrow().len(), 2);
+    assert_eq!(award(&mut e, 5), Some(0));
+    e.mem.set_u8(levelup + 8, 1);
+    assert_eq!(award(&mut e, 50000), Some(0));
+    assert_eq!(
+        awards.borrow()[2..],
+        [vec![levelup, 5], vec![levelup, 50000]]
+    );
+}
+
 /// S0740's settings reach the engine (30 seconds and OutQuart without a file), and Tweaks'
 /// listener starts the heartbeat's fade again on a loaded game and a new game, not before a load.
 #[test]

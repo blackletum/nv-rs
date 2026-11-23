@@ -335,8 +335,16 @@ pub mod kept {
     pub const HEARTBEAT_VOLUME: usize = 14;
     /// S0740's `float startTime` (4 bytes): the total unpaused time the heartbeat's fade started at.
     pub const HEARTBEAT_START_TIME: usize = 15;
+    /// S0185's `static int iAttemptedRewardAmount` (4 bytes): the large award waiting for an answer.
+    pub const XP_ATTEMPTED_REWARD: usize = 16;
+    /// S0185's `static bool bNeedsShowMessage` (1 byte).
+    pub const XP_NEEDS_MESSAGE: usize = 17;
+    /// S0185's `static bool bRejectAll` (1 byte): "No" was answered once; large awards are dropped.
+    pub const XP_REJECT_ALL: usize = 18;
+    /// S0185's `static bool bCallbackRegistered` (1 byte): its player update callback is in the list.
+    pub const XP_CALLBACK_REGISTERED: usize = 19;
     /// How many.
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 20;
 }
 
 /// Tweaks' numeric settings a row reads inside its seam ([`Engine::stewie_value`]).
@@ -360,8 +368,14 @@ pub mod value {
     pub const HEARTBEAT_DURATION: usize = 7;
     /// S0740's `[Heartbeat Sounds Fade] iEasingFunction` (code default 5, `kOutQuart`).
     pub const HEARTBEAT_EASING: usize = 8;
+    /// S0185's `[Fixes] iInvalidRewardXPSafeGuardThreshold` (code default 20000; 0: the row has no hook).
+    pub const XP_SAFEGUARD_THRESHOLD: usize = 9;
+    /// S0185's message reads `[Tweaks] bReduceXP` (code default 0) ...
+    pub const REDUCE_XP: usize = 10;
+    /// ... and `[Reduced XP] fXPMultiplier` (code default 0.5, at least 0; the `float`'s bits).
+    pub const XP_MULTIPLIER: usize = 11;
     /// How many.
-    pub const COUNT: usize = 9;
+    pub const COUNT: usize = 12;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

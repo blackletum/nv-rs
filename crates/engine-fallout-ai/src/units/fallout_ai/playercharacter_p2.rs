@@ -2440,10 +2440,21 @@ pub fn fn_0094fce0(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, secon
 // Translated from 0094fd10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards to `CharacterProgression::RewardExperience` (Xbox PDB name of
 /// `008d5100`) on the `CharacterProgression` at `+0x878`.
+///
+/// lStewieAl's Tweaks' row S0185 (`InvalidRewardXPSafeGuard`, its `OnRewardXP` called at `0x94FD24`) with
+/// `[Fixes] iInvalidRewardXPSafeGuardThreshold` not 0: the seam (in `crates/stewie`) takes the call.
 pub fn fn_0094fd10(e: &mut Engine, this: Ptr<PlayerCharacter>, amount: u32) {
+    use engine_core::extend::stewie;
+    let progression = this.addr().wrapping_add(CHARACTER_PROGRESSION);
+    if e.stewie(stewie::INVALID_REWARD_XP_SAFEGUARD)
+        && e.stewie_value(stewie::value::XP_SAFEGUARD_THRESHOLD) != 0
+        && e.site(0x0094_fd24, &[progression, amount]).is_some()
+    {
+        return;
+    }
     e.call(
         CHARACTER_PROGRESSION_REWARD_EXPERIENCE,
-        &args![this.addr().wrapping_add(CHARACTER_PROGRESSION), amount],
+        &args![progression, amount],
     );
 }
 
@@ -9420,6 +9431,43 @@ mod tests {
             calls_to(&e, CHARACTER_PROGRESSION_REWARD_EXPERIENCE),
             vec![vec![player.addr() + 0x878, 9]]
         );
+    }
+
+    fn s0185_takes_the_award(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        e.mem.set_u32(a[0] + 0x10, a[1]);
+        Some(0)
+    }
+
+    /// S0185 (`InvalidRewardXPSafeGuard`, `0x94FD24`): with the row and a threshold, Tweaks' seam
+    /// takes the award (here it keeps the amount at the record's `+0x10`) and the game's call is
+    /// not made; with the threshold 0, without the row or without a handler, the call is made.
+    #[test]
+    fn s0185_the_xp_award_goes_through_tweaks_seam() {
+        use engine_core::extend::stewie;
+        for (on, threshold, handler, called) in [
+            (true, 20000u32, true, false),
+            (true, 0, true, true),
+            (false, 20000, true, true),
+            (true, 20000, false, true),
+        ] {
+            let mut e = engine();
+            let player = new_player(&mut e);
+            e.set_stewie(stewie::INVALID_REWARD_XP_SAFEGUARD, on);
+            e.set_stewie_value(stewie::value::XP_SAFEGUARD_THRESHOLD, threshold);
+            if handler {
+                e.on_site_for_test(0x0094_fd24, s0185_takes_the_award);
+            }
+            start_log(&mut e);
+            fn_0094fd10(&mut e, player, 30000);
+            let calls = calls_to(&e, CHARACTER_PROGRESSION_REWARD_EXPERIENCE);
+            assert_eq!(
+                calls.len(),
+                usize::from(called),
+                "{on} {threshold} {handler}"
+            );
+            let kept = e.mem.u32(player.addr() + 0x878 + 0x10);
+            assert_eq!(kept, if called { 0 } else { 30000 });
+        }
     }
 
     #[test]

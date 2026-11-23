@@ -30,6 +30,7 @@ pub mod cosave;
 pub mod ini;
 pub mod rows;
 pub mod settings;
+pub mod xp_safeguard;
 
 // The unit tests' own program: no other crate's functions are linked in.
 #[cfg(test)]
@@ -252,6 +253,22 @@ pub fn install(e: &mut Engine) {
         engine_core::extend::stewie::value::HEARTBEAT_EASING,
         settings.long(section, "iEasingFunction", 5) as u32,
     );
+    // Read by row S0185 (Tweaks' `g_iInvalidRewardXPSafeGuard`, code default 20000, its message's
+    // `g_bReduceXP`, code default 0, and `g_fXPMultiplier`, code default 0.5, then `max(0, ..)`).
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::XP_SAFEGUARD_THRESHOLD,
+        settings.long("Fixes", "iInvalidRewardXPSafeGuardThreshold", 20000) as u32,
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::REDUCE_XP,
+        settings.long("Tweaks", "bReduceXP", 0) as u32,
+    );
+    let multiplier = settings.double("Reduced XP", "fXPMultiplier", 0.5) as f32;
+    let multiplier = if 0.0 > multiplier { 0.0 } else { multiplier };
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::XP_MULTIPLIER,
+        multiplier.to_bits(),
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).
@@ -261,6 +278,7 @@ pub fn install(e: &mut Engine) {
         settings.long("Tweaks", "bRunAndGunAPInCombatOnly", 0) != 0,
     );
     rows::world::install(e);
+    xp_safeguard::install(e);
     rows::forms::write_data(e);
     let log = start_lines(ini.is_some(), &settings, &keys, on.len());
     for line in &log {

@@ -1483,11 +1483,13 @@ fn heartbeat_reset_volume(e: &mut Engine) {
 /// the fade starts again. Tweaks reads the player without a test; none skips it.
 fn stewie_player_update_callbacks(e: &mut Engine) {
     use engine_core::extend::stewie::{self, kept, value};
-    if e.stewie(stewie::HEARTBEAT_SOUNDS_FADE) {
-        let player = e.global::<u32>(PLAYER_SINGLETON);
-        if player == 0 {
-            return;
-        }
+    let heartbeat_player = if e.stewie(stewie::HEARTBEAT_SOUNDS_FADE) {
+        e.global::<u32>(PLAYER_SINGLETON)
+    } else {
+        0
+    };
+    if heartbeat_player != 0 {
+        let player = heartbeat_player;
         let now = e.mem.f32(0x011f_1bf0);
         let sound = player + 0x77c;
         if e.mem.u32(sound) != 0xffff_ffff {
@@ -1505,6 +1507,11 @@ fn stewie_player_update_callbacks(e: &mut Engine) {
         } else {
             heartbeat_reset_volume(e);
         }
+    }
+    // The callbacks Tweaks adds while running (S0185's `CheckCanShowUIWarningCallback`, after the ones
+    // it adds at its start) live in `crates/stewie`: its seam.
+    if e.stewie(stewie::INVALID_REWARD_XP_SAFEGUARD) {
+        e.site(0x0094_0c78, &[]);
     }
 }
 

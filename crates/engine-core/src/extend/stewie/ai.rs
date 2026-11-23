@@ -298,3 +298,6 @@ pub const HEARTBEAT_SOUNDS_FADE: Row = Row::share(AI_FIXES, AI_FIXES_END, 87);
 /// S0940 `ArmorBlockingPreventsBlood` (`0088e8d0` (`0x88EDC2`, `0x88F37D`), `0088fb00` (`0x88FD54`),
 /// `009b5a30` (`0x9B6335`)): blood follows JIP's armour-penetrated mark.
 pub const ARMOR_BLOCKING_PREVENTS_BLOOD: Row = Row::share(AI_FIXES, AI_FIXES_END, 88);
+/// S0185 `InvalidRewardXPSafeGuard` (`0094fd10` (`0x94FD24`)): an unusually large XP award asks
+/// first.
+pub const INVALID_REWARD_XP_SAFEGUARD: Row = Row::share(AI_FIXES, AI_FIXES_END, 89);

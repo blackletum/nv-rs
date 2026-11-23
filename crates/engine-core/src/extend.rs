@@ -978,6 +978,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-10",
     },
+    // PlayerCharacter::Update 0093e860, after its `UpdateMenuModeButton` call (`0x940C78`): lStewieAl's
+    // Tweaks' player update callbacks that live in `crates/stewie` (S0185's message).
+    Entry {
+        addr: 0x0094_0c78,
+        owners: STEWIE,
+        step: "stewie-ai",
+    },
     // PlayerCharacter::Update 0093e860, the activation of the reference under the crosshair: JIP LN
     // NVSE's InteractionDisabled (its activation half; 0x775B9B is the other).
     Entry {
@@ -990,6 +997,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x0094_cb35,
         owners: JIP,
         step: "3.5c",
+    },
+    // The player's XP reward 0094fd10, its call of `CharacterProgression::RewardExperience`
+    // (`0x94FD24`): lStewieAl's Tweaks' S0185 (`InvalidRewardXPSafeGuard::OnRewardXP`).
+    Entry {
+        addr: 0x0094_fd24,
+        owners: STEWIE,
+        step: "stewie-ai",
     },
     // The player's target pick 00964260, after the loop: JIP LN NVSE's SetPCTarget.
     Entry {
@@ -3104,11 +3118,13 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 129);
-        // lStewieAl's Tweaks' (its seam in the text key event), Tweaks' alone.
-        let a = 0x0071_5563;
-        assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
-        assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        assert_eq!(SITES.len(), 131);
+        // lStewieAl's Tweaks' (its seams in the text key event, the player's update and the XP
+        // reward), Tweaks' alone.
+        for a in [0x0071_5563, 0x0094_0c78, 0x0094_fd24] {
+            assert!(find(SITES, Owner::Stewie, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
