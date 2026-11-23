@@ -4537,7 +4537,10 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         {
             if !e.call(0x005a_03f0, &args![this, 8u32]).bool() {
                 let held: f32 = e.global(HELD_TIMER_011E07E0);
-                e.set_global(HELD_TIMER_011E07E0, (held as f64 + delta as f64) as f32);
+                // lStewieAl's Tweaks' row S0584 (its `UpdateReadyWeaponTimerDivideByTimescaleHook` called
+                // at `0x940B64`): the time added is divided by the timescale (`011ac3a0`).
+                let step = timescale_free(e, delta);
+                e.set_global(HELD_TIMER_011E07E0, (held as f64 + step) as f32);
                 if e.call(0x0088_43a0, &args![this]).bool()
                     && e.call(0x008a_7570, &args![this]).u32() == u32::MAX
                 {
@@ -9743,6 +9746,17 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// A frame's time added to the player's held-control timers (`delta`). lStewieAl's Tweaks' row S0584
+/// (`patchPipboyLightAndHolsterNotAffectedByTimeScale`): divided by the timescale (`011ac3a0`, `FDIV`
+/// before the `FADD`), so they ignore it.
+pub(crate) fn timescale_free(e: &Engine, delta: f32) -> f64 {
+    if e.stewie(engine_core::extend::stewie::HELD_TIMERS_IGNORE_TIMESCALE) {
+        delta as f64 / e.global::<f32>(0x011a_c3a0) as f64
+    } else {
+        delta as f64
+    }
+}
 
 /// The level-up's combat test in `PlayerCharacter::Update` (`0x943990`,
 /// `PlayerCharacter::IsPlayerCharacterInCombat` `00953c50`: the byte +0xDF0, and +0xDF1 into
@@ -21303,6 +21317,22 @@ mod tests {
         }
         assert_eq!(e.mem.u8(out), 0x55);
         assert_eq!(called(&e, 0x0095_3c50).len(), 1);
+    }
+
+    /// S0584 (`patchPipboyLightAndHolsterNotAffectedByTimeScale`): the held timers grow by the
+    /// frame time (0.25); with the row by the frame time over the timescale (`011ac3a0`, 0.5: 0.5).
+    #[test]
+    fn s0584_held_timers_ignore_the_timescale() {
+        for (on, step) in [(false, 0.25f64), (true, 0.5)] {
+            let mut e = engine();
+            e.set_stewie(
+                engine_core::extend::stewie::HELD_TIMERS_IGNORE_TIMESCALE,
+                on,
+            );
+            e.map(0x011a_c000, 0x1000);
+            e.set_global(0x011a_c3a0, 0.5f32);
+            assert_eq!(timescale_free(&e, 0.25), step, "on {on}");
+        }
     }
 
     #[test]

@@ -52,6 +52,25 @@ fn s0111_obeys_tweaks_fix_looping_reload_ammo_swap() {
     assert!(!rows::on(row, &keys, &off));
 }
 
+/// S0693 follows Tweaks' own `[Tweaks] bGodmodeAllowsFastTravelEnemiesNearby` (code default 1, not in
+/// VNV's INI): on with no file either way, off when the player's Tweaks INI sets 0.
+#[test]
+fn s0693_obeys_tweaks_godmode_allows_fast_travel() {
+    let row = rows::all().find(|r| r.plan == "S0693").unwrap();
+    assert_eq!(
+        row.tweaks,
+        Some(("Tweaks", "bGodmodeAllowsFastTravelEnemiesNearby"))
+    );
+    let keys = rows::Keys::default();
+    assert!(rows::on(row, &keys, &Settings::new(&[], false)));
+    assert!(rows::on(row, &keys, &Settings::new(&[], true)));
+    let off = Settings::new(
+        &[("p", b"[Tweaks]\nbGodmodeAllowsFastTravelEnemiesNearby=0\n")],
+        false,
+    );
+    assert!(!rows::on(row, &keys, &off));
+}
+
 /// S0926 follows Tweaks' own `[INI] bCombatDialogueCooldownFix` (main INI only, code default 1,
 /// not in VNV's INI): on with no file either way, off when the player's Tweaks INI sets 0.
 #[test]
@@ -65,10 +84,10 @@ fn s0926_obeys_tweaks_combat_dialogue_cooldown_fix() {
     assert!(!rows::on(row, &keys, &off));
 }
 
-/// S0329, S0404, S0410, S0489, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys (code
-/// default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the player's
-/// Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks` (Tweaks' code
-/// default), and off by their own keys.
+/// S0329, S0404, S0410, S0489, S0584, S0660, S0664 and S0782 follow Tweaks' own `[Tweaks]` keys
+/// (code default 0, VNV's 1): on with no file (the port's defaults are VNV's), off when the
+/// player's Tweaks INI sets the key to 0, off with no file under `bMissingKeysAsTweaks` (Tweaks'
+/// code default), and off by their own keys.
 #[test]
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
@@ -76,6 +95,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0404", "bDelayPostCombatLevelUp"),
         ("S0410", "bGodmodePreventsLegCrippleSound"),
         ("S0489", "bSpinWeaponsSoundFix"),
+        ("S0584", "bPipboyLightAndHolsteringIgnoreTimescale"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
         ("S0782", "bHiddenFragsFix"),
@@ -386,11 +406,21 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bSpinWeaponsAlwaysPlaySound",
         Row::at(AI_FIXES, 57),
     ),
+    (
+        "S0584",
+        "bPipboyLightAndHolsterNotAffectedByTimeScale",
+        Row::at(AI_FIXES, 74),
+    ),
     ("S0660", "bFixExplosionPushDirection", Row::at(AI_FIXES, 39)),
     (
         "S0664",
         "bFixKillChallengeSourceWeapon",
         Row::at(AI_FIXES, 40),
+    ),
+    (
+        "S0693",
+        "bGodmodeAllowsFastTravelEnemiesNearby",
+        Row::at(AI_FIXES, 75),
     ),
     (
         "S0782",

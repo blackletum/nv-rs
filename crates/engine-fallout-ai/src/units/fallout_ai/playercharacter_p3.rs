@@ -6629,7 +6629,10 @@ pub fn player_character_update_menu_mode_button(
             e.set_global(MENU_MODE_BUTTON_FIRED, 0u8);
         } else {
             let timer = e.get(this, PlayerCharacter::fMenuModeButtonTimer);
-            let timer = (f64::from(timer) + f64::from(delta)) as f32;
+            // lStewieAl's Tweaks' row S0584 (its `UpdatePipboyLightTimerDivideByTimescaleHook` called at
+            // `0x967475`): the time added is divided by the timescale.
+            let step = super::playercharacter::timescale_free(e, delta);
+            let timer = (f64::from(timer) + step) as f32;
             e.set(this, PlayerCharacter::fMenuModeButtonTimer, timer);
             if e.global::<u8>(MENU_MODE_BUTTON_FIRED) == 0 {
                 let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();

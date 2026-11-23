@@ -250,3 +250,10 @@ pub const OPPOSITE_KEYS_CANCEL: Row = Row::share(AI_FIXES, AI_FIXES_END, 72);
 /// S0404 `patchDelayLevelupAfterCombat` (`PlayerCharacter::Update` `0093e860` (`0x943990`)): the
 /// level-up menu waits 3 seconds after combat ends.
 pub const DELAY_LEVELUP_AFTER_COMBAT: Row = Row::share(AI_FIXES, AI_FIXES_END, 73);
+/// S0584 `patchPipboyLightAndHolsterNotAffectedByTimeScale` (`009673d0` (`0x967475`);
+/// `PlayerCharacter::Update` `0093e860` (`0x940B64`)): holding the Pip-Boy light or the holster
+/// control takes the same real time whatever the timescale.
+pub const HELD_TIMERS_IGNORE_TIMESCALE: Row = Row::share(AI_FIXES, AI_FIXES_END, 74);
+/// S0693 `patchGodmodeAllowsFastTravelEnemiesNearby` (`009764a0`, a jump at its entry): in god
+/// mode no hostiles count as near the player.
+pub const GODMODE_FAST_TRAVEL_ENEMIES: Row = Row::share(AI_FIXES, AI_FIXES_END, 75);

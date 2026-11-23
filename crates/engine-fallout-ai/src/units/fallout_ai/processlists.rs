@@ -5532,6 +5532,14 @@ pub fn processlists_flush_non_persistent_actors(
 /// player and is in combat with the player (`008bc700`) or would attack
 /// them (`008b06d0`).
 pub fn fn_009764a0(e: &mut Engine, this: Ptr<ProcessLists>, flag: u8) -> bool {
+    // lStewieAl's Tweaks' row S0693 (`patchGodmodeAllowsFastTravelEnemiesNearby`, its
+    // `GetIsHostilesNearPlayerHook` jumped to at the entry): no hostiles in god mode (`011e07ba`) or
+    // demigod mode (`011e0898`).
+    if e.stewie(engine_core::extend::stewie::GODMODE_FAST_TRAVEL_ENEMIES)
+        && (e.mem.u8(0x011e_07ba) != 0 || e.mem.u8(0x011e_0898) != 0)
+    {
+        return false;
+    }
     let array = mob_process_array(this);
     let setting = if flag != 0 {
         0x011d_04b4u32
@@ -12934,6 +12942,36 @@ mod tests {
         // The search stops at the first hit.
         assert_eq!(calls(&e, slot(0x344)).len(), 2);
         assert_eq!(calls(&e, slot(0x344))[1], vec![foe, player, 0]);
+    }
+
+    /// S0693 (`GetIsHostilesNearPlayerHook`): a hostile in range is found; with the row in god
+    /// mode (`011e07ba`) or demigod mode (`011e0898`) the answer is no hostiles, without a search.
+    #[test]
+    fn s0693_god_mode_ignores_hostiles_near_the_player() {
+        for (on, god, demigod, found) in [
+            (false, 1u8, 0u8, true),
+            (true, 1, 0, false),
+            (true, 0, 1, false),
+            (true, 0, 0, true),
+        ] {
+            let mut e = fixture();
+            e.set_stewie(engine_core::extend::stewie::GODMODE_FAST_TRAVEL_ENEMIES, on);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u8(0x011e_07ba, god);
+            e.mem.set_u8(0x011e_0898, demigod);
+            let (lists, [player, _, _, foe, _]) = hostile_world(&mut e);
+            e.register_double(0x008b_c700, move |_, a| Ret {
+                eax: (a[0] == foe && a[1] == player) as u32,
+                ..Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x0097_64a0, &args![lists, 0u32]).bool(),
+                found,
+                "on {on} god {god} demigod {demigod}"
+            );
+            assert_eq!(calls(&e, 0x008b_c700).is_empty(), !found, "on {on}");
+        }
     }
 
     #[test]

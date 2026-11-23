@@ -568,6 +568,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you hear: a weapon with a looping attack sound (a minigun, a Gatling laser) plays it again when you fire after a short stop",
     },
     Row {
+        bit: stewie::HELD_TIMERS_IGNORE_TIMESCALE,
+        function: "patchPipboyLightAndHolsterNotAffectedByTimeScale",
+        plan: "S0584",
+        key: "bPipboyLightAndHolsterNotAffectedByTimeScale",
+        tweaks: Some(("Tweaks", "bPipboyLightAndHolsteringIgnoreTimescale")),
+        summary: "holding the Pip-Boy light or the holster control takes the same real time whatever the timescale",
+    },
+    Row {
         bit: stewie::EXPLOSION_PUSH_DIRECTION,
         function: "patchFixExplosionPushDirection",
         plan: "S0660",
@@ -582,6 +590,14 @@ pub const ROWS: &[Row] = &[
         key: "bFixKillChallengeSourceWeapon",
         tweaks: Some(("Tweaks", "bFixKillChallengeSourceWeapon")),
         summary: "changes play: kill challenges and kill statistics count the weapon whose hit killed (a thrown grenade, a mine), not the weapon you hold when the kill lands",
+    },
+    Row {
+        bit: stewie::GODMODE_FAST_TRAVEL_ENEMIES,
+        function: "patchGodmodeAllowsFastTravelEnemiesNearby",
+        plan: "S0693",
+        key: "bGodmodeAllowsFastTravelEnemiesNearby",
+        tweaks: Some(("Tweaks", "bGodmodeAllowsFastTravelEnemiesNearby")),
+        summary: "in god mode you can fast travel and wait with enemies nearby",
     },
     Row {
         bit: stewie::HIDDEN_FRAGS,
