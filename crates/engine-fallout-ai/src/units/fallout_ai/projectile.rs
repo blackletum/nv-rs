@@ -5351,6 +5351,14 @@ fn play_sound_at(e: &mut Engine, handle: u32, sound: u32, location: Ptr) {
     e.call(0x0048_3710, &args![handle]);
 }
 
+/// lStewieAl's Tweaks' row S0681 (`ShootingWeaponsCausesSparks`, its `OnShouldSpawnParticlesHook` called at
+/// `0x9C21AF`): an actor hit on its weapon (the impact data's hit location, `+0x24`: `normal + 0x14`, is
+/// `kVATSPart_Weapon`, 14) gets the impact effects as a collidee that is not an actor does.
+fn weapon_hit_makes_sparks(e: &Engine, normal: Ptr) -> bool {
+    e.stewie(engine_core::extend::stewie::SHOOTING_WEAPONS_CAUSES_SPARKS)
+        && e.mem.u32(normal.addr() + 0x14) == 14
+}
+
 // Translation incomplete: 009c20e0 - C++ exception unwinding (FS:[0] frame) is not modelled.
 // Translated from 009c20e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The impact effects of an impact: nothing for an actor collidee. A
@@ -5374,6 +5382,8 @@ fn play_sound_at(e: &mut Engine, handle: u32, sound: u32, location: Ptr) {
 /// - The actor cause's actor's process (virtual +0xFC) is told of the
 ///   impact, and the data's two sounds (`0068a810`, `0068a830`) play at the
 ///   location.
+///
+/// lStewieAl's Tweaks' row S0681: see [`weapon_hit_makes_sparks`].
 pub fn fn_009c20e0(
     e: &mut Engine,
     this: Ptr<Projectile>,
@@ -5405,7 +5415,7 @@ pub fn fn_009c20e0(
                 }
             }
         }
-        if collidee != 0 && is_actor(e, collidee) {
+        if collidee != 0 && is_actor(e, collidee) && !weapon_hit_makes_sparks(e, normal) {
             return;
         }
         if collidee != 0 {
@@ -8328,6 +8338,43 @@ mod tests {
             calls(&e, 0x00ad_8b60)[0][1..],
             [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
         );
+    }
+
+    /// S0681 (`ShootingWeaponsCausesSparks`, `0x9C21AF`): an actor hit on its weapon (the impact
+    /// data's hit location 14 at `normal + 0x14`) gets the effects (here its action flags, `005ac750`)
+    /// with the row; another part, or no row, still stops at the actor.
+    #[test]
+    fn s0681_a_shot_weapon_gets_the_impact_effects() {
+        for (on, part, flagged) in [(true, 14u32, true), (true, 0, false), (false, 14, false)] {
+            let mut e = engine();
+            let this = projectile(&mut e);
+            let location = e.mem.alloc(0xC);
+            set_point(&mut e, location, [1.0, 2.0, 3.0]);
+            let normal = e.mem.alloc(0x40);
+            e.mem.set_u32(normal + 0x14, part);
+            let target = actor(&mut e);
+            e.set_stewie(
+                engine_core::extend::stewie::SHOOTING_WEAPONS_CAUSES_SPARKS,
+                on,
+            );
+            stub(&mut e, 0x005d_43c0, 0x5d00);
+            stub(&mut e, 0x005a_c750, 0);
+            fn_009c20e0(
+                &mut e,
+                this,
+                target,
+                Ptr::new(location),
+                Ptr::new(normal),
+                0,
+                1,
+            );
+            let want = if flagged {
+                vec![vec![this.addr(), 0x5d00, 0x80]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, 0x005a_c750), want, "{on} {part}");
+        }
     }
 
     #[test]

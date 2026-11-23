@@ -648,6 +648,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: kill challenges and kill statistics count the weapon whose hit killed (a thrown grenade, a mine), not the weapon you hold when the kill lands",
     },
     Row {
+        bit: stewie::SHOOTING_WEAPONS_CAUSES_SPARKS,
+        function: "ShootingWeaponsCausesSparks",
+        plan: "S0681",
+        key: "bShootingWeaponsCausesSparks",
+        tweaks: Some(("Tweaks", "bWeaponImpactEffects")),
+        summary: "changes what you see: shooting an actor's weapon makes sparks and impact sounds",
+    },
+    Row {
         bit: stewie::GODMODE_FAST_TRAVEL_ENEMIES,
         function: "patchGodmodeAllowsFastTravelEnemiesNearby",
         plan: "S0693",

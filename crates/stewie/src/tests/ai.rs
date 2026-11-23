@@ -114,6 +114,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
         ("S0584", "bPipboyLightAndHolsteringIgnoreTimescale"),
         ("S0660", "bExplosionKnockbackDirectionFix"),
         ("S0664", "bFixKillChallengeSourceWeapon"),
+        ("S0681", "bWeaponImpactEffects"),
         ("S0694", "bImprovedWeather"),
         ("S0702", "bPowerArmorPreventsScreenBlood"),
         ("S0722", "bNoGibSoundWhenEnteringCells"),
@@ -458,6 +459,11 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "S0664",
         "bFixKillChallengeSourceWeapon",
         Row::at(AI_FIXES, 40),
+    ),
+    (
+        "S0681",
+        "bShootingWeaponsCausesSparks",
+        Row::at(AI_FIXES, 91),
     ),
     (
         "S0693",
