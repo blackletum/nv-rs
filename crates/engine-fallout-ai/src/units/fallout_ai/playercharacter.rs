@@ -4542,7 +4542,6 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 let step = timescale_free(e, delta);
                 e.set_global(HELD_TIMER_011E07E0, (held as f64 + step) as f32);
                 if e.call(0x0088_43a0, &args![this]).bool() && holster_action_allows(e, this) {
-                {
                     let mut handled = false;
                     if e.global::<u8>(HELD_FLAG_011E0BC1) == 0 {
                         let limit = setting_float(e, HELD_SETTING_011CDFCC);
@@ -21445,7 +21444,11 @@ mod tests {
             e.set_stewie(engine_core::extend::stewie::HOLSTER_WHILE_ANIMS_PLAY, on);
             e.register(0x008a_7570, move |_, _| int(action));
             let this = player(&mut e);
-            assert_eq!(holster_action_allows(&mut e, this), allows, "on {on} {action:#x}");
+            assert_eq!(
+                holster_action_allows(&mut e, this),
+                allows,
+                "on {on} {action:#x}"
+            );
         }
     }
 
