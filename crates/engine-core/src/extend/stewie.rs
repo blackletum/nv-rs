@@ -379,8 +379,12 @@ pub mod value {
     pub const REDUCE_XP: usize = 10;
     /// ... and `[Reduced XP] fXPMultiplier` (code default 0.5, at least 0; the `float`'s bits).
     pub const XP_MULTIPLIER: usize = 11;
+    /// S0289's `[Skip Deathcam] fAttackDebounceTime` (code default 1.0; the `float`'s bits).
+    pub const SKIP_DEATHCAM_DEBOUNCE: usize = 12;
+    /// S0289's `[Skip Deathcam] iHotkey` (code default Left Alt, 0x38).
+    pub const SKIP_DEATHCAM_KEY: usize = 13;
     /// How many.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 14;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

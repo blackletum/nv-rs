@@ -4356,7 +4356,8 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                     let value: f32 = e.global(TIMER_011A3B34);
                     let value = (value as f64 - delta as f64) as f32;
                     e.set_global(TIMER_011A3B34, value);
-                    if (value as f64) < zero {
+                    // lStewieAl's Tweaks' row S0289 (the jump at `0x93FF62`): or [`skip_deathcam`].
+                    if (value as f64) < zero || skip_deathcam(e) {
                         e.set_global(TIMER_011A3B34, e.global::<f32>(TIMER_RESET));
                         let reactor = e.global::<u32>(FAST_TRAVEL_REACTOR);
                         if !e.call(0x0085_12f0, &args![reactor]).bool() {
@@ -9941,6 +9942,34 @@ fn reset_weather_after(e: &Engine, length: f32) -> bool {
         return false;
     }
     true
+}
+
+/// lStewieAl's Tweaks' row S0289 (`SkipDeathcamHotkey::ShouldEndDeathcam`, the jump at `0x93FF62`
+/// over the death camera's timer test): it also ends when, once `fPlayerDeathReloadTime` (the
+/// setting at `011cd62c`) less the timer (`011a3b34`) is at least `[Skip Deathcam]
+/// fAttackDebounceTime`, the attack control (4) is pressed; when `[Skip Deathcam] iHotkey` is
+/// pressed (`00a24180`); or when the pad's Back button (0x20) is down in the game's current pad
+/// state (`011f35a8`) and not in its previous one (`011f35b8`).
+fn skip_deathcam(e: &mut Engine) -> bool {
+    use engine_core::extend::stewie::{value, SKIP_DEATHCAM_HOTKEY};
+    if !e.stewie(SKIP_DEATHCAM_HOTKEY) {
+        return false;
+    }
+    let input = e.global::<u32>(0x011f_35cc);
+    let timer: f32 = e.global(TIMER_011A3B34);
+    let debounce = f32::from_bits(e.stewie_value(value::SKIP_DEATHCAM_DEBOUNCE));
+    if setting_float(e, CAMERA_SETTING_011CD62C) - timer >= debounce
+        && e.call(0x00a2_4660, &args![input, 4u32, 1u32]).u8() != 0
+    {
+        return true;
+    }
+    let key = e.stewie_value(value::SKIP_DEATHCAM_KEY);
+    if e.call(0x00a2_4180, &args![input, key, 1u32]).u8() != 0 {
+        return true;
+    }
+    let current = e.mem.u16(0x011f_35a8 + 4);
+    let previous = e.mem.u16(0x011f_35b8 + 4);
+    current & 0x20 != 0 && previous & 0x20 == 0
 }
 
 /// The jump control's test in `PlayerCharacter::Update` (the call at `0x94215F`, `00a24660` on
@@ -22029,6 +22058,49 @@ mod tests {
         let this = player(&mut e);
         e.call_log = Some(vec![]);
         (e, this, down, interface)
+    }
+
+    /// S0289 (`SkipDeathcamHotkey`, `0x93FF62`): with the row the death camera ends on the attack
+    /// control once a second has passed (`fPlayerDeathReloadTime` 5 less the timer), on Left Alt,
+    /// or on a new press of the pad's Back button; not on an early attack, a held Back button or
+    /// without the row.
+    #[test]
+    fn s0289_the_death_camera_ends_on_a_key_the_back_button_or_an_attack() {
+        use engine_core::extend::stewie::{value, SKIP_DEATHCAM_HOTKEY};
+        let run = |on: bool, timer: f32, attack: bool, key: bool, back: (u16, u16)| {
+            let mut e = engine();
+            for page in [0x011a_3000u32, 0x011c_d000, 0x011f_3000] {
+                if !e.mem.is_mapped(page) {
+                    e.map(page, 0x1000);
+                }
+            }
+            settings_by_address(&mut e);
+            e.set_stewie(SKIP_DEATHCAM_HOTKEY, on);
+            e.set_stewie_value(value::SKIP_DEATHCAM_DEBOUNCE, 1.0f32.to_bits());
+            e.set_stewie_value(value::SKIP_DEATHCAM_KEY, 0x38);
+            e.mem.set_f32(0x011c_d62c, 5.0);
+            e.mem.set_f32(0x011a_3b34, timer);
+            e.mem.set_u32(0x011f_35cc, 0x1000);
+            e.mem.set_u16(0x011f_35a8 + 4, back.0);
+            e.mem.set_u16(0x011f_35b8 + 4, back.1);
+            e.register_double(0x00a2_4660, move |_, a| {
+                int(u32::from(attack && a[1] == 4 && a[2] == 1))
+            });
+            e.register_double(0x00a2_4180, move |_, a| {
+                int(u32::from(key && a[1] == 0x38 && a[2] == 1))
+            });
+            skip_deathcam(&mut e)
+        };
+        assert!(run(true, 3.0, true, false, (0, 0)));
+        assert!(
+            !run(true, 4.5, true, false, (0, 0)),
+            "attack before a second"
+        );
+        assert!(run(true, 4.5, false, true, (0, 0)));
+        assert!(run(true, 4.5, false, false, (0x20, 0)));
+        assert!(!run(true, 4.5, false, false, (0x20, 0x20)), "Back held");
+        assert!(!run(true, 4.5, false, false, (0x10, 0)));
+        assert!(!run(false, 3.0, true, true, (0x20, 0)));
     }
 
     /// S0252 (`BetterAutowalk`, `HandleAutowalk`): started with forward held, the walk goes on

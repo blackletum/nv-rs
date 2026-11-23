@@ -103,6 +103,7 @@ fn s0549_obeys_tweaks_no_turning_anim() {
 fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
         ("S0252", "bBetterAutoWalk"),
+        ("S0289", "bSkipDeathcamHotkey"),
         ("S0329", "bLeftAndRightCancelEachOther"),
         ("S0374", "bDoubleTapReloadToChangeAmmoType"),
         ("S0376", "bFasterControllerPOVRotate"),
@@ -417,6 +418,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
     ("S0230", "bDoubleSoundFix", Row::at(AI_FIXES, 18)),
     ("S0241", "bActorGetHeadingTargetFix", Row::at(AI_FIXES, 38)),
     ("S0252", "bBetterAutowalk", Row::at(AI_FIXES, 85)),
+    ("S0289", "bSkipDeathcamHotkey", Row::at(AI_FIXES, 93)),
     (
         "S0329",
         "bLeftRightMovementCancelsOut",

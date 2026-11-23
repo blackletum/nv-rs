@@ -269,6 +269,17 @@ pub fn install(e: &mut Engine) {
         engine_core::extend::stewie::value::XP_MULTIPLIER,
         multiplier.to_bits(),
     );
+    // Read by row S0289 (Tweaks' `g_fSkipDeathcamAttackDebounceTime`, a `float`, code default 1, and
+    // `g_iSkipDeathcamHotkey`, code default `Scancodes::LeftAlt`, 0x38).
+    let section = "Skip Deathcam";
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::SKIP_DEATHCAM_DEBOUNCE,
+        (settings.double(section, "fAttackDebounceTime", 1.0) as f32).to_bits(),
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::SKIP_DEATHCAM_KEY,
+        settings.long(section, "iHotkey", 0x38) as u32,
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).

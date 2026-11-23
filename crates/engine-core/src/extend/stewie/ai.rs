@@ -310,3 +310,6 @@ pub const SHOOTING_WEAPONS_CAUSES_SPARKS: Row = Row::share(AI_FIXES, AI_FIXES_EN
 /// S0667 `KeepVisibleStuckProjectiles` (`MissileProjectile::UpdateProjectile` `009b8030`
 /// (`0x9B8146`)): a stuck projectile the player sees stays.
 pub const KEEP_VISIBLE_STUCK_PROJECTILES: Row = Row::share(AI_FIXES, AI_FIXES_END, 92);
+/// S0289 `SkipDeathcamHotkey` (`PlayerCharacter::Update` `0093e860` (`0x93FF62`)): a key, the pad's
+/// Back button or attacking ends the death camera.
+pub const SKIP_DEATHCAM_HOTKEY: Row = Row::share(AI_FIXES, AI_FIXES_END, 93);
