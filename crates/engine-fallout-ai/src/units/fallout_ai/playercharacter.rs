@@ -8547,7 +8547,13 @@ fn apply_look_input(
             if e.call(0x00ec_7d40, &args![yaw]).i32() < dead_zone {
                 yaw = 0;
             }
-            yaw /= 5;
+            // lStewieAl's Tweaks' row S0376 (`patchFasterControllerPOVRotate`, the byte at `0x94565C`):
+            // divided by 2, not 5.
+            yaw /= if e.stewie(engine_core::extend::stewie::FASTER_CONTROLLER_POV_ROTATE) {
+                2
+            } else {
+                5
+            };
             if yaw != 0 || zoom != 0 {
                 let zoom_size = e.call(0x00ec_7d40, &args![right_x]).i32();
                 let yaw_size = e.call(0x00ec_7d40, &args![yaw]).i32();
@@ -9485,16 +9491,16 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     }
     e.call(0x004b_7210, &args![]);
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
-        let heading_step =
-            setting_float(e, 0x011e_0a6c) as f64 * look_x as f64 / e.global::<f64>(0x0107_37c8);
+        let heading_step = setting_float(e, 0x011e_0a6c) as f64 * look_x as f64
+            / ufo_stick_divisor(e, 0x0107_37c8);
         let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
         e.set(
             this,
             PlayerCharacter::fUFOCameraHeading,
             (heading_step + heading as f64) as f32,
         );
-        let pitch_step =
-            setting_float(e, 0x011e_0a6c) as f64 * look_y as f64 / e.global::<f64>(0x0108_b0a8);
+        let pitch_step = setting_float(e, 0x011e_0a6c) as f64 * look_y as f64
+            / ufo_stick_divisor(e, 0x0108_b0a8);
         let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
         e.set(
             this,
@@ -9746,6 +9752,21 @@ fn levelup_held(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
 
 /// The god mode byte (`g_bIsGodmode`, `011e07ba`).
 const GODMODE_BYTE: u32 = 0x011e_07ba;
+
+/// The free camera's stick divisor (`PlayerCharacter::UpdateUFOCamera`: the `double` at `global`, 1500
+/// at `010737c8` or -1500 at `0108b0a8`). lStewieAl's Tweaks' row S0376 (`patchFasterControllerPOVRotate`,
+/// the addresses at `0x94A9D4` and `0x94AA0D`): Tweaks' `kDbl1200` and `kDblMinus1200` instead.
+fn ufo_stick_divisor(e: &Engine, global: u32) -> f64 {
+    if e.stewie(engine_core::extend::stewie::FASTER_CONTROLLER_POV_ROTATE) {
+        if global == 0x0108_b0a8 {
+            -1200.0
+        } else {
+            1200.0
+        }
+    } else {
+        e.global::<f64>(global)
+    }
+}
 
 /// The ammunition swap control's test in `PlayerCharacter::Update` (`0x94098B`, `00a24660` on
 /// `input` with 0x12, pressed). lStewieAl's Tweaks' row S0374 (`DoubleReloadChangesAmmoType`, its
@@ -21550,6 +21571,69 @@ mod tests {
         assert!(!ammo_swap_pressed(&mut e, 0x1000), "the row off");
         only_button(&mut e, 0x12, 1);
         assert!(ammo_swap_pressed(&mut e, 0x1000), "the swap control");
+    }
+
+    thread_local! {
+        static S0376_STICK_X: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    }
+
+    /// S0376 (`patchFasterControllerPOVRotate`): with the point-of-view control's stick
+    /// (`011e07c1`) a yaw of 10000 is divided by 5 (2000), with the row by 2 (5000), as the
+    /// measured vector's x (`00457990`) shows; the free camera's analog look steps are divided by
+    /// 1500 and -1500, with the row by 1200 and -1200.
+    #[test]
+    fn s0376_the_controller_turns_the_cameras_faster() {
+        for on in [false, true] {
+            let (mut e, this) = look_world(0);
+            e.set_stewie(
+                engine_core::extend::stewie::FASTER_CONTROLLER_POV_ROTATE,
+                on,
+            );
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x00a2_3390, |_, a| int(if a[2] == 9 { 10000 } else { 0 }));
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0045_7990, |e, a| {
+                S0376_STICK_X.with(|c| c.set(e.mem.f32(a[0])));
+                float(1.0)
+            });
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.mem.set_u8(SECOND_STICK_FLAG, 1);
+            let process = answering_object(&mut e, 0x026b_0000, &[(0x1a8, 0), (0x610, 1)]);
+            e.mem.set_u32(this.addr() + 0x68, process);
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            S0376_STICK_X.with(|c| c.set(0.0));
+            e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+            let yaw = if on { 5000.0 } else { 2000.0 };
+            let want = (yaw / e.global::<f64>(0x0102_9790)) as f32;
+            assert_eq!(S0376_STICK_X.with(|c| c.get()), want, "on {on}");
+
+            let (mut e, this) = ufo_world();
+            e.set_stewie(
+                engine_core::extend::stewie::FASTER_CONTROLLER_POV_ROTATE,
+                on,
+            );
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x00a2_3390, |_, a| {
+                int(if a[2] == 9 { 12000 } else { 9000 })
+            });
+            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+            e.set_global(0x011e_0a6c, 0.1f32); // look speed
+            e.call(0x0094_a8c0, &args![this]);
+            let divisor = if on { 1200.0 } else { 1500.0 };
+            let heading = (0.1f32 as f64 * 12000.0 / divisor) as f32;
+            let pitch = (0.1f32 as f64 * 9000.0 / -divisor) as f32;
+            assert_eq!(
+                e.get(this, PlayerCharacter::fUFOCameraHeading),
+                heading,
+                "on {on}"
+            );
+            assert_eq!(
+                e.get(this, PlayerCharacter::fUFOCameraPitch),
+                pitch,
+                "on {on}"
+            );
+        }
     }
 
     #[test]

@@ -552,6 +552,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: pressing reload twice quickly swaps your ammunition type",
     },
     Row {
+        bit: stewie::FASTER_CONTROLLER_POV_ROTATE,
+        function: "patchFasterControllerPOVRotate",
+        plan: "S0376",
+        key: "bFasterControllerPOVRotate",
+        tweaks: Some(("Tweaks", "bFasterControllerPOVRotate")),
+        summary: "changes play: the controller's right stick turns the vanity and free cameras faster",
+    },
+    Row {
         bit: stewie::DELAY_LEVELUP_AFTER_COMBAT,
         function: "patchDelayLevelupAfterCombat",
         plan: "S0404",

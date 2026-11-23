@@ -104,6 +104,7 @@ fn tweaks_keyed_rows_follow_their_tweaks_keys() {
     for (plan, key) in [
         ("S0329", "bLeftAndRightCancelEachOther"),
         ("S0374", "bDoubleTapReloadToChangeAmmoType"),
+        ("S0376", "bFasterControllerPOVRotate"),
         ("S0404", "bDelayPostCombatLevelUp"),
         ("S0410", "bGodmodePreventsLegCrippleSound"),
         ("S0489", "bSpinWeaponsSoundFix"),
@@ -415,6 +416,7 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bDoubleReloadChangesAmmoType",
         Row::at(AI_FIXES, 80),
     ),
+    ("S0376", "bFasterControllerPOVRotate", Row::at(AI_FIXES, 81)),
     ("S0404", "bDelayLevelupAfterCombat", Row::at(AI_FIXES, 73)),
     (
         "S0410",

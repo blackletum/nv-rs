@@ -273,3 +273,6 @@ pub const NO_TURNING_ANIM: Row = Row::share(AI_FIXES, AI_FIXES_END, 79);
 /// S0374 `DoubleReloadChangesAmmoType` (`PlayerCharacter::Update` `0093e860` (`0x94098B`)):
 /// pressing reload twice quickly swaps the ammunition type.
 pub const DOUBLE_RELOAD_SWAPS_AMMO: Row = Row::share(AI_FIXES, AI_FIXES_END, 80);
+/// S0376 `patchFasterControllerPOVRotate` (`009445b0` (`0x94565C`); `PlayerCharacter::UpdateUFOCamera`
+/// `0094a8c0` (`0x94A9D4`, `0x94AA0D`)): the controller turns the vanity and free cameras faster.
+pub const FASTER_CONTROLLER_POV_ROTATE: Row = Row::share(AI_FIXES, AI_FIXES_END, 81);
