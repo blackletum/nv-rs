@@ -307,3 +307,6 @@ pub const NO_GIB_SOUND_WHEN_ENTERING_CELLS: Row = Row::share(AI_FIXES, AI_FIXES_
 /// S0681 `ShootingWeaponsCausesSparks` (`009c20e0` (`0x9C21AF`)): a shot weapon gets the impact
 /// effects.
 pub const SHOOTING_WEAPONS_CAUSES_SPARKS: Row = Row::share(AI_FIXES, AI_FIXES_END, 91);
+/// S0667 `KeepVisibleStuckProjectiles` (`MissileProjectile::UpdateProjectile` `009b8030`
+/// (`0x9B8146`)): a stuck projectile the player sees stays.
+pub const KEEP_VISIBLE_STUCK_PROJECTILES: Row = Row::share(AI_FIXES, AI_FIXES_END, 92);

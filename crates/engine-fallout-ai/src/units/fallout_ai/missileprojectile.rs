@@ -194,6 +194,77 @@ fn setting_float(e: &mut Engine, setting: u32) -> f64 {
     x87_m32(e.mem.u32(address))
 }
 
+/// lStewieAl's Tweaks' row S0667 (`KeepVisibleStuckProjectiles::OnStuckProjectileKill`, called at
+/// `0x9B8146` in place of `009bc8f0`): a stuck projectile whose time ran out is ended only when the
+/// player does not see it; seen, its time (`+0x158`) is 10 seconds again. In third person (the
+/// player's `+0x64B`) "seen" is the scene graph camera's `WorldPtToScreenPt` (`00a6fc50`, the
+/// camera at `*011deb7c + 0xAC`, tolerance 0.0000099999997, the `float` 1e-5); in first person it is an angle under
+/// 90 degrees from the player's heading (`AdjustRot(0)`, virtual `+0x2BC`) to the projectile
+/// ([`angle_between_points`]). Tweaks reads the player and the scene graph without a test; a
+/// missing one counts as not seen.
+fn keep_visible_stuck_projectile(e: &mut Engine, this: u32) {
+    let player = e.mem.u32(0x011d_ea3c);
+    let position = this.wrapping_add(0x30);
+    let seen = if player == 0 {
+        false
+    } else if e.mem.u8(player + 0x64b) != 0 {
+        let scene = e.mem.u32(0x011d_eb7c);
+        if scene == 0 {
+            false
+        } else {
+            let camera = e.mem.u32(scene + 0xac);
+            e.with_stack(8, |e, xy| {
+                let at = xy.addr();
+                e.call(0x00a6_fc50, &args![camera, position, at, at + 4, 1.0e-5f32])
+                    .u8()
+                    != 0
+            })
+        }
+    } else {
+        let heading = e.vcall(player, 0x2bc, &args![0u32]).f32();
+        angle_between_points(e, position, player + 0x30, heading).abs() < 90.0
+    };
+    if seen {
+        e.mem.set_f32(this.wrapping_add(0x158), 10.0);
+    } else {
+        e.call(END_FLIGHT, &args![this]);
+    }
+}
+
+/// Tweaks' `GetAngleBetweenPoints(actorPos, playerPos, offset)` (`Internal/utility.cpp`): the 2D
+/// angle of `from - to` (`float`s; `GetVectorAngle2D`: 3π/2 or π/2 on the x axis, else the arc
+/// tangent of the `float` ratio x / y, plus π for a negative y) less `offset`, brought into the
+/// circle (above π: 2π less it; at or below -π: plus 2π), in degrees.
+fn angle_between_points(e: &Engine, from: u32, to: u32, offset: f32) -> f64 {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let x = e.mem.f32(from) - e.mem.f32(to);
+    let y = e.mem.f32(from + 4) - e.mem.f32(to + 4);
+    let angle = if y == 0.0 {
+        if x <= 0.0 {
+            3.0 * FRAC_PI_2
+        } else {
+            FRAC_PI_2
+        }
+    } else {
+        let ratio = f64::from(x / y);
+        let angle = ratio.atan();
+        if y < 0.0 {
+            angle + PI
+        } else {
+            angle
+        }
+    };
+    let mut angle = angle - f64::from(offset);
+    if angle > -PI {
+        if angle > PI {
+            angle = 2.0 * PI - angle;
+        }
+    } else {
+        angle += 2.0 * PI;
+    }
+    angle * (180.0 / PI)
+}
+
 // Translated from 009b8030 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MissileProjectile::UpdateProjectile` (engine map name), `thiscall`,
 /// `RET 4`: the time step. In the exe's order:
@@ -251,7 +322,11 @@ pub fn missile_projectile_update_projectile(e: &mut Engine, this: Ptr, time: f32
         );
         e.mem.set_u32(base.wrapping_add(0x158), x87_store32(left));
         if x87_m32(e.mem.u32(base.wrapping_add(0x158))) <= zero {
-            e.call(END_FLIGHT, &args![this]);
+            if e.stewie(engine_core::extend::stewie::KEEP_VISIBLE_STUCK_PROJECTILES) {
+                keep_visible_stuck_projectile(e, base);
+            } else {
+                e.call(END_FLIGHT, &args![this]);
+            }
         }
     }
     let stuck = e.call(FLAGS_C8_HAVE, &args![this, 0x80u32]).bool()
@@ -653,6 +728,70 @@ mod b025_tests {
         e.call(0x009b_8030, &args![this, 0.5f32]);
         assert!(calls_to(&e, CHECK_EXPLOSION).is_empty());
         assert_eq!(calls_to(&e, FIELD_D4_GETTER).len(), 1);
+    }
+
+    /// S0667 (`KeepVisibleStuckProjectiles`, `0x9B8146`): with the row a stuck projectile whose
+    /// time ran out stays (10 seconds again) while the player sees it: in third person the
+    /// camera's `WorldPtToScreenPt` (`00a6fc50`) answers; in first person it is ahead (the
+    /// heading 0 looks along +y) and ended behind. Without the row it is ended.
+    #[test]
+    fn s0667_a_stuck_projectile_in_view_stays() {
+        use engine_core::extend::stewie::KEEP_VISIBLE_STUCK_PROJECTILES;
+        for (on, third, on_screen, ahead, stays) in [
+            (true, true, true, true, true),
+            (true, true, false, true, false),
+            (true, false, false, true, true),
+            (true, false, false, false, false),
+            (false, true, true, true, false),
+        ] {
+            let (mut e, this) = engine();
+            e.set_stewie(KEEP_VISIBLE_STUCK_PROJECTILES, on);
+            e.mem.set_u32(this + 0x150, 4);
+            e.mem.set_f32(this + 0x158, 0.25);
+            e.mem
+                .set_f32(this + 0x34, if ahead { 100.0 } else { -100.0 });
+            let player = e.mem.alloc(0x1000);
+            let player_table = e.mem.alloc(0x400);
+            e.mem.set_u32(player, player_table);
+            e.mem.set_u32(player_table + 0x2bc, 0x00b0_02bc);
+            e.register(0x00b0_02bc, |_, _| Ret {
+                st0: 0.0,
+                ..Ret::default()
+            });
+            e.mem.set_u8(player + 0x64b, u8::from(third));
+            e.mem.set_u32(0x011d_ea3c, player);
+            let scene = e.mem.alloc(0x100);
+            e.mem.set_u32(scene + 0xac, 0x5ca0);
+            e.mem.set_u32(0x011d_eb7c, scene);
+            e.register_double(0x00a6_fc50, move |_, _| u32::from(on_screen).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x009b_8030, &args![this, 0.5f32]);
+            let ended = !calls_to(&e, END_FLIGHT).is_empty();
+            assert_eq!(ended, !stays, "{on} {third} {on_screen} {ahead}");
+            if stays {
+                assert_eq!(e.mem.f32(this + 0x158), 10.0);
+            }
+        }
+    }
+
+    /// Tweaks' `GetAngleBetweenPoints`: ahead 0, a quarter turn either way 90, behind 180, and the
+    /// heading taken off.
+    #[test]
+    fn s0667_angles_between_points_follow_tweaks() {
+        let mut e = Engine::new();
+        let at = e.mem.alloc(0x40);
+        let angle = |e: &mut Engine, x: f32, y: f32, heading: f32| {
+            e.mem.set_f32(at, x);
+            e.mem.set_f32(at + 4, y);
+            angle_between_points(e, at, at + 0x20, heading)
+        };
+        assert!(angle(&mut e, 0.0, 10.0, 0.0).abs() < 1e-9);
+        assert!((angle(&mut e, 10.0, 0.0, 0.0) - 90.0).abs() < 1e-9);
+        // 3π/2 is above π: Tweaks takes 2π less it, so the other side is 90 too.
+        assert!((angle(&mut e, -10.0, 0.0, 0.0) - 90.0).abs() < 1e-9);
+        assert!((angle(&mut e, 0.0, -10.0, 0.0) - 180.0).abs() < 1e-9);
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert!(angle(&mut e, 10.0, 0.0, quarter).abs() < 1e-5);
     }
 
     #[test]

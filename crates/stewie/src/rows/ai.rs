@@ -648,6 +648,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes play: kill challenges and kill statistics count the weapon whose hit killed (a thrown grenade, a mine), not the weapon you hold when the kill lands",
     },
     Row {
+        bit: stewie::KEEP_VISIBLE_STUCK_PROJECTILES,
+        function: "KeepVisibleStuckProjectiles",
+        plan: "S0667",
+        key: "bKeepVisibleStuckProjectiles",
+        tweaks: Some(("Tweaks", "bNoDespawnVisibleStuckProjectiles")),
+        summary: "changes what you see: stuck arrows and spears you are looking at no longer vanish",
+    },
+    Row {
         bit: stewie::SHOOTING_WEAPONS_CAUSES_SPARKS,
         function: "ShootingWeaponsCausesSparks",
         plan: "S0681",
