@@ -348,8 +348,12 @@ pub mod value {
     pub const AUTOWALK_ALLOW_BACKWARDS: usize = 3;
     /// S0252's `[Better Autowalk] bJumpInWater` (code default 0).
     pub const AUTOWALK_JUMP_IN_WATER: usize = 4;
+    /// S0903's `[Tweaks] bHideCrosshairInKillcams` (code default 0, VNV's 1).
+    pub const HIDE_CROSSHAIR_IN_KILLCAMS: usize = 5;
+    /// S0903's `[Tweaks] bHideHealthbarInKillcams` (code default 0, VNV's 1).
+    pub const HIDE_HEALTHBAR_IN_KILLCAMS: usize = 6;
     /// How many.
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 7;
 }
 
 /// The last thing each of Tweaks' warnings printed (its functions' statics), its print queue and

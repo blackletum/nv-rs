@@ -481,5 +481,6 @@ pub(super) const PINNED: &[(&str, &str, Row)] = &[
         "bVATSStopFollowingDeadTargets",
         Row::at(AI_FIXES, 76),
     ),
+    ("S0903", "bHideHudInKillcams", Row::at(AI_FIXES, 86)),
     ("S0926", "bCombatSoundCooldownFix", Row::at(AI_FIXES, 58)),
 ];

@@ -2483,6 +2483,30 @@ fn set_visibility_trait(e: &mut Engine, offset: u32, mask: u32) {
     hud_trait(e, current_tile, 0xfa3, value);
 }
 
+/// lStewieAl's Tweaks' HUD visibility callbacks (`HUDVisibilityCallbacks::OnCalculateHUDState`, the call
+/// at `0x771B33` in [`hud_main_menu_set_menu_mode`], installed always): the flags each callback
+/// answers are cleared from the HUD's visibility flags (`+0x1BC`). Row S0903 (`HideHudInKillcams`,
+/// its `OnRecalculateHUDMask`): while the player's kill camera timer (`+0xE18`) is not 0, the enemy
+/// health bar (8) with `[Tweaks] bHideHealthbarInKillcams` and the crosshair (0x40) with
+/// `bHideCrosshairInKillcams`. Tweaks reads the player without a test; none counts as no kill
+/// camera.
+fn stewie_hud_mask(e: &Engine) -> u32 {
+    use engine_core::extend::stewie;
+    let mut mask = 0;
+    if e.stewie(stewie::HIDE_HUD_IN_KILLCAMS) {
+        let player = e.mem.u32(0x011d_ea3c);
+        if player != 0 && e.mem.f32(player + 0xe18) != 0.0 {
+            if e.stewie_value(stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS) != 0 {
+                mask |= 8;
+            }
+            if e.stewie_value(stewie::value::HIDE_CROSSHAIR_IN_KILLCAMS) != 0 {
+                mask |= 0x40;
+            }
+        }
+    }
+    mask
+}
+
 // Translated from 00771700 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::SetMenuMode` (Xbox PDB): selects the HUD visibility mask for
 /// the current menu and player state, updates each tile, and controls its sound.
@@ -2613,6 +2637,11 @@ pub fn hud_main_menu_set_menu_mode(e: &mut Engine, requested_mode: i32) {
     let menu = e.mem.u32(0x011d_96c0);
     let flags = e.mem.u32(menu + 0x1bc) & e.mem.u32(menu + 0x1c0);
     e.mem.set_u32(menu + 0x1bc, flags);
+    let mask = stewie_hud_mask(e);
+    if mask != 0 {
+        let flags = e.mem.u32(menu + 0x1bc);
+        e.mem.set_u32(menu + 0x1bc, flags & !mask);
+    }
     if e.mem.u8(0x011d_96bb) != 0 {
         let menu = e.mem.u32(0x011d_96c0);
         let flags = e.mem.u32(menu + 0x1bc);
@@ -12236,6 +12265,50 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    /// S0903 (`HideHudInKillcams` through Tweaks' `OnCalculateHUDState`, `0x771B33`): mode 0xB's
+    /// flags 0x11FFF lose the enemy health bar (8) and the crosshair (0x40) by their keys while
+    /// the player's kill camera timer is not 0; not with the timer 0 or without the row.
+    #[test]
+    fn s0903_kill_cameras_hide_the_crosshair_and_health_bar() {
+        use engine_core::extend::stewie;
+        for (on, timer, crosshair, health, flags) in [
+            (false, 1.0f32, 1u32, 1u32, 0x11fffu32),
+            (true, 1.0, 1, 1, 0x11fb7),
+            (true, 1.0, 1, 0, 0x11fbf),
+            (true, 1.0, 0, 1, 0x11ff7),
+            (true, 0.0, 1, 1, 0x11fff),
+            (true, f32::NAN, 1, 0, 0x11fbf),
+        ] {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.map(0x011d_e000, 0x1000);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_96c0, menu.addr());
+            e.mem.set_u32(menu.addr() + 0x1c0, u32::MAX);
+            let player = e.mem.alloc(0x1000);
+            e.mem.set_f32(player + 0xe18, timer);
+            e.mem.set_u32(0x011d_ea3c, player);
+            e.set_stewie(stewie::HIDE_HUD_IN_KILLCAMS, on);
+            e.set_stewie_value(stewie::value::HIDE_CROSSHAIR_IN_KILLCAMS, crosshair);
+            e.set_stewie_value(stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS, health);
+            e.register_double(0x0059_bb30, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.register_double(0x005a_03f0, |_, _| Ret::default());
+            e.register_double(0x00a0_11b0, |_, _| Ret::default());
+            e.register_double(0x00a0_12d0, |_, _| Ret::default());
+            e.register_double(0x0070_0320, |_, _| Ret::default());
+            e.register_double(0x00ad_8ce0, |_, _| Ret::default());
+            hud_main_menu_set_menu_mode(&mut e, 0xb);
+            assert_eq!(
+                e.mem.u32(menu.addr() + 0x1bc),
+                flags,
+                "{on} {timer} {crosshair} {health}"
+            );
+        }
     }
 
     #[test]

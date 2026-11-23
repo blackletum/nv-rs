@@ -3273,7 +3273,14 @@ pub fn player_character_set_slow_mo_camera(
         {
             fn_0093e750(e);
         }
-        e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+        if hide_hud_in_killcams(e) {
+            // lStewieAl's Tweaks' row S0903 (`HideHudInKillcams`, its `OnStartKillCam`, the call at
+            // `0x93E730`): the HUD's visibility is recalculated in place of the handle's (empty)
+            // destructor.
+            e.call(0x0077_1700, &args![1u32]);
+        } else {
+            e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+        }
     });
 }
 
@@ -3302,6 +3309,7 @@ pub fn fn_0093e770(e: &mut Engine, this: Ptr<PlayerCharacter>, mode: i32, flag: 
     if mode == 2 {
         if !flag && e.call(0x004a_4040, &args![]).bool() {
             e.set(this, PlayerCharacter::fTimeInSlowMoCam, 0.0);
+            end_kill_cam_hud(e);
             return;
         }
         let player = e.global::<u32>(PLAYER_SINGLETON);
@@ -3312,6 +3320,25 @@ pub fn fn_0093e770(e: &mut Engine, this: Ptr<PlayerCharacter>, mode: i32, flag: 
         e.set_global::<u8>(0x011f_21d0, 1);
     }
     e.set(this, PlayerCharacter::fTimeInSlowMoCam, 0.0);
+    end_kill_cam_hud(e);
+}
+
+/// Whether lStewieAl's Tweaks' row S0903 (`HideHudInKillcams`) has its hooks: the row, with
+/// `[Tweaks] bHideCrosshairInKillcams` or `bHideHealthbarInKillcams` (Tweaks installs them with
+/// either).
+fn hide_hud_in_killcams(e: &Engine) -> bool {
+    use engine_core::extend::stewie;
+    e.stewie(stewie::HIDE_HUD_IN_KILLCAMS)
+        && (e.stewie_value(stewie::value::HIDE_CROSSHAIR_IN_KILLCAMS) != 0
+            || e.stewie_value(stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS) != 0)
+}
+
+/// The end of [`fn_0093e770`] (`0x93E82B`, its only return). lStewieAl's Tweaks' row S0903 (its
+/// `OnEndKillCam`): the HUD's visibility is recalculated (`00771700` with 1) before it returns.
+fn end_kill_cam_hud(e: &mut Engine) {
+    if hide_hud_in_killcams(e) {
+        e.call(0x0077_1700, &args![1u32]);
+    }
 }
 
 // Translated from 0093e840 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -16989,6 +17016,55 @@ mod tests {
         e.register(0x004a_4040, |_, _| int(0));
         e.call(0x0093_e770, &args![this, 2i32, false]);
         assert_eq!(called(&e, 0x009c_8950).len(), 1);
+    }
+
+    /// S0903 (`HideHudInKillcams`): with the row and either key, the kill camera's start
+    /// recalculates the HUD (`00771700` with 1) in place of the handle's last destructor call
+    /// (`0x93E730`), and its end does at both of `0093e770`'s ways out (`0x93E82B`); with neither
+    /// key, or without the row, as before.
+    #[test]
+    fn s0903_the_kill_camera_recalculates_the_hud() {
+        use engine_core::extend::stewie;
+        for (on, crosshair, health, recalculates) in [
+            (true, 1u32, 0u32, true),
+            (true, 0, 1, true),
+            (true, 0, 0, false),
+            (false, 1, 1, false),
+        ] {
+            let set = |e: &mut Engine| {
+                e.set_stewie(stewie::HIDE_HUD_IN_KILLCAMS, on);
+                e.set_stewie_value(stewie::value::HIDE_CROSSHAIR_IN_KILLCAMS, crosshair);
+                e.set_stewie_value(stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS, health);
+                e.register(0x0077_1700, |_, _| int(0));
+            };
+            let mut e = engine();
+            let this = slow_mo_world(&mut e, 1);
+            set(&mut e);
+            e.set_global(0x0102_90c0, 0.4f64);
+            e.call(0x0093_e530, &args![this, 1u32, 5.0f32, false, 0u32]);
+            let recalculated = called(&e, 0x0077_1700);
+            let destructs = called(&e, SOUND_HANDLE_DESTRUCT).len();
+            if recalculates {
+                assert_eq!((recalculated, destructs), (vec![vec![1]], 1), "{on}");
+            } else {
+                assert_eq!((recalculated, destructs), (vec![], 2), "{on}");
+            }
+            // An early way out of the start (no mode) does not recalculate.
+            let mut e = engine();
+            let this = slow_mo_world(&mut e, 1);
+            set(&mut e);
+            e.call(0x0093_e530, &args![this, 0u32, 5.0f32, false, 0u32]);
+            assert!(called(&e, 0x0077_1700).is_empty());
+            for (mode, flag, asked) in [(0i32, false, 0u32), (2, false, 1)] {
+                let mut e = engine();
+                let this = slow_mo_end_world(&mut e);
+                set(&mut e);
+                e.register_double(0x004a_4040, move |_, _| int(asked));
+                e.call(0x0093_e770, &args![this, mode, flag]);
+                let want = if recalculates { vec![vec![1]] } else { vec![] };
+                assert_eq!(called(&e, 0x0077_1700), want, "{on} {mode}");
+            }
+        }
     }
     /// Every function `Update` calls by address (outside the vtable calls).
     const UPDATE_CALLEES: &[u32] = &[

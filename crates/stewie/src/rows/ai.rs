@@ -688,6 +688,14 @@ pub const ROWS: &[Row] = &[
         summary: "changes what you see: the VATS camera stops turning to follow a target that is dying",
     },
     Row {
+        bit: stewie::HIDE_HUD_IN_KILLCAMS,
+        function: "HideHudInKillcams",
+        plan: "S0903",
+        key: "bHideHudInKillcams",
+        tweaks: None,
+        summary: "changes what you see: no crosshair or enemy health bar during kill cameras",
+    },
+    Row {
         bit: stewie::COMBAT_SOUND_COOLDOWN,
         function: "CombatSoundCooldownFix",
         plan: "S0926",

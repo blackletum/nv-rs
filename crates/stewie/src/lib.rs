@@ -231,6 +231,16 @@ pub fn install(e: &mut Engine) {
         engine_core::extend::stewie::value::AUTOWALK_JUMP_IN_WATER,
         settings.long(section, "bJumpInWater", 0) as u32,
     );
+    // Read by row S0903 (Tweaks' `g_bHideCrosshairInKillcams`, `g_bHideHealthbarInKillcams`, code defaults 0,
+    // VNV's 1; Tweaks installs the row's hooks with either on).
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::HIDE_CROSSHAIR_IN_KILLCAMS,
+        settings.long("Tweaks", "bHideCrosshairInKillcams", 0) as u32,
+    );
+    e.set_stewie_value(
+        engine_core::extend::stewie::value::HIDE_HEALTHBAR_IN_KILLCAMS,
+        settings.long("Tweaks", "bHideHealthbarInKillcams", 0) as u32,
+    );
     // Read by row S0549 (Tweaks' `g_bNoPlayerAnimMovement`, code default 0, not in VNV's INI).
     e.set_stewie_no_player_anim_movement(settings.long("Tweaks", "bNoPlayerAnimMovement", 0) != 0);
     // Read by row S0082.01 (Tweaks' `g_bVATSStopBurstIfTargetDead`, code default 0, VNV's 0).
