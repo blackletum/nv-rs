@@ -21855,6 +21855,8 @@ mod tests {
                 "on {on} no movement {no_movement}"
             );
         }
+    }
+
     /// S0404 at its call site, the level-up step of `PlayerCharacter::Update` ([`update_levelup`]):
     /// with a level-up due and every other test passing, the menu is shown (`008d5210`) when the
     /// combat test says so. Off: `00953c50` decides (0 shows it, 1 does not) and the player's
